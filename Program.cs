@@ -2284,7 +2284,6 @@ namespace XerToCsvConverter
             {
                 if (TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.ActStartDate), out startDate))
                     return startDate;
-                // Fallback to actual end if no actual start
                 if (TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.ActEndDate), out startDate))
                     return startDate;
             }
@@ -2294,40 +2293,36 @@ namespace XerToCsvConverter
             DateTime lateStart = DateTime.MinValue;
             TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.EarlyStartDate), out earlyStart);
 
-            // FIXED: Use FieldNames.LateStartDate instead of hardcoded string
             if (indexes.ContainsKey(FieldNames.LateStartDate))
             {
                 TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.LateStartDate), out lateStart);
             }
 
-            // Apply constraint logic
+            // HANDLE ALAP FIRST (no constraint date needed)
+            if (constraintType == "CS_ALAP")
+            {
+                return lateStart != DateTime.MinValue ? lateStart : earlyStart;
+            }
+
+            // Apply other constraint logic (these need constraint dates)
             if (!string.IsNullOrEmpty(constraintType) && TryParseDateOptimized(constraintDateStr, out DateTime constraintDate))
             {
                 switch (constraintType)
                 {
                     case "CS_MSO":
                     case "CS_MANDSTART":
-                        // Must start on this exact date
                         return constraintDate;
 
                     case "CS_MSOA":
-                        // Must start on or after - take the later date
                         return earlyStart > constraintDate ? earlyStart : constraintDate;
 
                     case "CS_MSOB":
-                        // Must start on or before - take the earlier date
                         if (earlyStart != DateTime.MinValue)
                             return earlyStart < constraintDate ? earlyStart : constraintDate;
                         else
                             return constraintDate;
 
-                    case "CS_ALAP":
-                        // As late as possible - use late start if available
-                        return lateStart != DateTime.MinValue ? lateStart : earlyStart;
-
-
                     default:
-                        // No constraint or finish constraint - use early start
                         return earlyStart;
                 }
             }
@@ -2336,7 +2331,6 @@ namespace XerToCsvConverter
             if (earlyStart != DateTime.MinValue)
                 return earlyStart;
 
-            // Final fallback to early end date
             TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.EarlyEndDate), out startDate);
             return startDate;
         }
@@ -2360,32 +2354,31 @@ namespace XerToCsvConverter
             TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.EarlyEndDate), out earlyEnd);
             TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.LateEndDate), out lateEnd);
 
-            // Apply constraint logic
+            // HANDLE ALAP FIRST (no constraint date needed)
+            if (constraintType == "CS_ALAP")
+            {
+                return lateEnd != DateTime.MinValue ? lateEnd : earlyEnd;
+            }
+
+            // Apply other constraint logic (these need constraint dates)
             if (!string.IsNullOrEmpty(constraintType) && TryParseDateOptimized(constraintDateStr, out DateTime constraintDate))
             {
                 switch (constraintType)
                 {
                     case "CS_MEO":
                     case "CS_MANDFIN":
-                        // Must finish on this exact date (unless completed)
                         if (statusCode != "TK_Complete")
                             return constraintDate;
                         break;
 
                     case "CS_MEOA":
-                        // Must finish on or after - take the later date
                         return earlyEnd > constraintDate ? earlyEnd : constraintDate;
 
                     case "CS_MEOB":
-                        // Must finish on or before - take the earlier date
                         if (earlyEnd != DateTime.MinValue)
                             return earlyEnd < constraintDate ? earlyEnd : constraintDate;
                         else
                             return constraintDate;
-
-                    case "CS_ALAP":
-                        // As late as possible - use late end
-                        return lateEnd != DateTime.MinValue ? lateEnd : earlyEnd;
                 }
             }
 
