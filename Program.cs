@@ -23,9 +23,9 @@ namespace XerToCsvConverter
         public DataRow(string[] fields, string sourceFilename) { Fields = fields; SourceFilename = sourceFilename; }
     }
 
-    internal static class TableNames { public const string Task = "TASK"; public const string Calendar = "CALENDAR"; public const string Project = "PROJECT"; public const string ProjWbs = "PROJWBS"; public const string TaskActv = "TASKACTV"; public const string ActvCode = "ACTVCODE"; public const string ActvType = "ACTVTYPE"; public const string TaskPred = "TASKPRED"; }
-    internal static class FieldNames { public const string TaskId = "task_id"; public const string ProjectId = "proj_id"; public const string WbsId = "wbs_id"; public const string CalendarId = "clndr_id"; public const string TaskType = "task_type"; public const string StatusCode = "status_code"; public const string TaskCode = "task_code"; public const string TaskName = "task_name"; public const string RsrcId = "rsrc_id"; public const string ActStartDate = "act_start_date"; public const string ActEndDate = "act_end_date"; public const string EarlyStartDate = "early_start_date"; public const string EarlyEndDate = "early_end_date"; public const string LateEndDate = "late_end_date"; public const string LateStartDate = "late_start_date"; public const string TargetStartDate = "target_start_date"; public const string TargetEndDate = "target_end_date"; public const string CstrType = "cstr_type"; public const string CstrDate = "cstr_date"; public const string PriorityType = "priority_type"; public const string FloatPath = "float_path"; public const string FloatPathOrder = "float_path_order"; public const string DrivingPathFlag = "driving_path_flag"; public const string RemainDurationHrCnt = "remain_drtn_hr_cnt"; public const string TotalFloatHrCnt = "total_float_hr_cnt"; public const string FreeFloatHrCnt = "free_float_hr_cnt"; public const string CompletePctType = "complete_pct_type"; public const string PhysCompletePct = "phys_complete_pct"; public const string ActWorkQty = "act_work_qty"; public const string RemainWorkQty = "remain_work_qty"; public const string TargetDurationHrCnt = "target_drtn_hr_cnt"; public const string ClndrId = "clndr_id"; public const string DayHourCount = "day_hr_cnt"; public const string LastRecalcDate = "last_recalc_date"; public const string ProjectName = "proj_name"; public const string ObsId = "obs_id"; public const string SeqNum = "seq_num"; public const string EstWt = "est_wt"; public const string ProjNodeFlag = "proj_node_flag"; public const string SumDataFlag = "sum_data_flag"; public const string WbsShortName = "wbs_short_name"; public const string WbsName = "wbs_name"; public const string PhaseId = "phase_id"; public const string ParentWbsId = "parent_wbs_id"; public const string EvUserPct = "ev_user_pct"; public const string EvEtcUserValue = "ev_etc_user_value"; public const string OrigCost = "orig_cost"; public const string IndepRemainTotalCost = "indep_remain_total_cost"; public const string AnnDscntRatePct = "ann_dscnt_rate_pct"; public const string DscntPeriodType = "dscnt_period_type"; public const string IndepRemainWorkQty = "indep_remain_work_qty"; public const string AnticipStartDate = "anticip_start_date"; public const string AnticipEndDate = "anticip_end_date"; public const string EvComputeType = "ev_compute_type"; public const string EvEtcComputeType = "ev_etc_compute_type"; public const string Guid = "guid"; public const string TmplGuid = "tmpl_guid"; public const string ActvCodeTypeId = "actv_code_type_id"; public const string ActvCodeId = "actv_code_id"; public const string FileName = "FileName"; public const string Start = "Start"; public const string Finish = "Finish"; public const string IdName = "ID_Name"; public const string RemainingWorkingDays = "Remaining Working Days"; public const string OriginalDuration = "Original Duration"; public const string TotalFloat = "Total Float"; public const string FreeFloat = "Free Float"; public const string PercentComplete = "%"; public const string DataDate = "Data Date"; public const string WbsIdKey = "wbs_id_key"; public const string TaskIdKey = "task_id_key"; public const string ParentWbsIdKey = "parent_wbs_id_key"; public const string CalendarIdKey = "calendar_id_key"; public const string ProjIdKey = "proj_id_key"; public const string ActvCodeIdKey = "actv_code_id_key"; public const string ActvCodeTypeIdKey = "actv_code_type_id_key"; public const string ClndrIdKey = "clndr_id_key"; public const string PredTaskId = "pred_task_id"; public const string PredTaskIdKey = "pred_task_id_key"; public const string CalendarName = "clndr_name"; public const string CalendarData = "clndr_data"; public const string CalendarType = "clndr_type"; public const string DefaultFlag = "default_flag"; public const string BaseCalendarId = "base_clndr_id"; public const string WeekHourCount = "week_hr_cnt"; public const string MonthHourCount = "month_hr_cnt"; public const string YearHourCount = "year_hr_cnt"; public const string Date = "date"; public const string DayOfWeek = "day_of_week"; public const string WorkingDay = "working_day"; public const string WorkHours = "work_hours"; public const string ExceptionType = "exception_type"; }
-    internal static class EnhancedTableNames { public const string XerTask01 = "01_XER_TASK"; public const string XerProject02 = "02_XER_PROJECT"; public const string XerProjWbs03 = "03_XER_PROJWBS"; public const string XerBaseline04 = "04_XER_BASELINE"; public const string XerPredecessor06 = "06_XER_PREDECESSOR"; public const string XerActvType07 = "07_XER_ACTVTYPE"; public const string XerActvCode08 = "08_XER_ACTVCODE"; public const string XerTaskActv09 = "09_XER_TASKACTV"; public const string XerCalendar10 = "10_XER_CALENDAR"; public const string XerCalendarDetailed11 = "11_XER_CALENDAR_DETAILED"; }
+    internal static class TableNames { public const string Task = "TASK"; public const string Calendar = "CALENDAR"; public const string Project = "PROJECT"; public const string ProjWbs = "PROJWBS"; public const string TaskActv = "TASKACTV"; public const string ActvCode = "ACTVCODE"; public const string ActvType = "ACTVTYPE"; public const string TaskPred = "TASKPRED"; public const string Rsrc = "RSRC"; public const string TaskRsrc = "TASKRSRC"; }
+    internal static class FieldNames { public const string TaskId = "task_id"; public const string ProjectId = "proj_id"; public const string WbsId = "wbs_id"; public const string CalendarId = "clndr_id"; public const string TaskType = "task_type"; public const string StatusCode = "status_code"; public const string TaskCode = "task_code"; public const string TaskName = "task_name"; public const string RsrcId = "rsrc_id"; public const string ActStartDate = "act_start_date"; public const string ActEndDate = "act_end_date"; public const string EarlyStartDate = "early_start_date"; public const string EarlyEndDate = "early_end_date"; public const string LateEndDate = "late_end_date"; public const string LateStartDate = "late_start_date"; public const string TargetStartDate = "target_start_date"; public const string TargetEndDate = "target_end_date"; public const string CstrType = "cstr_type"; public const string CstrDate = "cstr_date"; public const string PriorityType = "priority_type"; public const string FloatPath = "float_path"; public const string FloatPathOrder = "float_path_order"; public const string DrivingPathFlag = "driving_path_flag"; public const string RemainDurationHrCnt = "remain_drtn_hr_cnt"; public const string TotalFloatHrCnt = "total_float_hr_cnt"; public const string FreeFloatHrCnt = "free_float_hr_cnt"; public const string CompletePctType = "complete_pct_type"; public const string PhysCompletePct = "phys_complete_pct"; public const string ActWorkQty = "act_work_qty"; public const string RemainWorkQty = "remain_work_qty"; public const string TargetDurationHrCnt = "target_drtn_hr_cnt"; public const string ClndrId = "clndr_id"; public const string DayHourCount = "day_hr_cnt"; public const string LastRecalcDate = "last_recalc_date"; public const string ProjectName = "proj_name"; public const string ObsId = "obs_id"; public const string SeqNum = "seq_num"; public const string EstWt = "est_wt"; public const string ProjNodeFlag = "proj_node_flag"; public const string SumDataFlag = "sum_data_flag"; public const string WbsShortName = "wbs_short_name"; public const string WbsName = "wbs_name"; public const string PhaseId = "phase_id"; public const string ParentWbsId = "parent_wbs_id"; public const string EvUserPct = "ev_user_pct"; public const string EvEtcUserValue = "ev_etc_user_value"; public const string OrigCost = "orig_cost"; public const string IndepRemainTotalCost = "indep_remain_total_cost"; public const string AnnDscntRatePct = "ann_dscnt_rate_pct"; public const string DscntPeriodType = "dscnt_period_type"; public const string IndepRemainWorkQty = "indep_remain_work_qty"; public const string AnticipStartDate = "anticip_start_date"; public const string AnticipEndDate = "anticip_end_date"; public const string EvComputeType = "ev_compute_type"; public const string EvEtcComputeType = "ev_etc_compute_type"; public const string Guid = "guid"; public const string TmplGuid = "tmpl_guid"; public const string ActvCodeTypeId = "actv_code_type_id"; public const string ActvCodeId = "actv_code_id"; public const string FileName = "FileName"; public const string Start = "Start"; public const string Finish = "Finish"; public const string IdName = "ID_Name"; public const string RemainingWorkingDays = "Remaining Working Days"; public const string OriginalDuration = "Original Duration"; public const string TotalFloat = "Total Float"; public const string FreeFloat = "Free Float"; public const string PercentComplete = "%"; public const string DataDate = "Data Date"; public const string WbsIdKey = "wbs_id_key"; public const string TaskIdKey = "task_id_key"; public const string ParentWbsIdKey = "parent_wbs_id_key"; public const string CalendarIdKey = "calendar_id_key"; public const string ProjIdKey = "proj_id_key"; public const string ActvCodeIdKey = "actv_code_id_key"; public const string ActvCodeTypeIdKey = "actv_code_type_id_key"; public const string ClndrIdKey = "clndr_id_key"; public const string PredTaskId = "pred_task_id"; public const string PredTaskIdKey = "pred_task_id_key"; public const string CalendarName = "clndr_name"; public const string CalendarData = "clndr_data"; public const string CalendarType = "clndr_type"; public const string DefaultFlag = "default_flag"; public const string BaseCalendarId = "base_clndr_id"; public const string WeekHourCount = "week_hr_cnt"; public const string MonthHourCount = "month_hr_cnt"; public const string YearHourCount = "year_hr_cnt"; public const string Date = "date"; public const string DayOfWeek = "day_of_week"; public const string WorkingDay = "working_day"; public const string WorkHours = "work_hours"; public const string ExceptionType = "exception_type"; public const string RsrcIdKey = "rsrc_id_key"; }
+    internal static class EnhancedTableNames { public const string XerTask01 = "01_XER_TASK"; public const string XerProject02 = "02_XER_PROJECT"; public const string XerProjWbs03 = "03_XER_PROJWBS"; public const string XerBaseline04 = "04_XER_BASELINE"; public const string XerPredecessor06 = "06_XER_PREDECESSOR"; public const string XerActvType07 = "07_XER_ACTVTYPE"; public const string XerActvCode08 = "08_XER_ACTVCODE"; public const string XerTaskActv09 = "09_XER_TASKACTV"; public const string XerCalendar10 = "10_XER_CALENDAR"; public const string XerCalendarDetailed11 = "11_XER_CALENDAR_DETAILED"; public const string XerRsrc12 = "12_XER_RSRC"; public const string XerTaskRsrc13 = "13_XER_TASKRSRC"; }
 
     #endregion
 
@@ -82,7 +82,7 @@ namespace XerToCsvConverter
         private List<string> _xerFilePaths = new List<string>();
         private string _outputDirectory;
         private Dictionary<string, List<DataRow>> _extractedTables;
-        private bool _canCreateTask01 = false; private bool _canCreateProjWbs03 = false; private bool _canCreateBaseline04 = false; private bool _canCreateProject02 = false; private bool _canCreatePredecessor06 = false; private bool _canCreateActvType07 = false; private bool _canCreateActvCode08 = false; private bool _canCreateTaskActv09 = false; private bool _canCreateCalendar10 = false; private bool _canCreateCalendarDetailed11 = false;
+        private bool _canCreateTask01 = false; private bool _canCreateProjWbs03 = false; private bool _canCreateBaseline04 = false; private bool _canCreateProject02 = false; private bool _canCreatePredecessor06 = false; private bool _canCreateActvType07 = false; private bool _canCreateActvCode08 = false; private bool _canCreateTaskActv09 = false; private bool _canCreateCalendar10 = false; private bool _canCreateCalendarDetailed11 = false; private bool _canCreateRsrc12 = false; private bool _canCreateTaskRsrc13 = false;
 
         // Performance optimization caches
         private static readonly ConcurrentDictionary<string, string> KeyCache = new ConcurrentDictionary<string, string>();
@@ -138,6 +138,7 @@ namespace XerToCsvConverter
         {
             _xerFilePaths.Clear();
             lstXerFiles.Items.Clear();
+            ClearResults();
             UpdateInputButtonsState();
             UpdateStatus("File list cleared.");
         }
@@ -187,6 +188,7 @@ namespace XerToCsvConverter
             {
                 progressForm.Close();
                 SetUIEnabled(true);
+                UpdateExportButtonState();
             }
         }
 
@@ -528,6 +530,8 @@ namespace XerToCsvConverter
                 if (_canCreateTaskActv09) names.Add(EnhancedTableNames.XerTaskActv09);
                 if (_canCreateCalendar10) names.Add(EnhancedTableNames.XerCalendar10);
                 if (_canCreateCalendarDetailed11) names.Add(EnhancedTableNames.XerCalendarDetailed11);
+                if (_canCreateRsrc12) names.Add(EnhancedTableNames.XerRsrc12);
+                if (_canCreateTaskRsrc13) names.Add(EnhancedTableNames.XerTaskRsrc13);
             }
             return names.Distinct().OrderBy(n => n).ToList();
         }
@@ -548,6 +552,8 @@ namespace XerToCsvConverter
                 if (_canCreateTaskActv09) names.Add(EnhancedTableNames.XerTaskActv09);
                 if (_canCreateCalendar10) names.Add(EnhancedTableNames.XerCalendar10);
                 if (_canCreateCalendarDetailed11) names.Add(EnhancedTableNames.XerCalendarDetailed11);
+                if (_canCreateRsrc12) names.Add(EnhancedTableNames.XerRsrc12);
+                if (_canCreateTaskRsrc13) names.Add(EnhancedTableNames.XerTaskRsrc13);
             }
             return names.Distinct().OrderBy(n => n).ToList();
         }
@@ -584,6 +590,8 @@ namespace XerToCsvConverter
                             case EnhancedTableNames.XerTaskActv09: canCreate = _canCreateTaskActv09; break;
                             case EnhancedTableNames.XerCalendar10: canCreate = _canCreateCalendar10; break;
                             case EnhancedTableNames.XerCalendarDetailed11: canCreate = _canCreateCalendarDetailed11; break;
+                            case EnhancedTableNames.XerRsrc12: canCreate = _canCreateRsrc12; break;
+                            case EnhancedTableNames.XerTaskRsrc13: canCreate = _canCreateTaskRsrc13; break;
                         }
 
                         if (canCreate)
@@ -734,6 +742,12 @@ namespace XerToCsvConverter
                                 break;
                             case EnhancedTableNames.XerCalendarDetailed11:
                                 enhancedTableData = Create11XerCalendarDetailed(_extractedTables[TableNames.Calendar]);
+                                break;
+                            case EnhancedTableNames.XerRsrc12:
+                                enhancedTableData = Create12XerRsrc(_extractedTables[TableNames.Rsrc]);
+                                break;
+                            case EnhancedTableNames.XerTaskRsrc13:
+                                enhancedTableData = Create13XerTaskRsrc(_extractedTables[TableNames.TaskRsrc]);
                                 break;
                         }
 
@@ -919,6 +933,8 @@ namespace XerToCsvConverter
             bool hasActvCode = _extractedTables.ContainsKey(TableNames.ActvCode);
             bool hasActvType = _extractedTables.ContainsKey(TableNames.ActvType);
             bool hasTaskPred = _extractedTables.ContainsKey(TableNames.TaskPred);
+            bool hasRsrc = _extractedTables.ContainsKey(TableNames.Rsrc);
+            bool hasTaskRsrc = _extractedTables.ContainsKey(TableNames.TaskRsrc);
 
             _canCreateTask01 = hasTask && hasCalendar && hasProject;
             _canCreateProjWbs03 = hasProjWbs;
@@ -930,13 +946,16 @@ namespace XerToCsvConverter
             _canCreateTaskActv09 = hasTaskActv;
             _canCreateCalendar10 = hasCalendar;
             _canCreateCalendarDetailed11 = hasCalendar;
+            _canCreateRsrc12 = hasRsrc;
+            _canCreateTaskRsrc13 = hasTaskRsrc;
         }
 
         private bool AnyPbiDependencyMet()
         {
             return _canCreateTask01 || _canCreateProjWbs03 || _canCreateProject02 ||
                    _canCreatePredecessor06 || _canCreateActvType07 || _canCreateActvCode08 ||
-                   _canCreateTaskActv09 || _canCreateCalendar10 || _canCreateCalendarDetailed11;
+                   _canCreateTaskActv09 || _canCreateCalendar10 || _canCreateCalendarDetailed11 ||
+                   _canCreateRsrc12 || _canCreateTaskRsrc13;
         }
 
         private bool AllEnhancedDependenciesMet()
@@ -963,6 +982,9 @@ namespace XerToCsvConverter
             if (!_canCreateActvCode08 && !_extractedTables.ContainsKey(TableNames.ActvCode)) missing.Add(TableNames.ActvCode);
             if (!_canCreateTaskActv09 && !_extractedTables.ContainsKey(TableNames.TaskActv)) missing.Add(TableNames.TaskActv);
             if (!_canCreateCalendar10 && !_canCreateCalendarDetailed11 && !_extractedTables.ContainsKey(TableNames.Calendar)) missing.Add(TableNames.Calendar);
+            if (!_canCreateRsrc12 && !_extractedTables.ContainsKey(TableNames.Rsrc)) missing.Add(TableNames.Rsrc);
+            if (!_canCreateTaskRsrc13 && !_extractedTables.ContainsKey(TableNames.TaskRsrc)) missing.Add(TableNames.TaskRsrc);
+
 
             var distinctMissing = missing.Distinct().OrderBy(s => s).ToList();
 
@@ -985,9 +1007,7 @@ namespace XerToCsvConverter
                 var calendarIndexes = GetFieldIndexes(calendarTable[0].Fields);
                 var projectIndexes = GetFieldIndexes(projectTable[0].Fields);
 
-                // Check if we have constraint fields
-                bool hasConstraintSupport = taskIndexes.ContainsKey(FieldNames.CstrType) &&
-                                           taskIndexes.ContainsKey(FieldNames.CstrDate);
+                // REMOVED: constraint field checking - we don't need this anymore
 
                 // Use dictionaries with initial capacity
                 var calendarHours = new Dictionary<string, decimal>(calendarTable.Count, StringComparer.OrdinalIgnoreCase);
@@ -998,18 +1018,18 @@ namespace XerToCsvConverter
                 BuildProjectDataDatesLookupOptimized(projectTable, projectIndexes, projectDataDates);
 
                 string[] finalColumns = {
-                    FieldNames.TaskId, FieldNames.ProjectId, FieldNames.WbsId, FieldNames.CalendarId,
-                    FieldNames.TaskType, FieldNames.StatusCode, FieldNames.TaskCode, FieldNames.TaskName,
-                    FieldNames.RsrcId, FieldNames.ActStartDate, FieldNames.ActEndDate,
-                    FieldNames.EarlyStartDate, FieldNames.EarlyEndDate, FieldNames.LateStartDate, FieldNames.LateEndDate,
-                    FieldNames.TargetStartDate, FieldNames.TargetEndDate, 
-                    FieldNames.CstrType, FieldNames.CstrDate, FieldNames.PriorityType, FieldNames.FloatPath,
-                    FieldNames.FloatPathOrder, FieldNames.DrivingPathFlag,
-                    FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
-                    FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
-                    FieldNames.PercentComplete, FieldNames.DataDate,
-                    FieldNames.WbsIdKey, FieldNames.TaskIdKey, FieldNames.CalendarIdKey, FieldNames.ProjIdKey
-                };
+            FieldNames.TaskId, FieldNames.ProjectId, FieldNames.WbsId, FieldNames.CalendarId,
+            FieldNames.TaskType, FieldNames.StatusCode, FieldNames.TaskCode, FieldNames.TaskName,
+            FieldNames.RsrcId, FieldNames.ActStartDate, FieldNames.ActEndDate,
+            FieldNames.EarlyStartDate, FieldNames.EarlyEndDate, FieldNames.LateStartDate, FieldNames.LateEndDate,
+            FieldNames.TargetStartDate, FieldNames.TargetEndDate,
+            FieldNames.CstrType, FieldNames.CstrDate, FieldNames.PriorityType, FieldNames.FloatPath,
+            FieldNames.FloatPathOrder, FieldNames.DrivingPathFlag,
+            FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
+            FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
+            FieldNames.PercentComplete, FieldNames.DataDate,
+            FieldNames.WbsIdKey, FieldNames.TaskIdKey, FieldNames.CalendarIdKey, FieldNames.ProjIdKey
+        };
 
                 // Pre-allocate with estimated capacity
                 var finalTable = new List<DataRow>(taskTable.Count) { new DataRow(finalColumns, string.Empty) };
@@ -1059,21 +1079,9 @@ namespace XerToCsvConverter
                         statusCode == TK_NotStart ? "Not Started" :
                         statusCode == TK_Active ? "In Progress" : statusCode);
 
-                    // Calculate dates - use constraint-aware methods if constraint fields exist
-                    DateTime startDate, finishDate;
-
-                    if (hasConstraintSupport)
-                    {
-                        // Use NEW constraint-aware calculations
-                        startDate = CalculateStartDateWithConstraints(row, taskIndexes, statusCode, originalFilename);
-                        finishDate = CalculateFinishDateWithConstraints(row, taskIndexes, statusCode, originalFilename);
-                    }
-                    else
-                    {
-                        // Use original calculations if constraint fields not available
-                        startDate = CalculateStartDateOptimized(row, taskIndexes, statusCode);
-                        finishDate = CalculateFinishDateOptimized(row, taskIndexes, statusCode);
-                    }
+                    // Calculate dates - ALWAYS use non-constraint methods
+                    DateTime startDate = CalculateStartDateOptimized(row, taskIndexes, statusCode);
+                    DateTime finishDate = CalculateFinishDateOptimized(row, taskIndexes, statusCode);
 
                     SetTransformedField(transformed, finalColumns, FieldNames.Start, FormatDateOutput(startDate));
                     SetTransformedField(transformed, finalColumns, FieldNames.Finish, FormatDateOutput(finishDate));
@@ -1168,7 +1176,6 @@ namespace XerToCsvConverter
                 return null;
             }
         }
-
         private List<DataRow> Create04XerBaselineTable(List<DataRow> task01Table)
         {
             if (!IsTableValid(task01Table))
@@ -1423,7 +1430,7 @@ namespace XerToCsvConverter
         {
             return CreateSimpleKeyedTable(projectTable, EnhancedTableNames.XerProject02,
                 new List<Tuple<string, string>> {
-                    Tuple.Create(FieldNames.ProjIdKey, FieldNames.ProjectId)
+                        Tuple.Create(FieldNames.ProjIdKey, FieldNames.ProjectId)
                 });
         }
 
@@ -1431,7 +1438,7 @@ namespace XerToCsvConverter
         {
             return CreateSimpleKeyedTable(actvTypeTable, EnhancedTableNames.XerActvType07,
                 new List<Tuple<string, string>> {
-                    Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId)
+                        Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId)
                 });
         }
 
@@ -1439,8 +1446,8 @@ namespace XerToCsvConverter
         {
             return CreateSimpleKeyedTable(actvCodeTable, EnhancedTableNames.XerActvCode08,
                 new List<Tuple<string, string>> {
-                    Tuple.Create(FieldNames.ActvCodeIdKey, FieldNames.ActvCodeId),
-                    Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId)
+                        Tuple.Create(FieldNames.ActvCodeIdKey, FieldNames.ActvCodeId),
+                        Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId)
                 });
         }
 
@@ -1448,8 +1455,8 @@ namespace XerToCsvConverter
         {
             return CreateSimpleKeyedTable(taskActvTable, EnhancedTableNames.XerTaskActv09,
                 new List<Tuple<string, string>> {
-                    Tuple.Create(FieldNames.ActvCodeIdKey, FieldNames.ActvCodeId),
-                    Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId)
+                        Tuple.Create(FieldNames.ActvCodeIdKey, FieldNames.ActvCodeId),
+                        Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId)
                 });
         }
 
@@ -1457,7 +1464,7 @@ namespace XerToCsvConverter
         {
             return CreateSimpleKeyedTable(calendarTable, EnhancedTableNames.XerCalendar10,
                 new List<Tuple<string, string>> {
-                    Tuple.Create(FieldNames.ClndrIdKey, FieldNames.ClndrId)
+                        Tuple.Create(FieldNames.ClndrIdKey, FieldNames.ClndrId)
                 });
         }
 
@@ -1497,7 +1504,6 @@ namespace XerToCsvConverter
                     FieldNames.WorkingDay,
                     FieldNames.WorkHours,
                     FieldNames.ExceptionType,
-                    FieldNames.FileName,
                     FieldNames.ClndrIdKey
                 };
 
@@ -1556,6 +1562,25 @@ namespace XerToCsvConverter
                 return null;
             }
         }
+
+        private List<DataRow> Create12XerRsrc(List<DataRow> rsrcTable)
+        {
+            return CreateSimpleKeyedTable(rsrcTable, EnhancedTableNames.XerRsrc12,
+                new List<Tuple<string, string>> {
+            Tuple.Create(FieldNames.RsrcIdKey, FieldNames.RsrcId),
+            Tuple.Create(FieldNames.ClndrIdKey, FieldNames.ClndrId)
+                });
+        }
+
+        private List<DataRow> Create13XerTaskRsrc(List<DataRow> taskrsrcTable)
+        {
+            return CreateSimpleKeyedTable(taskrsrcTable, EnhancedTableNames.XerTaskRsrc13,
+                new List<Tuple<string, string>> {
+            Tuple.Create(FieldNames.RsrcIdKey, FieldNames.RsrcId),
+            Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId)
+                });
+        }
+
 
         private class CalendarEntry
         {
@@ -1756,9 +1781,9 @@ namespace XerToCsvConverter
             var patterns = new[]
             {
         // Pattern 1: Full format with parentheses
-        @"\(0\|\|\d+\s*\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)\s*\(\s*\)\s*\)",
+        @"\((?:0\|\|)?\d+\s*\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)\s*\(\s*\)\s*\)",
         // Pattern 2: Without the trailing empty parentheses
-        @"\(0\|\|\d+\s*\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)\s*\)",
+        @"\((?:0\|\|)?\d+\s*\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)\s*\)",
         // Pattern 3: Just the time portion
         @"([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})"
     };
@@ -1777,12 +1802,12 @@ namespace XerToCsvConverter
                         string type1 = match.Groups[1].Value;
                         string time1 = match.Groups[2].Value;
                         string type2 = match.Groups[3].Value;
-                        string time2 = match.Groups[4].Value;
+                        string time3 = match.Groups[4].Value;
 
                         // Debug output
-                        System.Diagnostics.Debug.WriteLine($"Found time slot: {type1}|{time1}|{type2}|{time2}");
+                        System.Diagnostics.Debug.WriteLine($"Found time slot: {type1}|{time1}|{type2}|{time3}");
 
-                        if (TimeSpan.TryParse(time1, out TimeSpan t1) && TimeSpan.TryParse(time2, out TimeSpan t2))
+                        if (TimeSpan.TryParse(time1, out TimeSpan t1) && TimeSpan.TryParse(time3, out TimeSpan t2))
                         {
                             TimeSpan start, end;
 
@@ -1848,30 +1873,6 @@ namespace XerToCsvConverter
             return totalHours;
         }
 
-        // Add this debug method to test work hours parsing
-        private void TestWorkHoursParsing()
-        {
-            // Test cases
-            var testCases = new[]
-            {
-        // Standard work day
-        "(0||0(s|08:00|f|12:00)()) (0||1(s|13:00|f|17:00)())",
-        // Single slot
-        "(0||0(s|07:00|f|17:00)())",
-        // Night shift
-        "(0||0(s|23:00|f|03:00)())",
-        // Non-working
-        "(0||0(s|00:00|f|00:00)())"
-    };
-
-            foreach (var testCase in testCases)
-            {
-                decimal hours = ParseDayWorkHours(testCase);
-                System.Diagnostics.Debug.WriteLine($"Test: {testCase}");
-                System.Diagnostics.Debug.WriteLine($"Result: {hours} hours");
-                System.Diagnostics.Debug.WriteLine("---");
-            }
-        }
 
         private DateTime ConvertFromOleDate(int oleDate)
         {
@@ -2087,13 +2088,13 @@ namespace XerToCsvConverter
             {
                 // Define the date formats to try - PUT YOUR FORMAT FIRST
                 string[] formats = {
-            "d/M/yyyy",        // Handles "3/9/2025" and "15/04/2026"
-            "dd/MM/yyyy",      // Handles "15/04/2026"
-            "M/d/yyyy",        // US format fallback
-            "MM/dd/yyyy",      // US format fallback
-            "yyyy-MM-dd",      // ISO format
-            "dd-MMM-yy",       // P6 format like "15-APR-26"
-            "dd-MMM-yyyy"      // P6 format like "15-APR-2026"
+            "d/M/yyyy",       // Handles "3/9/2025" and "15/04/2026"
+            "dd/MM/yyyy",     // Handles "15/04/2026"
+            "M/d/yyyy",       // US format fallback
+            "MM/dd/yyyy",     // US format fallback
+            "yyyy-MM-dd",     // ISO format
+            "dd-MMM-yy",      // P6 format like "15-APR-26"
+            "dd-MMM-yyyy"     // P6 format like "15-APR-2026"
         };
 
                 // Try parsing with explicit formats first
@@ -2273,119 +2274,6 @@ namespace XerToCsvConverter
             return finishDate;
         }
 
-        private DateTime CalculateStartDateWithConstraints(string[] row, Dictionary<string, int> indexes, string statusCode, string originalFilename)
-        {
-            DateTime startDate = DateTime.MinValue;
-            string constraintType = GetFieldValueOptimized(row, indexes, FieldNames.CstrType);
-            string constraintDateStr = GetFieldValueOptimized(row, indexes, FieldNames.CstrDate);
-
-            // For completed or in-progress tasks, always use actuals
-            if (statusCode != "TK_NotStart")
-            {
-                if (TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.ActStartDate), out startDate))
-                    return startDate;
-                if (TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.ActEndDate), out startDate))
-                    return startDate;
-            }
-
-            // For not-started tasks, apply constraints
-            DateTime earlyStart = DateTime.MinValue;
-            DateTime lateStart = DateTime.MinValue;
-            TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.EarlyStartDate), out earlyStart);
-
-            if (indexes.ContainsKey(FieldNames.LateStartDate))
-            {
-                TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.LateStartDate), out lateStart);
-            }
-
-            // HANDLE ALAP FIRST (no constraint date needed)
-            if (constraintType == "CS_ALAP")
-            {
-                return lateStart != DateTime.MinValue ? lateStart : earlyStart;
-            }
-
-            // Apply other constraint logic (these need constraint dates)
-            if (!string.IsNullOrEmpty(constraintType) && TryParseDateOptimized(constraintDateStr, out DateTime constraintDate))
-            {
-                switch (constraintType)
-                {
-                    case "CS_MSO":
-                    case "CS_MANDSTART":
-                        return constraintDate;
-
-                    case "CS_MSOA":
-                        return earlyStart > constraintDate ? earlyStart : constraintDate;
-
-                    case "CS_MSOB":
-                        if (earlyStart != DateTime.MinValue)
-                            return earlyStart < constraintDate ? earlyStart : constraintDate;
-                        else
-                            return constraintDate;
-
-                    default:
-                        return earlyStart;
-                }
-            }
-
-            // No constraint - use early start with early end fallback
-            if (earlyStart != DateTime.MinValue)
-                return earlyStart;
-
-            TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.EarlyEndDate), out startDate);
-            return startDate;
-        }
-
-        private DateTime CalculateFinishDateWithConstraints(string[] row, Dictionary<string, int> indexes, string statusCode, string originalFilename)
-        {
-            DateTime finishDate = DateTime.MinValue;
-            string constraintType = GetFieldValueOptimized(row, indexes, FieldNames.CstrType);
-            string constraintDateStr = GetFieldValueOptimized(row, indexes, FieldNames.CstrDate);
-
-            // For completed tasks, always use actual end
-            if (statusCode == "TK_Complete")
-            {
-                if (TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.ActEndDate), out finishDate))
-                    return finishDate;
-            }
-
-            // For not-started or in-progress tasks
-            DateTime earlyEnd = DateTime.MinValue;
-            DateTime lateEnd = DateTime.MinValue;
-            TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.EarlyEndDate), out earlyEnd);
-            TryParseDateOptimized(GetFieldValueOptimized(row, indexes, FieldNames.LateEndDate), out lateEnd);
-
-            // HANDLE ALAP FIRST (no constraint date needed)
-            if (constraintType == "CS_ALAP")
-            {
-                return lateEnd != DateTime.MinValue ? lateEnd : earlyEnd;
-            }
-
-            // Apply other constraint logic (these need constraint dates)
-            if (!string.IsNullOrEmpty(constraintType) && TryParseDateOptimized(constraintDateStr, out DateTime constraintDate))
-            {
-                switch (constraintType)
-                {
-                    case "CS_MEO":
-                    case "CS_MANDFIN":
-                        if (statusCode != "TK_Complete")
-                            return constraintDate;
-                        break;
-
-                    case "CS_MEOA":
-                        return earlyEnd > constraintDate ? earlyEnd : constraintDate;
-
-                    case "CS_MEOB":
-                        if (earlyEnd != DateTime.MinValue)
-                            return earlyEnd < constraintDate ? earlyEnd : constraintDate;
-                        else
-                            return constraintDate;
-                }
-            }
-
-            // No constraint - use early end with late end fallback
-            return earlyEnd != DateTime.MinValue ? earlyEnd : lateEnd;
-        }
-
         private string CalculateDaysFromHoursOptimized(string[] row, Dictionary<string, int> indexes, string hourFieldName, decimal hoursPerDay)
         {
             if (hoursPerDay <= 0) return "";
@@ -2464,12 +2352,13 @@ namespace XerToCsvConverter
         private bool IsEnhancedTableName(string name)
         {
             var enhancedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-                EnhancedTableNames.XerTask01, EnhancedTableNames.XerProject02,
-                EnhancedTableNames.XerProjWbs03, EnhancedTableNames.XerBaseline04,
-                EnhancedTableNames.XerPredecessor06, EnhancedTableNames.XerActvType07,
-                EnhancedTableNames.XerActvCode08, EnhancedTableNames.XerTaskActv09,
-                EnhancedTableNames.XerCalendar10, EnhancedTableNames.XerCalendarDetailed11
-            };
+            EnhancedTableNames.XerTask01, EnhancedTableNames.XerProject02,
+            EnhancedTableNames.XerProjWbs03, EnhancedTableNames.XerBaseline04,
+            EnhancedTableNames.XerPredecessor06, EnhancedTableNames.XerActvType07,
+            EnhancedTableNames.XerActvCode08, EnhancedTableNames.XerTaskActv09,
+            EnhancedTableNames.XerCalendar10, EnhancedTableNames.XerCalendarDetailed11,
+            EnhancedTableNames.XerRsrc12, EnhancedTableNames.XerTaskRsrc13
+        };
             return enhancedNames.Contains(name);
         }
         #endregion
@@ -2508,12 +2397,13 @@ namespace XerToCsvConverter
             _extractedTables.Clear();
             lstTables.Items.Clear();
             _chkCreatePowerBiTables.Enabled = false;
-            _chkCreatePowerBiTables.Checked = false;
             _lblRequirements.Text = "(Dependencies checked after parsing)";
             _canCreateTask01 = false; _canCreateProjWbs03 = false; _canCreateBaseline04 = false;
             _canCreateProject02 = false; _canCreatePredecessor06 = false; _canCreateActvType07 = false;
             _canCreateActvCode08 = false; _canCreateTaskActv09 = false; _canCreateCalendar10 = false;
             _canCreateCalendarDetailed11 = false;
+            _canCreateRsrc12 = false; _canCreateTaskRsrc13 = false;
+
 
             UpdateExportButtonState();
             UpdateStatus("Results cleared. Select XER file(s) and Output Directory.");
@@ -2539,6 +2429,7 @@ namespace XerToCsvConverter
                 _chkCreatePowerBiTables.Checked = false;
             }
             _lblRequirements.Text = GetPbiRequirementsText();
+            UpdateExportButtonState();
         }
 
         private string GetPbiRequirementsText()
@@ -2564,10 +2455,13 @@ namespace XerToCsvConverter
             if (_canCreateActvCode08) req.Add(TableNames.ActvCode);
             if (_canCreateTaskActv09) req.Add(TableNames.TaskActv);
             if (_canCreateCalendar10 || _canCreateCalendarDetailed11) req.Add(TableNames.Calendar);
+            if (_canCreateRsrc12) req.Add(TableNames.Rsrc);
+            if (_canCreateTaskRsrc13) req.Add(TableNames.TaskRsrc);
+
 
             var distinctReq = req.SelectMany(s => s.Split(new[] { ", " }, StringSplitOptions.RemoveEmptyEntries))
-                                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                                     .OrderBy(s => s);
+                                         .Distinct(StringComparer.OrdinalIgnoreCase)
+                                         .OrderBy(s => s);
 
             return $"Requires: {string.Join(", ", distinctReq)}";
         }
@@ -2772,7 +2666,7 @@ namespace XerToCsvConverter
             this.lstXerFiles.Size = new System.Drawing.Size(316, 75);
             this.lstXerFiles.TabIndex = 1;
             this.toolTip1.SetToolTip(this.lstXerFiles, "Drag and drop XER files here or use Browse.\r\nSelect files and press DEL to remov" +
-        "e.");
+    "e.");
             this.lstXerFiles.KeyDown += new System.Windows.Forms.KeyEventHandler(this.lstXerFiles_KeyDown);
             //
             // btnSelectXer
@@ -2933,7 +2827,7 @@ namespace XerToCsvConverter
             this._chkCreatePowerBiTables.TabIndex = 0;
             this._chkCreatePowerBiTables.Text = "Create Power BI Tables";
             this.toolTip1.SetToolTip(this._chkCreatePowerBiTables, "If checked, additional tables suitable for Power BI will be generated if the req" +
-        "uired source tables are found after parsing.");
+    "uired source tables are found after parsing.");
             this._chkCreatePowerBiTables.UseVisualStyleBackColor = true;
             this._chkCreatePowerBiTables.CheckedChanged += new System.EventHandler(this.ChkCreatePowerBiTables_CheckedChanged);
             //
