@@ -2130,12 +2130,12 @@ namespace XerToCsvConverter
 
         private string FormatDateOutput(DateTime? date)
         {
-            return date.HasValue && date.Value != DateTime.MinValue ? date.Value.ToString("yyyy-MM-dd") : "";
+            return date.HasValue && date.Value != DateTime.MinValue ? date.Value.ToString("yyyy-MM-dd HH:mm:ss") : "";
         }
 
         private string FormatDateOutput(DateTime date)
         {
-            return date != DateTime.MinValue ? date.ToString("yyyy-MM-dd") : "";
+            return date != DateTime.MinValue ? date.ToString("yyyy-MM-dd HH:mm:ss") : "";
         }
 
         private void FormatDateFieldsOptimized(string[] sourceRow, Dictionary<string, int> sourceIndexes, string[] transformedRow, string[] finalColumns, DateTime? actEndDate)
@@ -2282,8 +2282,10 @@ namespace XerToCsvConverter
 
             if (decimal.TryParse(hourStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal hours))
             {
-                int days = (int)(hours / hoursPerDay);
-                return days.ToString();
+                // Perform division with decimals
+                decimal days = hours / hoursPerDay;
+                // Format the result to one decimal place ("F1")
+                return days.ToString("F1", CultureInfo.InvariantCulture);
             }
 
             return "";
