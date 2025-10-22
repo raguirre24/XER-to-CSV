@@ -47,6 +47,7 @@ namespace XerToCsvConverter
         public const string ParentWbsId = "parent_wbs_id";
         public const string ActvCodeTypeId = "actv_code_type_id"; public const string ActvCodeId = "actv_code_id"; public const string FileName = "FileName"; public const string Start = "Start"; public const string Finish = "Finish"; public const string IdName = "ID_Name"; public const string RemainingWorkingDays = "Remaining Working Days"; public const string OriginalDuration = "Original Duration"; public const string TotalFloat = "Total Float"; public const string FreeFloat = "Free Float"; public const string PercentComplete = "%"; public const string DataDate = "Data Date"; public const string WbsIdKey = "wbs_id_key"; public const string TaskIdKey = "task_id_key"; public const string ParentWbsIdKey = "parent_wbs_id_key"; public const string CalendarIdKey = "calendar_id_key"; public const string ProjIdKey = "proj_id_key"; public const string ActvCodeIdKey = "actv_code_id_key"; public const string ActvCodeTypeIdKey = "actv_code_type_id_key"; public const string ClndrIdKey = "clndr_id_key"; public const string PredTaskId = "pred_task_id"; public const string PredTaskIdKey = "pred_task_id_key"; public const string CalendarName = "clndr_name"; public const string CalendarData = "clndr_data"; public const string CalendarType = "clndr_type";
         public const string Date = "date"; public const string DayOfWeek = "day_of_week"; public const string WorkingDay = "working_day"; public const string WorkHours = "work_hours"; public const string ExceptionType = "exception_type"; public const string RsrcIdKey = "rsrc_id_key";
+        public const string MonthUpdate = "MonthUpdate"; // <-- ADDED THIS LINE
     }
 
     internal static class EnhancedTableNames { public const string XerTask01 = "01_XER_TASK"; public const string XerProject02 = "02_XER_PROJECT"; public const string XerProjWbs03 = "03_XER_PROJWBS"; public const string XerBaseline04 = "04_XER_BASELINE"; public const string XerPredecessor06 = "06_XER_PREDECESSOR"; public const string XerActvType07 = "07_XER_ACTVTYPE"; public const string XerActvCode08 = "08_XER_ACTVCODE"; public const string XerTaskActv09 = "09_XER_TASKACTV"; public const string XerCalendar10 = "10_XER_CALENDAR"; public const string XerCalendarDetailed11 = "11_XER_CALENDAR_DETAILED"; public const string XerRsrc12 = "12_XER_RSRC"; public const string XerTaskRsrc13 = "13_XER_TASKRSRC"; }
@@ -531,6 +532,7 @@ namespace XerToCsvConverter
     }
 
     // Handles data transformation and creation of enhanced tables (e.g., for Power BI)
+    // Handles data transformation and creation of enhanced tables (e.g., for Power BI)
     public class XerTransformer
     {
         private readonly XerDataStore _dataStore;
@@ -548,17 +550,53 @@ namespace XerToCsvConverter
         // Captures day number (Group 1) and content (Group 2). Handles nested parentheses in content.
         private static readonly Regex DayPatternRegex = new Regex(
             @"\(0\|\|(\d)\(\)\s*\(((?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)\s*\)",
-             RegexCompiledOptions);
+                RegexCompiledOptions);
 
         // New static compiled Regex for empty DayOfWeek definitions
         private static readonly Regex EmptyDayPatternRegex = new Regex(
             @"\(0\|\|(\d)\(\)\s*\(\s*\)\s*\)",
-             RegexCompiledOptions);
+                RegexCompiledOptions);
 
+        // Regex to extract YYMM from filename for MonthUpdate column
+        private static readonly Regex MonthUpdateRegex = new Regex(@"^(\d{4})", RegexCompiledOptions); // <-- ADDED
 
         public XerTransformer(XerDataStore dataStore)
         {
             _dataStore = dataStore;
+        }
+
+        // New helper method to parse YYMM from filename
+        private string ParseMonthUpdateFromFilename(string filename)
+        {
+            if (string.IsNullOrWhiteSpace(filename)) return string.Empty;
+
+            var match = MonthUpdateRegex.Match(filename.Trim());
+
+            if (match.Success)
+            {
+                string yymm = match.Groups[1].Value;
+                // The regex already ensures yymm is 4 digits.
+                if (int.TryParse(yymm.Substring(0, 2), out int year) &&
+                    int.TryParse(yymm.Substring(2, 2), out int month))
+                {
+                    // Assuming 2-digit year 'yy' is in the 21st century (20xx)
+                    year += 2000;
+
+                    if (month >= 1 && month <= 12)
+                    {
+                        try
+                        {
+                            var date = new DateTime(year, month, 1);
+                            return date.ToString("yyyy-MM-dd"); // Use a standard, sortable format
+                        }
+                        catch (ArgumentOutOfRangeException)
+                        {
+                            return string.Empty; // Handle invalid parsed dates
+                        }
+                    }
+                }
+            }
+            return string.Empty;
         }
 
         private bool IsTableValid(XerTable table) => table != null && !table.IsEmpty && table.Headers != null;
@@ -609,20 +647,21 @@ namespace XerToCsvConverter
                 var projectDataDates = BuildProjectDataDatesLookup(projectTable);
 
                 string[] finalColumns = {
-                    FieldNames.TaskId, FieldNames.ProjectId, FieldNames.WbsId, FieldNames.CalendarId,
-                    FieldNames.TaskType, FieldNames.StatusCode, FieldNames.TaskCode, FieldNames.TaskName,
-                    FieldNames.RsrcId, FieldNames.ActStartDate, FieldNames.ActEndDate,
-                    FieldNames.EarlyStartDate, FieldNames.EarlyEndDate, FieldNames.LateStartDate, FieldNames.LateEndDate,
-                    FieldNames.TargetStartDate, FieldNames.TargetEndDate,
-                    FieldNames.CstrType, FieldNames.CstrDate, FieldNames.PriorityType, FieldNames.FloatPath,
-                    FieldNames.FloatPathOrder, FieldNames.DrivingPathFlag,
-                    // Calculated Fields
-                    FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
-                    FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
-                    FieldNames.PercentComplete, FieldNames.DataDate,
-                    // Key Fields
-                    FieldNames.WbsIdKey, FieldNames.TaskIdKey, FieldNames.CalendarIdKey, FieldNames.ProjIdKey
-                };
+                FieldNames.TaskId, FieldNames.ProjectId, FieldNames.WbsId, FieldNames.CalendarId,
+                FieldNames.TaskType, FieldNames.StatusCode, FieldNames.TaskCode, FieldNames.TaskName,
+                FieldNames.RsrcId, FieldNames.ActStartDate, FieldNames.ActEndDate,
+                FieldNames.EarlyStartDate, FieldNames.EarlyEndDate, FieldNames.LateStartDate, FieldNames.LateEndDate,
+                FieldNames.TargetStartDate, FieldNames.TargetEndDate,
+                FieldNames.CstrType, FieldNames.CstrDate, FieldNames.PriorityType, FieldNames.FloatPath,
+                FieldNames.FloatPathOrder, FieldNames.DrivingPathFlag,
+                // Calculated Fields
+                FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
+                FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
+                FieldNames.PercentComplete, FieldNames.DataDate,
+                // Key Fields
+                FieldNames.WbsIdKey, FieldNames.TaskIdKey, FieldNames.CalendarIdKey, FieldNames.ProjIdKey,
+                FieldNames.MonthUpdate // <-- MODIFIED
+            };
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate target indexes for O(1) lookups in the parallel loop
                 var finalIndexes = finalColumns
@@ -731,6 +770,9 @@ namespace XerToCsvConverter
                     SetTransformedField(transformed, finalIndexes, FieldNames.CalendarIdKey, CreateKey(originalFilename, clndrId));
                     SetTransformedField(transformed, finalIndexes, FieldNames.ProjIdKey, CreateKey(originalFilename, projId));
 
+                    // Add MonthUpdate value
+                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
+
                     // Intern all resulting strings in the transformed row
                     for (int k = 0; k < transformed.Length; k++)
                     {
@@ -756,18 +798,19 @@ namespace XerToCsvConverter
         {
             // Fields handled by specific transformation logic and should not be copied directly
             var handledFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-                FieldNames.StatusCode, FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
-                FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
-                FieldNames.PercentComplete, FieldNames.DataDate,
-                // Date fields are handled by FormatDateFields
-                FieldNames.ActStartDate, FieldNames.ActEndDate,
-                FieldNames.EarlyStartDate, FieldNames.EarlyEndDate,
-                FieldNames.LateStartDate, FieldNames.LateEndDate,
-                FieldNames.CstrDate,
-                FieldNames.TargetStartDate, FieldNames.TargetEndDate,
-                // Key fields are generated separately
-                FieldNames.WbsIdKey, FieldNames.TaskIdKey, FieldNames.CalendarIdKey, FieldNames.ProjIdKey
-            };
+            FieldNames.StatusCode, FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
+            FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
+            FieldNames.PercentComplete, FieldNames.DataDate,
+            // Date fields are handled by FormatDateFields
+            FieldNames.ActStartDate, FieldNames.ActEndDate,
+            FieldNames.EarlyStartDate, FieldNames.EarlyEndDate,
+            FieldNames.LateStartDate, FieldNames.LateEndDate,
+            FieldNames.CstrDate,
+            FieldNames.TargetStartDate, FieldNames.TargetEndDate,
+            // Key fields are generated separately
+            FieldNames.WbsIdKey, FieldNames.TaskIdKey, FieldNames.CalendarIdKey, FieldNames.ProjIdKey,
+            FieldNames.MonthUpdate // Don't copy this directly
+        };
 
             // Iterate over the target dictionary keys/values
             foreach (var kvp in targetIndexes)
@@ -790,15 +833,15 @@ namespace XerToCsvConverter
         private void FormatDateFields(string[] sourceRow, IReadOnlyDictionary<string, int> sourceIndexes, string[] transformedRow, IReadOnlyDictionary<string, int> targetIndexes, DateTime? actEndDate)
         {
             string[] directFormatCols = {
-                FieldNames.CstrDate,
-                FieldNames.TargetStartDate,
-                FieldNames.TargetEndDate,
-                FieldNames.ActStartDate,
-                FieldNames.EarlyStartDate,
-                FieldNames.EarlyEndDate,
-                FieldNames.LateStartDate,
-                FieldNames.LateEndDate
-            };
+            FieldNames.CstrDate,
+            FieldNames.TargetStartDate,
+            FieldNames.TargetEndDate,
+            FieldNames.ActStartDate,
+            FieldNames.EarlyStartDate,
+            FieldNames.EarlyEndDate,
+            FieldNames.LateStartDate,
+            FieldNames.LateEndDate
+        };
 
             foreach (string colName in directFormatCols)
             {
@@ -963,7 +1006,7 @@ namespace XerToCsvConverter
             return 0.0;
         }
 
-        // Creates the Baseline table (04_XER_BASELINE) by finding the earliest Data Date snapshot
+        // Creates the Baseline table (04_XER_BASELINE) by finding the earliest MonthUpdate snapshot
         public XerTable Create04XerBaselineTable(XerTable task01Table)
         {
             if (!IsTableValid(task01Table)) return null;
@@ -973,30 +1016,33 @@ namespace XerToCsvConverter
                 var baselineTable = new XerTable(EnhancedTableNames.XerBaseline04, task01Table.RowCount);
                 baselineTable.SetHeaders(task01Table.Headers);
 
-                if (!task01Table.FieldIndexes.TryGetValue(FieldNames.DataDate, out int dataDateIndex)) return null;
+                // --- CHANGE: Use MonthUpdate instead of DataDate ---
+                if (!task01Table.FieldIndexes.TryGetValue(FieldNames.MonthUpdate, out int monthUpdateIndex)) return null;
 
-                // Find the minimum Data Date across all rows
-                DateTime? minDataDate = null;
+                // Find the minimum MonthUpdate date across all rows
+                DateTime? minMonthUpdate = null;
                 foreach (var rowData in task01Table.Rows)
                 {
-                    var currentDate = DateParser.TryParse(XerTable.GetFieldValueSafe(rowData, dataDateIndex));
+                    // --- CHANGE: Get value from MonthUpdate column ---
+                    var currentDate = DateParser.TryParse(XerTable.GetFieldValueSafe(rowData, monthUpdateIndex));
                     if (currentDate.HasValue)
                     {
                         // Compare only the Date part, ignoring time
-                        if (!minDataDate.HasValue || currentDate.Value.Date < minDataDate.Value.Date)
+                        if (!minMonthUpdate.HasValue || currentDate.Value.Date < minMonthUpdate.Value.Date)
                         {
-                            minDataDate = currentDate.Value.Date;
+                            minMonthUpdate = currentDate.Value.Date;
                         }
                     }
                 }
 
-                if (!minDataDate.HasValue) return null; // No valid data dates found
+                if (!minMonthUpdate.HasValue) return null; // No valid dates found
 
-                // Filter rows matching the minimum Data Date
+                // Filter rows matching the minimum MonthUpdate Date
                 foreach (var sourceRow in task01Table.Rows)
                 {
-                    var rowDate = DateParser.TryParse(XerTable.GetFieldValueSafe(sourceRow, dataDateIndex));
-                    if (rowDate.HasValue && rowDate.Value.Date == minDataDate.Value)
+                    // --- CHANGE: Get value from MonthUpdate column for comparison ---
+                    var rowDate = DateParser.TryParse(XerTable.GetFieldValueSafe(sourceRow, monthUpdateIndex));
+                    if (rowDate.HasValue && rowDate.Value.Date == minMonthUpdate.Value)
                     {
                         baselineTable.AddRow(sourceRow);
                     }
@@ -1025,6 +1071,7 @@ namespace XerToCsvConverter
                 var finalHeadersList = sourceHeaders.ToList();
                 finalHeadersList.Add(FieldNames.WbsIdKey);
                 finalHeadersList.Add(FieldNames.ParentWbsIdKey);
+                finalHeadersList.Add(FieldNames.MonthUpdate); // <-- MODIFIED
                 string[] finalHeaders = finalHeadersList.Select(StringInternPool.Intern).ToArray();
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate indexes
@@ -1065,6 +1112,9 @@ namespace XerToCsvConverter
                     // Set new key fields using optimized method
                     SetTransformedField(transformed, finalIndexes, FieldNames.WbsIdKey, wbsIdKey);
                     SetTransformedField(transformed, finalIndexes, FieldNames.ParentWbsIdKey, parentWbsIdKey);
+
+                    // Add MonthUpdate value
+                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
 
                     // Intern strings
                     for (int k = 0; k < transformed.Length; k++)
@@ -1114,6 +1164,7 @@ namespace XerToCsvConverter
                 {
                     finalHeadersList.Add(mapping.Item1);
                 }
+                finalHeadersList.Add(FieldNames.MonthUpdate); // <-- MODIFIED
                 string[] finalHeaders = finalHeadersList.Select(StringInternPool.Intern).ToArray();
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate indexes
@@ -1151,6 +1202,9 @@ namespace XerToCsvConverter
                         }
                     }
 
+                    // Add MonthUpdate value
+                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
+
                     // Intern strings
                     for (int k = 0; k < transformed.Length; k++)
                     {
@@ -1176,8 +1230,8 @@ namespace XerToCsvConverter
 
         public XerTable Create06XerPredecessor() => CreateSimpleKeyedTable(TableNames.TaskPred, EnhancedTableNames.XerPredecessor06,
             new List<Tuple<string, string>> {
-            Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId),
-            Tuple.Create(FieldNames.PredTaskIdKey, FieldNames.PredTaskId)
+        Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId),
+        Tuple.Create(FieldNames.PredTaskIdKey, FieldNames.PredTaskId)
             });
 
         public XerTable Create07XerActvType() => CreateSimpleKeyedTable(TableNames.ActvType, EnhancedTableNames.XerActvType07,
@@ -1185,29 +1239,29 @@ namespace XerToCsvConverter
 
         public XerTable Create08XerActvCode() => CreateSimpleKeyedTable(TableNames.ActvCode, EnhancedTableNames.XerActvCode08,
             new List<Tuple<string, string>> {
-            Tuple.Create(FieldNames.ActvCodeIdKey, FieldNames.ActvCodeId),
-            Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId)
+        Tuple.Create(FieldNames.ActvCodeIdKey, FieldNames.ActvCodeId),
+        Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId)
             });
 
         public XerTable Create09XerTaskActv() => CreateSimpleKeyedTable(TableNames.TaskActv, EnhancedTableNames.XerTaskActv09,
             new List<Tuple<string, string>> {
-            Tuple.Create(FieldNames.ActvCodeIdKey, FieldNames.ActvCodeId),
-            Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId)
+        Tuple.Create(FieldNames.ActvCodeIdKey, FieldNames.ActvCodeId),
+        Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId)
             });
 
         public XerTable Create10XerCalendar() => CreateSimpleKeyedTable(TableNames.Calendar, EnhancedTableNames.XerCalendar10,
             new List<Tuple<string, string>> { Tuple.Create(FieldNames.ClndrIdKey, FieldNames.ClndrId) });
 
         public XerTable Create12XerRsrc() => CreateSimpleKeyedTable(TableNames.Rsrc, EnhancedTableNames.XerRsrc12,
-               new List<Tuple<string, string>> {
-            Tuple.Create(FieldNames.RsrcIdKey, FieldNames.RsrcId),
-            Tuple.Create(FieldNames.ClndrIdKey, FieldNames.ClndrId)
-               });
+                new List<Tuple<string, string>> {
+        Tuple.Create(FieldNames.RsrcIdKey, FieldNames.RsrcId),
+        Tuple.Create(FieldNames.ClndrIdKey, FieldNames.ClndrId)
+                });
 
         public XerTable Create13XerTaskRsrc() => CreateSimpleKeyedTable(TableNames.TaskRsrc, EnhancedTableNames.XerTaskRsrc13,
             new List<Tuple<string, string>> {
-            Tuple.Create(FieldNames.RsrcIdKey, FieldNames.RsrcId),
-            Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId)
+        Tuple.Create(FieldNames.RsrcIdKey, FieldNames.RsrcId),
+        Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId)
             });
 
         // Creates the detailed calendar table (11_XER_CALENDAR_DETAILED) by parsing clndr_data
@@ -1220,10 +1274,11 @@ namespace XerToCsvConverter
             {
                 var sourceIndexes = calendarTable.FieldIndexes;
                 string[] detailedColumns = {
-                FieldNames.ClndrId, FieldNames.CalendarName, FieldNames.CalendarType,
-                FieldNames.Date, FieldNames.DayOfWeek, FieldNames.WorkingDay,
-                FieldNames.WorkHours, FieldNames.ExceptionType, FieldNames.ClndrIdKey
-            };
+            FieldNames.ClndrId, FieldNames.CalendarName, FieldNames.CalendarType,
+            FieldNames.Date, FieldNames.DayOfWeek, FieldNames.WorkingDay,
+            FieldNames.WorkHours, FieldNames.ExceptionType, FieldNames.ClndrIdKey,
+            FieldNames.MonthUpdate // <-- MODIFIED
+        };
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate indexes
                 var finalIndexes = detailedColumns
@@ -1263,6 +1318,9 @@ namespace XerToCsvConverter
                         SetTransformedField(detailedRow, finalIndexes, FieldNames.WorkHours, entry.WorkHours);
                         SetTransformedField(detailedRow, finalIndexes, FieldNames.ExceptionType, entry.ExceptionType);
                         SetTransformedField(detailedRow, finalIndexes, FieldNames.ClndrIdKey, clndrIdKey);
+
+                        // Add MonthUpdate value
+                        SetTransformedField(detailedRow, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
 
                         // Intern strings
                         for (int k = 0; k < detailedRow.Length; k++)
@@ -1679,14 +1737,14 @@ namespace XerToCsvConverter
 
             var days = new[]
             {
-            ("Sunday", is24x7 ? "Y" : "N", is24x7 ? defaultHours : 0m),
-            ("Monday", "Y", defaultHours),
-            ("Tuesday", "Y", defaultHours),
-            ("Wednesday", "Y", defaultHours),
-            ("Thursday", "Y", defaultHours),
-            ("Friday", "Y", defaultHours),
-            ("Saturday", is24x7 ? "Y" : "N", is24x7 ? defaultHours : 0m)
-        };
+        ("Sunday", is24x7 ? "Y" : "N", is24x7 ? defaultHours : 0m),
+        ("Monday", "Y", defaultHours),
+        ("Tuesday", "Y", defaultHours),
+        ("Wednesday", "Y", defaultHours),
+        ("Thursday", "Y", defaultHours),
+        ("Friday", "Y", defaultHours),
+        ("Saturday", is24x7 ? "Y" : "N", is24x7 ? defaultHours : 0m)
+    };
 
             return days.Select(d => new CalendarEntry
             {
