@@ -39,7 +39,7 @@ namespace XerToCsvConverter
         }
     }
 
-    internal static class TableNames { public const string Task = "TASK"; public const string Calendar = "CALENDAR"; public const string Project = "PROJECT"; public const string ProjWbs = "PROJWBS"; public const string TaskActv = "TASKACTV"; public const string ActvCode = "ACTVCODE"; public const string ActvType = "ACTVTYPE"; public const string TaskPred = "TASKPRED"; public const string Rsrc = "RSRC"; public const string TaskRsrc = "TASKRSRC"; }
+    internal static class TableNames { public const string Task = "TASK"; public const string Calendar = "CALENDAR"; public const string Project = "PROJECT"; public const string ProjWbs = "PROJWBS"; public const string TaskActv = "TASKACTV"; public const string ActvCode = "ACTVCODE"; public const string ActvType = "ACTVTYPE"; public const string TaskPred = "TASKPRED"; public const string Rsrc = "RSRC"; public const string TaskRsrc = "TASKRSRC"; public const string Umeasure = "UMEASURE"; }
 
     internal static class FieldNames
     {
@@ -47,10 +47,11 @@ namespace XerToCsvConverter
         public const string ParentWbsId = "parent_wbs_id";
         public const string ActvCodeTypeId = "actv_code_type_id"; public const string ActvCodeId = "actv_code_id"; public const string FileName = "FileName"; public const string Start = "Start"; public const string Finish = "Finish"; public const string IdName = "ID_Name"; public const string RemainingWorkingDays = "Remaining Working Days"; public const string OriginalDuration = "Original Duration"; public const string TotalFloat = "Total Float"; public const string FreeFloat = "Free Float"; public const string PercentComplete = "%"; public const string DataDate = "Data Date"; public const string WbsIdKey = "wbs_id_key"; public const string TaskIdKey = "task_id_key"; public const string ParentWbsIdKey = "parent_wbs_id_key"; public const string CalendarIdKey = "calendar_id_key"; public const string ProjIdKey = "proj_id_key"; public const string ActvCodeIdKey = "actv_code_id_key"; public const string ActvCodeTypeIdKey = "actv_code_type_id_key"; public const string ClndrIdKey = "clndr_id_key"; public const string PredTaskId = "pred_task_id"; public const string PredTaskIdKey = "pred_task_id_key"; public const string CalendarName = "clndr_name"; public const string CalendarData = "clndr_data"; public const string CalendarType = "clndr_type";
         public const string Date = "date"; public const string DayOfWeek = "day_of_week"; public const string WorkingDay = "working_day"; public const string WorkHours = "work_hours"; public const string ExceptionType = "exception_type"; public const string RsrcIdKey = "rsrc_id_key";
-        public const string MonthUpdate = "MonthUpdate"; // <-- ADDED THIS LINE
+        public const string MonthUpdate = "MonthUpdate";
+        public const string UnitId = "unit_id"; public const string UnitIdKey = "unit_id_key";
     }
 
-    internal static class EnhancedTableNames { public const string XerTask01 = "01_XER_TASK"; public const string XerProject02 = "02_XER_PROJECT"; public const string XerProjWbs03 = "03_XER_PROJWBS"; public const string XerBaseline04 = "04_XER_BASELINE"; public const string XerPredecessor06 = "06_XER_PREDECESSOR"; public const string XerActvType07 = "07_XER_ACTVTYPE"; public const string XerActvCode08 = "08_XER_ACTVCODE"; public const string XerTaskActv09 = "09_XER_TASKACTV"; public const string XerCalendar10 = "10_XER_CALENDAR"; public const string XerCalendarDetailed11 = "11_XER_CALENDAR_DETAILED"; public const string XerRsrc12 = "12_XER_RSRC"; public const string XerTaskRsrc13 = "13_XER_TASKRSRC"; }
+    internal static class EnhancedTableNames { public const string XerTask01 = "01_XER_TASK"; public const string XerProject02 = "02_XER_PROJECT"; public const string XerProjWbs03 = "03_XER_PROJWBS"; public const string XerBaseline04 = "04_XER_BASELINE"; public const string XerPredecessor06 = "06_XER_PREDECESSOR"; public const string XerActvType07 = "07_XER_ACTVTYPE"; public const string XerActvCode08 = "08_XER_ACTVCODE"; public const string XerTaskActv09 = "09_XER_TASKACTV"; public const string XerCalendar10 = "10_XER_CALENDAR"; public const string XerCalendarDetailed11 = "11_XER_CALENDAR_DETAILED"; public const string XerRsrc12 = "12_XER_RSRC"; public const string XerTaskRsrc13 = "13_XER_TASKRSRC"; public const string XerUmeasure14 = "14_XER_UMEASURE"; }
 
     // Custom String Interning Pool to reduce memory footprint by reusing identical strings
     public static class StringInternPool
@@ -558,7 +559,7 @@ namespace XerToCsvConverter
                 RegexCompiledOptions);
 
         // Regex to extract YYMM from filename for MonthUpdate column
-        private static readonly Regex MonthUpdateRegex = new Regex(@"^(\d{4})", RegexCompiledOptions); // <-- ADDED
+        private static readonly Regex MonthUpdateRegex = new Regex(@"^(\d{4})", RegexCompiledOptions);
 
         public XerTransformer(XerDataStore dataStore)
         {
@@ -660,7 +661,7 @@ namespace XerToCsvConverter
                 FieldNames.PercentComplete, FieldNames.DataDate,
                 // Key Fields
                 FieldNames.WbsIdKey, FieldNames.TaskIdKey, FieldNames.CalendarIdKey, FieldNames.ProjIdKey,
-                FieldNames.MonthUpdate // <-- MODIFIED
+                FieldNames.MonthUpdate
             };
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate target indexes for O(1) lookups in the parallel loop
@@ -1071,7 +1072,7 @@ namespace XerToCsvConverter
                 var finalHeadersList = sourceHeaders.ToList();
                 finalHeadersList.Add(FieldNames.WbsIdKey);
                 finalHeadersList.Add(FieldNames.ParentWbsIdKey);
-                finalHeadersList.Add(FieldNames.MonthUpdate); // <-- MODIFIED
+                finalHeadersList.Add(FieldNames.MonthUpdate);
                 string[] finalHeaders = finalHeadersList.Select(StringInternPool.Intern).ToArray();
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate indexes
@@ -1164,7 +1165,7 @@ namespace XerToCsvConverter
                 {
                     finalHeadersList.Add(mapping.Item1);
                 }
-                finalHeadersList.Add(FieldNames.MonthUpdate); // <-- MODIFIED
+                finalHeadersList.Add(FieldNames.MonthUpdate);
                 string[] finalHeaders = finalHeadersList.Select(StringInternPool.Intern).ToArray();
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate indexes
@@ -1255,7 +1256,8 @@ namespace XerToCsvConverter
         public XerTable Create12XerRsrc() => CreateSimpleKeyedTable(TableNames.Rsrc, EnhancedTableNames.XerRsrc12,
                 new List<Tuple<string, string>> {
         Tuple.Create(FieldNames.RsrcIdKey, FieldNames.RsrcId),
-        Tuple.Create(FieldNames.ClndrIdKey, FieldNames.ClndrId)
+        Tuple.Create(FieldNames.ClndrIdKey, FieldNames.ClndrId),
+        Tuple.Create(FieldNames.UnitIdKey, FieldNames.UnitId)
                 });
 
         public XerTable Create13XerTaskRsrc() => CreateSimpleKeyedTable(TableNames.TaskRsrc, EnhancedTableNames.XerTaskRsrc13,
@@ -1263,6 +1265,9 @@ namespace XerToCsvConverter
         Tuple.Create(FieldNames.RsrcIdKey, FieldNames.RsrcId),
         Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId)
             });
+
+        public XerTable Create14XerUmeasure() => CreateSimpleKeyedTable(TableNames.Umeasure, EnhancedTableNames.XerUmeasure14,
+            new List<Tuple<string, string>> { Tuple.Create(FieldNames.UnitIdKey, FieldNames.UnitId) });
 
         // Creates the detailed calendar table (11_XER_CALENDAR_DETAILED) by parsing clndr_data
         public XerTable Create11XerCalendarDetailed()
@@ -1277,7 +1282,7 @@ namespace XerToCsvConverter
             FieldNames.ClndrId, FieldNames.CalendarName, FieldNames.CalendarType,
             FieldNames.Date, FieldNames.DayOfWeek, FieldNames.WorkingDay,
             FieldNames.WorkHours, FieldNames.ExceptionType, FieldNames.ClndrIdKey,
-            FieldNames.MonthUpdate // <-- MODIFIED
+            FieldNames.MonthUpdate
         };
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate indexes
@@ -2036,6 +2041,7 @@ namespace XerToCsvConverter
                 case EnhancedTableNames.XerCalendarDetailed11: return transformer.Create11XerCalendarDetailed();
                 case EnhancedTableNames.XerRsrc12: return transformer.Create12XerRsrc();
                 case EnhancedTableNames.XerTaskRsrc13: return transformer.Create13XerTaskRsrc();
+                case EnhancedTableNames.XerUmeasure14: return transformer.Create14XerUmeasure();
                 // TASK01 is handled separately due to dependencies, but included here for completeness
                 case EnhancedTableNames.XerTask01: return transformer.Create01XerTaskTable();
             }
@@ -2144,7 +2150,7 @@ namespace XerToCsvConverter
         private CancellationTokenSource _cancellationTokenSource; // UI/UX OPTIMIZATION: Cancellation token source
 
         // Power BI Dependency Flags
-        private bool _canCreateTask01 = false; private bool _canCreateProjWbs03 = false; private bool _canCreateBaseline04 = false; private bool _canCreateProject02 = false; private bool _canCreatePredecessor06 = false; private bool _canCreateActvType07 = false; private bool _canCreateActvCode08 = false; private bool _canCreateTaskActv09 = false; private bool _canCreateCalendar10 = false; private bool _canCreateCalendarDetailed11 = false; private bool _canCreateRsrc12 = false; private bool _canCreateTaskRsrc13 = false;
+        private bool _canCreateTask01 = false; private bool _canCreateProjWbs03 = false; private bool _canCreateBaseline04 = false; private bool _canCreateProject02 = false; private bool _canCreatePredecessor06 = false; private bool _canCreateActvType07 = false; private bool _canCreateActvCode08 = false; private bool _canCreateTaskActv09 = false; private bool _canCreateCalendar10 = false; private bool _canCreateCalendarDetailed11 = false; private bool _canCreateRsrc12 = false; private bool _canCreateTaskRsrc13 = false; private bool _canCreateUmeasure14 = false;
 
         public MainForm()
         {
@@ -2229,7 +2235,7 @@ namespace XerToCsvConverter
 
         private void AboutToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            ShowInfo("Primavera P6 XER to CSV Converter\nVersion: 2.2 (Optimized)\n\nSOFTWARE COPYRIGHT NOTICE\r\nCopyright © 2025 Ricardo Aguirre. All Rights Reserved.\r\nUnauthorized use, copying, or sharing of this software is strictly prohibited. Written permission required for any use.\r\nTHE SOFTWARE IS PROVIDED \"AS IS\" WITHOUT WARRANTY OF ANY KIND. RICARDO AGUIRRE SHALL NOT BE LIABLE FOR ANY DAMAGES ARISING FROM USE OF THIS SOFTWARE.\r\nBy using this software, you agree to these terms.", "About");
+            ShowInfo("Primavera P6 XER to CSV Converter\nVersion: 2.3 (Optimized)\n\nSOFTWARE COPYRIGHT NOTICE\r\nCopyright © 2025 Ricardo Aguirre. All Rights Reserved.\r\nUnauthorized use, copying, or sharing of this software is strictly prohibited. Written permission required for any use.\r\nTHE SOFTWARE IS PROVIDED \"AS IS\" WITHOUT WARRANTY OF ANY KIND. RICARDO AGUIRRE SHALL NOT BE LIABLE FOR ANY DAMAGES ARISING FROM USE OF THIS SOFTWARE.\r\nBy using this software, you agree to these terms.", "About");
         }
 
         private void BtnAddFile_Click(object sender, EventArgs e)
@@ -2440,6 +2446,7 @@ namespace XerToCsvConverter
             message += GetPbiTableStatusDetail(EnhancedTableNames.XerCalendarDetailed11, _canCreateCalendarDetailed11);
             message += GetPbiTableStatusDetail(EnhancedTableNames.XerRsrc12, _canCreateRsrc12);
             message += GetPbiTableStatusDetail(EnhancedTableNames.XerTaskRsrc13, _canCreateTaskRsrc13);
+            message += GetPbiTableStatusDetail(EnhancedTableNames.XerUmeasure14, _canCreateUmeasure14);
 
             message += "\n" + GetMissingDependenciesMessage("Summary:");
             ShowInfo(message, "Power BI Details");
@@ -2555,6 +2562,7 @@ namespace XerToCsvConverter
                 if (_canCreateCalendarDetailed11) names.Add(EnhancedTableNames.XerCalendarDetailed11);
                 if (_canCreateRsrc12) names.Add(EnhancedTableNames.XerRsrc12);
                 if (_canCreateTaskRsrc13) names.Add(EnhancedTableNames.XerTaskRsrc13);
+                if (_canCreateUmeasure14) names.Add(EnhancedTableNames.XerUmeasure14);
             }
         }
 
@@ -2684,6 +2692,7 @@ namespace XerToCsvConverter
             bool hasTaskPred = _dataStore.ContainsTable(TableNames.TaskPred);
             bool hasRsrc = _dataStore.ContainsTable(TableNames.Rsrc);
             bool hasTaskRsrc = _dataStore.ContainsTable(TableNames.TaskRsrc);
+            bool hasUmeasure = _dataStore.ContainsTable(TableNames.Umeasure);
 
             _canCreateTask01 = hasTask && hasCalendar && hasProject;
             _canCreateProjWbs03 = hasProjWbs;
@@ -2697,6 +2706,7 @@ namespace XerToCsvConverter
             _canCreateCalendarDetailed11 = hasCalendar;
             _canCreateRsrc12 = hasRsrc;
             _canCreateTaskRsrc13 = hasTaskRsrc;
+            _canCreateUmeasure14 = hasUmeasure;
         }
 
         private bool CheckSpecificPbiDependency(string tableName)
@@ -2715,6 +2725,7 @@ namespace XerToCsvConverter
                 case EnhancedTableNames.XerCalendarDetailed11: return _canCreateCalendarDetailed11;
                 case EnhancedTableNames.XerRsrc12: return _canCreateRsrc12;
                 case EnhancedTableNames.XerTaskRsrc13: return _canCreateTaskRsrc13;
+                case EnhancedTableNames.XerUmeasure14: return _canCreateUmeasure14;
                 default: return false;
             }
         }
@@ -2724,7 +2735,7 @@ namespace XerToCsvConverter
             return _canCreateTask01 || _canCreateProjWbs03 || _canCreateProject02 ||
                    _canCreatePredecessor06 || _canCreateActvType07 || _canCreateActvCode08 ||
                    _canCreateTaskActv09 || _canCreateCalendar10 || _canCreateCalendarDetailed11 ||
-                   _canCreateRsrc12 || _canCreateTaskRsrc13;
+                   _canCreateRsrc12 || _canCreateTaskRsrc13 || _canCreateUmeasure14;
         }
 
         private string GetMissingDependenciesMessage(string prefix)
@@ -2749,6 +2760,7 @@ namespace XerToCsvConverter
             // Calendar10/11 dependency on Calendar is already checked above
             if (!_canCreateRsrc12 && !_dataStore.ContainsTable(TableNames.Rsrc)) missing.Add(TableNames.Rsrc);
             if (!_canCreateTaskRsrc13 && !_dataStore.ContainsTable(TableNames.TaskRsrc)) missing.Add(TableNames.TaskRsrc);
+            if (!_canCreateUmeasure14 && !_dataStore.ContainsTable(TableNames.Umeasure)) missing.Add(TableNames.Umeasure);
 
             var distinctMissing = missing.Distinct().OrderBy(s => s).ToList();
 
@@ -2767,7 +2779,8 @@ namespace XerToCsvConverter
             EnhancedTableNames.XerPredecessor06, EnhancedTableNames.XerActvType07,
             EnhancedTableNames.XerActvCode08, EnhancedTableNames.XerTaskActv09,
             EnhancedTableNames.XerCalendar10, EnhancedTableNames.XerCalendarDetailed11,
-            EnhancedTableNames.XerRsrc12, EnhancedTableNames.XerTaskRsrc13
+            EnhancedTableNames.XerRsrc12, EnhancedTableNames.XerTaskRsrc13,
+            EnhancedTableNames.XerUmeasure14
         };
             return enhancedNames.Contains(name);
         }
@@ -2872,6 +2885,7 @@ namespace XerToCsvConverter
             _canCreateActvCode08 = false; _canCreateTaskActv09 = false; _canCreateCalendar10 = false;
             _canCreateCalendarDetailed11 = false;
             _canCreateRsrc12 = false; _canCreateTaskRsrc13 = false;
+            _canCreateUmeasure14 = false;
 
             UpdatePbiCheckboxState();
             UpdateExportButtonState();
@@ -3634,7 +3648,7 @@ namespace XerToCsvConverter
             this.MinimumSize = new System.Drawing.Size(800, 550);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "Primavera P6 XER to CSV Converter v2.2 (Optimized)";
+            this.Text = "Primavera P6 XER to CSV Converter v2.3";
             this.statusStrip.ResumeLayout(false);
             this.statusStrip.PerformLayout();
             this.menuStrip.ResumeLayout(false);
