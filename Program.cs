@@ -190,6 +190,38 @@ namespace XerToCsvConverter
             return count;
         }
 
+        // Adds or subtracts working days to/from a date
+        // Positive days = move forward, Negative days = move backward
+        // This is used to project dates with lag (e.g., "2 working days after predecessor finishes")
+        public DateTime AddWorkingDays(DateTime startDate, decimal workingDays)
+        {
+            // Strip time component
+            startDate = startDate.Date;
+
+            // Handle zero or very small values
+            if (Math.Abs(workingDays) < 0.01m)
+                return startDate;
+
+            // Determine direction
+            int direction = workingDays >= 0 ? 1 : -1;
+            int daysToAdd = (int)Math.Abs(Math.Ceiling(workingDays)); // Round up to be conservative
+
+            DateTime currentDate = startDate;
+            int workingDaysAdded = 0;
+
+            // Move day by day in the specified direction
+            while (workingDaysAdded < daysToAdd)
+            {
+                currentDate = currentDate.AddDays(direction);
+                if (IsWorkingDay(currentDate))
+                {
+                    workingDaysAdded++;
+                }
+            }
+
+            return currentDate;
+        }
+
         // Gets day of week number (1=Monday, 7=Sunday) matching Power BI WEEKDAY(date, 2)
         private static int GetDayOfWeekNumber(DateTime date)
         {
@@ -1489,13 +1521,16 @@ namespace XerToCsvConverter
                     }
                     SetTransformedField(transformed, finalIndexes, FieldNames.Lag, lagDays != 0 ? lagDays.ToString("F2", CultureInfo.InvariantCulture) : "0");
 
-                    // Calculate Free Float using SUCCESSOR's calendar (for working day calculations)
+                    // Calculate Free Float using P6's two-step logic:
+                    // Step 1: Project date with lag using PREDECESSOR's calendar
+                    // Step 2: Measure float from projected date using SUCCESSOR's calendar
                     string succClndrIdKey = succTask.ClndrIdKey;
                     string freeFloat = CalculateFreeFloat(
                         row, sourceIndexes,
                         succTask, predTask,
                         lagDays,
-                        succClndrIdKey,  // CHANGED: Use successor's calendar for float calculation
+                        predClndrIdKey,  // Predecessor's calendar for lag projection
+                        succClndrIdKey,  // Successor's calendar for float measurement
                         calendarCalculators
                     );
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloat);
@@ -1584,15 +1619,17 @@ namespace XerToCsvConverter
             return calculators;
         }
 
-        // Calculates Free Float for a predecessor relationship
-        // Uses SUCCESSOR's calendar for working day calculations (float is measured in successor's time)
-        // Lag (already converted to days) was calculated using PREDECESSOR's calendar
+        // Calculates Free Float using the correct P6 two-step logic:
+        // Step 1: Project a date by adding lag to predecessor's date (using predecessor's calendar)
+        // Step 2: Calculate working days from projected date to successor's date (using successor's calendar)
+        // This avoids the "apples-to-oranges" problem of subtracting lag days from a span calculated in a different calendar
         private string CalculateFreeFloat(
             string[] predRow,
             IReadOnlyDictionary<string, int> predIndexes,
             TaskData succTask,
             TaskData predTask,
             decimal lagDays,
+            string predClndrIdKey,  // PREDECESSOR's calendar for projecting with lag
             string succClndrIdKey,  // SUCCESSOR's calendar for float calculation
             Dictionary<string, WorkingDayCalculator> calendarCalculators)
         {
@@ -1611,38 +1648,44 @@ namespace XerToCsvConverter
             // Get relationship type
             string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
 
-            // Get SUCCESSOR's calendar calculator (use default if not found)
-            // Float is measured in how much the successor can slip, so use successor's calendar
-            WorkingDayCalculator calculator = WorkingDayCalculator.Default;
-            if (!string.IsNullOrEmpty(succClndrIdKey) && calendarCalculators.TryGetValue(succClndrIdKey, out var cal))
+            // Get PREDECESSOR's calendar for projecting the date with lag
+            WorkingDayCalculator predCalendar = WorkingDayCalculator.Default;
+            if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var predCal))
             {
-                calculator = cal;
+                predCalendar = predCal;
             }
 
-            // Determine which dates to use based on relationship type
-            DateTime? startDate = null;
-            DateTime? endDate = null;
+            // Get SUCCESSOR's calendar for measuring the float
+            WorkingDayCalculator succCalendar = WorkingDayCalculator.Default;
+            if (!string.IsNullOrEmpty(succClndrIdKey) && calendarCalculators.TryGetValue(succClndrIdKey, out var succCal))
+            {
+                succCalendar = succCal;
+            }
+
+            // STEP 1: Determine predecessor's base date and project it with lag
+            DateTime? predBaseDate = null;
+            DateTime? succTargetDate = null;
 
             switch (predType)
             {
                 case "PR_FS": // Finish-to-Start (most common)
-                    startDate = predTask.EarlyEndDate;
-                    endDate = succTask.EarlyStartDate;
+                    predBaseDate = predTask.EarlyEndDate;
+                    succTargetDate = succTask.EarlyStartDate;
                     break;
 
                 case "PR_SS": // Start-to-Start
-                    startDate = predTask.EarlyStartDate;
-                    endDate = succTask.EarlyStartDate;
+                    predBaseDate = predTask.EarlyStartDate;
+                    succTargetDate = succTask.EarlyStartDate;
                     break;
 
                 case "PR_FF": // Finish-to-Finish
-                    startDate = predTask.EarlyEndDate;
-                    endDate = succTask.EarlyEndDate;
+                    predBaseDate = predTask.EarlyEndDate;
+                    succTargetDate = succTask.EarlyEndDate;
                     break;
 
                 case "PR_SF": // Start-to-Finish
-                    startDate = predTask.EarlyStartDate;
-                    endDate = succTask.EarlyEndDate;
+                    predBaseDate = predTask.EarlyStartDate;
+                    succTargetDate = succTask.EarlyEndDate;
                     break;
 
                 default:
@@ -1650,26 +1693,26 @@ namespace XerToCsvConverter
             }
 
             // Validate dates
-            if (!startDate.HasValue || !endDate.HasValue)
+            if (!predBaseDate.HasValue || !succTargetDate.HasValue)
                 return "";
 
-            // Calculate working days between dates
-            int workingDays = 0;
+            // STEP 1: Project the date by adding lag using PREDECESSOR's calendar
+            DateTime projectedDate = predCalendar.AddWorkingDays(predBaseDate.Value, lagDays);
+
+            // STEP 2: Calculate working days from projected date to successor's target date using SUCCESSOR's calendar
+            int freeFloat = 0;
 
             if (predType == "PR_FS")
             {
-                // For FS: Count from day after predecessor finish to day before successor start
-                workingDays = calculator.CountWorkingDays(startDate.Value, endDate.Value, startInclusive: false, endInclusive: false);
+                // For FS: Count from day after projected date to day before successor start
+                freeFloat = succCalendar.CountWorkingDays(projectedDate, succTargetDate.Value, startInclusive: false, endInclusive: false);
             }
             else
             {
-                // For SS, FF, SF: Count from start to end inclusive
-                workingDays = calculator.CountWorkingDays(startDate.Value, endDate.Value, startInclusive: true, endInclusive: true);
-                workingDays--; // Subtract 1 to match DAX logic (vWorkDays - 1)
+                // For SS, FF, SF: Count from projected date to target date
+                freeFloat = succCalendar.CountWorkingDays(projectedDate, succTargetDate.Value, startInclusive: true, endInclusive: true);
+                freeFloat--; // Subtract 1 to match P6 logic
             }
-
-            // Subtract lag
-            decimal freeFloat = workingDays - lagDays;
 
             // Format result
             return freeFloat.ToString("F2", CultureInfo.InvariantCulture);
