@@ -49,6 +49,10 @@ namespace XerToCsvConverter
         public const string Date = "date"; public const string DayOfWeek = "day_of_week"; public const string WorkingDay = "working_day"; public const string WorkHours = "work_hours"; public const string ExceptionType = "exception_type"; public const string RsrcIdKey = "rsrc_id_key";
         public const string MonthUpdate = "MonthUpdate";
         public const string UnitId = "unit_id"; public const string UnitIdKey = "unit_id_key";
+        // New fields for enhanced predecessor table
+        public const string PredecessorClndrIdKey = "predecessor_clndr_id_key"; public const string PredecessorStatusCode = "predecessor_status_code"; public const string Lag = "lag"; public const string TimePeriodHoursPerDay = "time_period_hours_per_day"; public const string PredecessorStart = "predecessor_start"; public const string PredecessorFinish = "predecessor_finish"; public const string PredecessorTaskType = "predecessor_task_type"; public const string PredecessorFreeFloat = "free_float"; public const string PredType = "pred_type"; public const string LagHrCnt = "lag_hr_cnt";
+        // New fields for enhanced calendar detailed table
+        public const string DayOfWeekNum = "day_of_week_num"; public const string WorkingDayInt = "working_day_int";
     }
 
     internal static class EnhancedTableNames { public const string XerTask01 = "01_XER_TASK"; public const string XerProject02 = "02_XER_PROJECT"; public const string XerProjWbs03 = "03_XER_PROJWBS"; public const string XerBaseline04 = "04_XER_BASELINE"; public const string XerPredecessor06 = "06_XER_PREDECESSOR"; public const string XerActvType07 = "07_XER_ACTVTYPE"; public const string XerActvCode08 = "08_XER_ACTVCODE"; public const string XerTaskActv09 = "09_XER_TASKACTV"; public const string XerCalendar10 = "10_XER_CALENDAR"; public const string XerCalendarDetailed11 = "11_XER_CALENDAR_DETAILED"; public const string XerRsrc12 = "12_XER_RSRC"; public const string XerTaskRsrc13 = "13_XER_TASKRSRC"; public const string XerUmeasure14 = "14_XER_UMEASURE"; }
@@ -112,6 +116,158 @@ namespace XerToCsvConverter
         public static string Format(DateTime? date) => date.HasValue && date.Value != DateTime.MinValue ? date.Value.ToString(OutputFormat, CultureInfo.InvariantCulture) : "";
         public static string Format(DateTime date) => date != DateTime.MinValue ? date.ToString(OutputFormat, CultureInfo.InvariantCulture) : "";
         public static void ClearCache() => DateCache.Clear();
+    }
+
+    // Working Day Calculator - Handles calendar-aware date calculations
+    public class WorkingDayCalculator
+    {
+        private readonly HashSet<DateTime> _holidays;
+        private readonly HashSet<DateTime> _extraWorkDays;
+        private readonly HashSet<int> _standardWorkingDayNums;
+        private static readonly WorkingDayCalculator _default = CreateDefaultCalendar();
+
+        public WorkingDayCalculator(HashSet<DateTime> holidays, HashSet<DateTime> extraWorkDays, HashSet<int> standardWorkingDayNums)
+        {
+            _holidays = holidays ?? new HashSet<DateTime>();
+            _extraWorkDays = extraWorkDays ?? new HashSet<DateTime>();
+            _standardWorkingDayNums = standardWorkingDayNums ?? new HashSet<int>();
+        }
+
+        // Creates a default 5-day work week calendar (Mon-Fri)
+        private static WorkingDayCalculator CreateDefaultCalendar()
+        {
+            var standardDays = new HashSet<int> { 1, 2, 3, 4, 5 }; // Monday through Friday
+            return new WorkingDayCalculator(new HashSet<DateTime>(), new HashSet<DateTime>(), standardDays);
+        }
+
+        public static WorkingDayCalculator Default => _default;
+
+        // Checks if a specific date is a working day
+        public bool IsWorkingDay(DateTime date)
+        {
+            // Strip time component for consistent comparison
+            date = date.Date;
+
+            // Check if it's an extra work day (overrides standard rules)
+            if (_extraWorkDays.Contains(date)) return true;
+
+            // Check if it's a holiday (non-working exception)
+            if (_holidays.Contains(date)) return false;
+
+            // Check if day of week is in standard working days (1=Monday, 7=Sunday)
+            int dayOfWeekNum = GetDayOfWeekNumber(date);
+            return _standardWorkingDayNums.Contains(dayOfWeekNum);
+        }
+
+        // Counts working days between two dates (inclusive of start, exclusive of end for FS relationships)
+        // For other relationship types, the caller adjusts the range
+        public int CountWorkingDays(DateTime start, DateTime end, bool startInclusive = true, bool endInclusive = false)
+        {
+            // Strip time components
+            start = start.Date;
+            end = end.Date;
+
+            // Handle negative ranges
+            if (end < start)
+            {
+                // Swap and count, then return negative
+                return -CountWorkingDays(end, start, endInclusive, startInclusive);
+            }
+
+            int count = 0;
+            DateTime current = startInclusive ? start : start.AddDays(1);
+            DateTime stopDate = endInclusive ? end : end.AddDays(-1);
+
+            while (current <= stopDate)
+            {
+                if (IsWorkingDay(current))
+                {
+                    count++;
+                }
+                current = current.AddDays(1);
+            }
+
+            return count;
+        }
+
+        // Gets day of week number (1=Monday, 7=Sunday) matching Power BI WEEKDAY(date, 2)
+        private static int GetDayOfWeekNumber(DateTime date)
+        {
+            // .NET DayOfWeek: 0=Sunday, 6=Saturday
+            // We need: 1=Monday, 7=Sunday
+            int dotNetDay = (int)date.DayOfWeek; // 0=Sun, 1=Mon, ..., 6=Sat
+            return dotNetDay == 0 ? 7 : dotNetDay; // Convert Sunday from 0 to 7, others shift down
+        }
+
+        // Builds a WorkingDayCalculator from calendar detailed table data
+        public static WorkingDayCalculator BuildFromCalendarData(IEnumerable<DataRow> calendarDetailedRows, IReadOnlyDictionary<string, int> calendarIndexes, string targetClndrIdKey)
+        {
+            var holidays = new HashSet<DateTime>();
+            var extraWorkDays = new HashSet<DateTime>();
+            var standardWorkingDayNums = new HashSet<int>();
+
+            foreach (var rowData in calendarDetailedRows)
+            {
+                var row = rowData.Fields;
+                string clndrIdKey = GetFieldValueSafe(row, calendarIndexes, FieldNames.ClndrIdKey);
+
+                // Only process rows for this calendar
+                if (clndrIdKey != targetClndrIdKey) continue;
+
+                string dateStr = GetFieldValueSafe(row, calendarIndexes, FieldNames.Date);
+                string exceptionType = GetFieldValueSafe(row, calendarIndexes, FieldNames.ExceptionType);
+                string workingDayIntStr = GetFieldValueSafe(row, calendarIndexes, FieldNames.WorkingDayInt);
+                string dayOfWeekNumStr = GetFieldValueSafe(row, calendarIndexes, FieldNames.DayOfWeekNum);
+
+                int workingDayInt = 0;
+                int.TryParse(workingDayIntStr, out workingDayInt);
+
+                // Process standard working week definition
+                if (exceptionType == "Standard" && string.IsNullOrEmpty(dateStr))
+                {
+                    if (int.TryParse(dayOfWeekNumStr, out int dayNum) && workingDayInt == 1)
+                    {
+                        standardWorkingDayNums.Add(dayNum);
+                    }
+                }
+                // Process date-specific exceptions
+                else if (!string.IsNullOrEmpty(dateStr))
+                {
+                    var parsedDate = DateParser.TryParse(dateStr);
+                    if (parsedDate.HasValue)
+                    {
+                        DateTime date = parsedDate.Value.Date; // Strip time
+
+                        if (workingDayInt == 0)
+                        {
+                            holidays.Add(date);
+                        }
+                        else if (workingDayInt == 1 && exceptionType == "Exception - Working")
+                        {
+                            extraWorkDays.Add(date);
+                        }
+                    }
+                }
+            }
+
+            // If no standard working days defined, use default Mon-Fri
+            if (standardWorkingDayNums.Count == 0)
+            {
+                standardWorkingDayNums = new HashSet<int> { 1, 2, 3, 4, 5 };
+            }
+
+            return new WorkingDayCalculator(holidays, extraWorkDays, standardWorkingDayNums);
+        }
+
+        private static string GetFieldValueSafe(string[] row, IReadOnlyDictionary<string, int> indexes, string fieldName)
+        {
+            if (row == null || indexes == null) return "";
+            if (indexes.TryGetValue(fieldName, out int index) && index >= 0 && index < row.Length)
+            {
+                return row[index] ?? "";
+            }
+            return "";
+        }
     }
 
     // Lightweight struct for data rows
@@ -1229,11 +1385,285 @@ namespace XerToCsvConverter
         public XerTable Create02XerProject() => CreateSimpleKeyedTable(TableNames.Project, EnhancedTableNames.XerProject02,
             new List<Tuple<string, string>> { Tuple.Create(FieldNames.ProjIdKey, FieldNames.ProjectId) });
 
-        public XerTable Create06XerPredecessor() => CreateSimpleKeyedTable(TableNames.TaskPred, EnhancedTableNames.XerPredecessor06,
-            new List<Tuple<string, string>> {
-        Tuple.Create(FieldNames.TaskIdKey, FieldNames.TaskId),
-        Tuple.Create(FieldNames.PredTaskIdKey, FieldNames.PredTaskId)
-            });
+        public XerTable Create06XerPredecessor()
+        {
+            var taskPredTable = _dataStore.GetTable(TableNames.TaskPred);
+            var taskTable = _dataStore.GetTable(TableNames.Task);
+            var calendarTable = _dataStore.GetTable(TableNames.Calendar);
+            var calendarDetailedTable = _dataStore.GetTable(EnhancedTableNames.XerCalendarDetailed11);
+
+            if (!IsTableValid(taskPredTable)) return null;
+
+            try
+            {
+                var sourceHeaders = taskPredTable.Headers;
+                var sourceIndexes = taskPredTable.FieldIndexes;
+
+                // Define all output columns (existing + new calculated columns)
+                var finalHeadersList = sourceHeaders.ToList();
+                finalHeadersList.Add(FieldNames.TaskIdKey);
+                finalHeadersList.Add(FieldNames.PredTaskIdKey);
+                finalHeadersList.Add(FieldNames.PredecessorClndrIdKey);
+                finalHeadersList.Add(FieldNames.PredecessorStatusCode);
+                finalHeadersList.Add(FieldNames.Lag);
+                finalHeadersList.Add(FieldNames.TimePeriodHoursPerDay);
+                finalHeadersList.Add(FieldNames.Start);
+                finalHeadersList.Add(FieldNames.Finish);
+                finalHeadersList.Add(FieldNames.PredecessorStart);
+                finalHeadersList.Add(FieldNames.PredecessorFinish);
+                finalHeadersList.Add(FieldNames.PredecessorTaskType);
+                finalHeadersList.Add(FieldNames.PredecessorFreeFloat);
+                finalHeadersList.Add(FieldNames.MonthUpdate);
+                string[] finalHeaders = finalHeadersList.Select(StringInternPool.Intern).ToArray();
+
+                // Pre-calculate indexes for O(1) lookups
+                var finalIndexes = finalHeaders
+                    .Select((name, index) => new { name, index })
+                    .ToDictionary(item => item.name, item => item.index, StringComparer.OrdinalIgnoreCase);
+
+                var resultTable = new XerTable(EnhancedTableNames.XerPredecessor06, taskPredTable.RowCount);
+                resultTable.SetHeaders(finalHeaders);
+
+                // Build lookup dictionaries from task table
+                var taskLookup = BuildTaskLookupDictionary(taskTable);
+                var calendarHoursLookup = BuildCalendarHoursLookup(calendarTable);
+                var calendarCalculators = BuildCalendarCalculators(calendarDetailedTable);
+
+                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
+                var transformedRowsBag = new ConcurrentBag<DataRow>();
+
+                Parallel.ForEach(taskPredTable.Rows, parallelOptions, sourceRow =>
+                {
+                    var row = sourceRow.Fields;
+                    string[] transformed = new string[finalHeaders.Length];
+                    string originalFilename = sourceRow.SourceFilename;
+
+                    // Copy existing fields
+                    int copyLength = Math.Min(row.Length, sourceHeaders.Length);
+                    Array.Copy(row, transformed, copyLength);
+
+                    // Generate keys
+                    string taskId = GetFieldValue(row, sourceIndexes, FieldNames.TaskId);
+                    string predTaskId = GetFieldValue(row, sourceIndexes, FieldNames.PredTaskId);
+                    string taskIdKey = CreateKey(originalFilename, taskId);
+                    string predTaskIdKey = CreateKey(originalFilename, predTaskId);
+
+                    SetTransformedField(transformed, finalIndexes, FieldNames.TaskIdKey, taskIdKey);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredTaskIdKey, predTaskIdKey);
+
+                    // Lookup successor task data
+                    TaskData succTask = taskLookup.TryGetValue(taskIdKey, out var st) ? st : new TaskData();
+                    // Lookup predecessor task data
+                    TaskData predTask = taskLookup.TryGetValue(predTaskIdKey, out var pt) ? pt : new TaskData();
+
+                    // Set lookup columns
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorClndrIdKey, predTask.ClndrIdKey);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStatusCode, predTask.StatusCode);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.Start, DateParser.Format(succTask.EarlyStartDate));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.Finish, DateParser.Format(succTask.EarlyEndDate));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStart, DateParser.Format(predTask.EarlyStartDate));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFinish, DateParser.Format(predTask.EarlyEndDate));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorTaskType, predTask.TaskType);
+
+                    // Calculate TimePeriod (hours per day) and Lag
+                    string predClndrIdKey = predTask.ClndrIdKey;
+                    decimal hoursPerDay = 0;
+                    if (!string.IsNullOrEmpty(predClndrIdKey) && calendarHoursLookup.TryGetValue(predClndrIdKey, out decimal hpd))
+                    {
+                        hoursPerDay = hpd;
+                    }
+                    SetTransformedField(transformed, finalIndexes, FieldNames.TimePeriodHoursPerDay, hoursPerDay > 0 ? hoursPerDay.ToString("F2", CultureInfo.InvariantCulture) : "");
+
+                    // Calculate Lag in days
+                    string lagHrCntStr = GetFieldValue(row, sourceIndexes, FieldNames.LagHrCnt);
+                    decimal lagDays = 0;
+                    if (!string.IsNullOrEmpty(lagHrCntStr) && decimal.TryParse(lagHrCntStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal lagHr) && hoursPerDay > 0)
+                    {
+                        lagDays = lagHr / hoursPerDay;
+                    }
+                    SetTransformedField(transformed, finalIndexes, FieldNames.Lag, lagDays != 0 ? lagDays.ToString("F2", CultureInfo.InvariantCulture) : "0");
+
+                    // Calculate Free Float
+                    string freeFloat = CalculateFreeFloat(
+                        row, sourceIndexes,
+                        succTask, predTask,
+                        lagDays,
+                        predClndrIdKey,
+                        calendarCalculators
+                    );
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloat);
+
+                    // Add MonthUpdate value
+                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
+
+                    // Intern strings
+                    for (int k = 0; k < transformed.Length; k++)
+                    {
+                        transformed[k] = StringInternPool.Intern(transformed[k] ?? string.Empty);
+                    }
+
+                    transformedRowsBag.Add(new DataRow(transformed, originalFilename));
+                });
+
+                resultTable.AddRows(transformedRowsBag);
+                return resultTable;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error creating {EnhancedTableNames.XerPredecessor06}: {ex.Message}");
+                return null;
+            }
+        }
+
+        // Helper structure for task data used in predecessor calculations
+        private struct TaskData
+        {
+            public string ClndrIdKey;
+            public string StatusCode;
+            public string TaskType;
+            public DateTime? EarlyStartDate;
+            public DateTime? EarlyEndDate;
+        }
+
+        // Builds a lookup dictionary for task data needed by predecessor table
+        private Dictionary<string, TaskData> BuildTaskLookupDictionary(XerTable taskTable)
+        {
+            var lookup = new Dictionary<string, TaskData>(StringComparer.OrdinalIgnoreCase);
+            if (!IsTableValid(taskTable)) return lookup;
+
+            var indexes = taskTable.FieldIndexes;
+            foreach (var rowData in taskTable.Rows)
+            {
+                var row = rowData.Fields;
+                string taskId = GetFieldValue(row, indexes, FieldNames.TaskId);
+                string clndrId = GetFieldValue(row, indexes, FieldNames.CalendarId);
+                string taskIdKey = CreateKey(rowData.SourceFilename, taskId);
+                string clndrIdKey = CreateKey(rowData.SourceFilename, clndrId);
+
+                var taskData = new TaskData
+                {
+                    ClndrIdKey = clndrIdKey,
+                    StatusCode = GetFieldValue(row, indexes, FieldNames.StatusCode),
+                    TaskType = GetFieldValue(row, indexes, FieldNames.TaskType),
+                    EarlyStartDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyStartDate)),
+                    EarlyEndDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyEndDate))
+                };
+
+                lookup[taskIdKey] = taskData;
+            }
+            return lookup;
+        }
+
+        // Builds working day calculators for all calendars
+        private Dictionary<string, WorkingDayCalculator> BuildCalendarCalculators(XerTable calendarDetailedTable)
+        {
+            var calculators = new Dictionary<string, WorkingDayCalculator>(StringComparer.OrdinalIgnoreCase);
+            if (!IsTableValid(calendarDetailedTable)) return calculators;
+
+            var indexes = calendarDetailedTable.FieldIndexes;
+
+            // Group rows by calendar ID
+            var calendarGroups = calendarDetailedTable.Rows
+                .GroupBy(r => XerTable.GetFieldValueSafe(r, indexes.TryGetValue(FieldNames.ClndrIdKey, out int idx) ? idx : -1))
+                .Where(g => !string.IsNullOrEmpty(g.Key));
+
+            foreach (var group in calendarGroups)
+            {
+                string clndrIdKey = group.Key;
+                var calculator = WorkingDayCalculator.BuildFromCalendarData(group, indexes, clndrIdKey);
+                calculators[clndrIdKey] = calculator;
+            }
+
+            return calculators;
+        }
+
+        // Calculates Free Float for a predecessor relationship
+        private string CalculateFreeFloat(
+            string[] predRow,
+            IReadOnlyDictionary<string, int> predIndexes,
+            TaskData succTask,
+            TaskData predTask,
+            decimal lagDays,
+            string predClndrIdKey,
+            Dictionary<string, WorkingDayCalculator> calendarCalculators)
+        {
+            // Business rule: Only calculate for Not Started tasks, exclude LOE and WBS types
+            const string NotStarted = "TK_NotStart";
+            const string LOE = "TT_LOE";
+            const string WBS = "TT_WBS";
+
+            if (predTask.StatusCode != NotStarted || succTask.StatusCode != NotStarted)
+                return "";
+
+            if (succTask.TaskType == LOE || succTask.TaskType == WBS ||
+                predTask.TaskType == LOE || predTask.TaskType == WBS)
+                return "";
+
+            // Get relationship type
+            string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
+
+            // Get calendar calculator (use default if not found)
+            WorkingDayCalculator calculator = WorkingDayCalculator.Default;
+            if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var cal))
+            {
+                calculator = cal;
+            }
+
+            // Determine which dates to use based on relationship type
+            DateTime? startDate = null;
+            DateTime? endDate = null;
+
+            switch (predType)
+            {
+                case "PR_FS": // Finish-to-Start (most common)
+                    startDate = predTask.EarlyEndDate;
+                    endDate = succTask.EarlyStartDate;
+                    break;
+
+                case "PR_SS": // Start-to-Start
+                    startDate = predTask.EarlyStartDate;
+                    endDate = succTask.EarlyStartDate;
+                    break;
+
+                case "PR_FF": // Finish-to-Finish
+                    startDate = predTask.EarlyEndDate;
+                    endDate = succTask.EarlyEndDate;
+                    break;
+
+                case "PR_SF": // Start-to-Finish
+                    startDate = predTask.EarlyStartDate;
+                    endDate = succTask.EarlyEndDate;
+                    break;
+
+                default:
+                    return ""; // Unknown relationship type
+            }
+
+            // Validate dates
+            if (!startDate.HasValue || !endDate.HasValue)
+                return "";
+
+            // Calculate working days between dates
+            int workingDays = 0;
+
+            if (predType == "PR_FS")
+            {
+                // For FS: Count from day after predecessor finish to day before successor start
+                workingDays = calculator.CountWorkingDays(startDate.Value, endDate.Value, startInclusive: false, endInclusive: false);
+            }
+            else
+            {
+                // For SS, FF, SF: Count from start to end inclusive
+                workingDays = calculator.CountWorkingDays(startDate.Value, endDate.Value, startInclusive: true, endInclusive: true);
+                workingDays--; // Subtract 1 to match DAX logic (vWorkDays - 1)
+            }
+
+            // Subtract lag
+            decimal freeFloat = workingDays - lagDays;
+
+            // Format result
+            return freeFloat.ToString("F2", CultureInfo.InvariantCulture);
+        }
 
         public XerTable Create07XerActvType() => CreateSimpleKeyedTable(TableNames.ActvType, EnhancedTableNames.XerActvType07,
             new List<Tuple<string, string>> { Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId) });
@@ -1282,7 +1712,7 @@ namespace XerToCsvConverter
             FieldNames.ClndrId, FieldNames.CalendarName, FieldNames.CalendarType,
             FieldNames.Date, FieldNames.DayOfWeek, FieldNames.WorkingDay,
             FieldNames.WorkHours, FieldNames.ExceptionType, FieldNames.ClndrIdKey,
-            FieldNames.MonthUpdate
+            FieldNames.MonthUpdate, FieldNames.DayOfWeekNum, FieldNames.WorkingDayInt
         };
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate indexes
@@ -1326,6 +1756,10 @@ namespace XerToCsvConverter
 
                         // Add MonthUpdate value
                         SetTransformedField(detailedRow, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
+
+                        // Add calculated columns: day_of_week_num and working_day_int
+                        SetTransformedField(detailedRow, finalIndexes, FieldNames.DayOfWeekNum, GetDayOfWeekNumber(entry.DayOfWeek));
+                        SetTransformedField(detailedRow, finalIndexes, FieldNames.WorkingDayInt, entry.WorkingDay == "Y" ? "1" : "0");
 
                         // Intern strings
                         for (int k = 0; k < detailedRow.Length; k++)
@@ -1720,6 +2154,22 @@ namespace XerToCsvConverter
             }
         }
 
+        private static string GetDayOfWeekNumber(string dayName)
+        {
+            // Converts day name to number (Monday=1, Sunday=7) for Power BI compatibility
+            switch (dayName)
+            {
+                case "Monday": return "1";
+                case "Tuesday": return "2";
+                case "Wednesday": return "3";
+                case "Thursday": return "4";
+                case "Friday": return "5";
+                case "Saturday": return "6";
+                case "Sunday": return "7";
+                default: return "";
+            }
+        }
+
         private string FormatHours(decimal hours)
         {
             if (hours == 0) return "0";
@@ -1919,6 +2369,18 @@ namespace XerToCsvConverter
                             {
                                 var task01Data = transformer.Create01XerTaskTable();
                                 if (task01Data != null) enhancedCache.TryAdd(EnhancedTableNames.XerTask01, task01Data);
+                            }
+                        }
+
+                        // Dependency Management: Pre-generate CALENDAR_DETAILED11 if needed by PREDECESSOR06
+                        bool needsCalendarDetailed = enhancedTablesToGenerate.Contains(EnhancedTableNames.XerCalendarDetailed11) || enhancedTablesToGenerate.Contains(EnhancedTableNames.XerPredecessor06);
+                        if (needsCalendarDetailed && !enhancedCache.ContainsKey(EnhancedTableNames.XerCalendarDetailed11))
+                        {
+                            // Check dependencies for CALENDAR_DETAILED11
+                            if (dataStore.ContainsTable(TableNames.Calendar))
+                            {
+                                var calendarDetailedData = transformer.Create11XerCalendarDetailed();
+                                if (calendarDetailedData != null) enhancedCache.TryAdd(EnhancedTableNames.XerCalendarDetailed11, calendarDetailedData);
                             }
                         }
 
