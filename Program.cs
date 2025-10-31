@@ -1403,15 +1403,18 @@ namespace XerToCsvConverter
                 var finalHeadersList = sourceHeaders.ToList();
                 finalHeadersList.Add(FieldNames.TaskIdKey);
                 finalHeadersList.Add(FieldNames.PredTaskIdKey);
-                finalHeadersList.Add(FieldNames.PredecessorClndrIdKey);
-                finalHeadersList.Add(FieldNames.PredecessorStatusCode);
+                finalHeadersList.Add(FieldNames.CalendarIdKey); // Successor's calendar (used for float calculation)
+                finalHeadersList.Add(FieldNames.PredecessorClndrIdKey); // Predecessor's calendar (used for lag conversion)
+                finalHeadersList.Add(FieldNames.StatusCode); // Successor's status
+                finalHeadersList.Add(FieldNames.PredecessorStatusCode); // Predecessor's status
+                finalHeadersList.Add(FieldNames.TaskType); // Successor's task type
+                finalHeadersList.Add(FieldNames.PredecessorTaskType); // Predecessor's task type
                 finalHeadersList.Add(FieldNames.Lag);
                 finalHeadersList.Add(FieldNames.TimePeriodHoursPerDay);
                 finalHeadersList.Add(FieldNames.Start);
                 finalHeadersList.Add(FieldNames.Finish);
                 finalHeadersList.Add(FieldNames.PredecessorStart);
                 finalHeadersList.Add(FieldNames.PredecessorFinish);
-                finalHeadersList.Add(FieldNames.PredecessorTaskType);
                 finalHeadersList.Add(FieldNames.PredecessorFreeFloat);
                 finalHeadersList.Add(FieldNames.MonthUpdate);
                 string[] finalHeaders = finalHeadersList.Select(StringInternPool.Intern).ToArray();
@@ -1457,15 +1460,18 @@ namespace XerToCsvConverter
                     TaskData predTask = taskLookup.TryGetValue(predTaskIdKey, out var pt) ? pt : new TaskData();
 
                     // Set lookup columns
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorClndrIdKey, predTask.ClndrIdKey);
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStatusCode, predTask.StatusCode);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.CalendarIdKey, succTask.ClndrIdKey); // Successor's calendar
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorClndrIdKey, predTask.ClndrIdKey); // Predecessor's calendar
+                    SetTransformedField(transformed, finalIndexes, FieldNames.StatusCode, succTask.StatusCode); // Successor's status
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStatusCode, predTask.StatusCode); // Predecessor's status
+                    SetTransformedField(transformed, finalIndexes, FieldNames.TaskType, succTask.TaskType); // Successor's task type
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorTaskType, predTask.TaskType); // Predecessor's task type
                     SetTransformedField(transformed, finalIndexes, FieldNames.Start, DateParser.Format(succTask.EarlyStartDate));
                     SetTransformedField(transformed, finalIndexes, FieldNames.Finish, DateParser.Format(succTask.EarlyEndDate));
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStart, DateParser.Format(predTask.EarlyStartDate));
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFinish, DateParser.Format(predTask.EarlyEndDate));
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorTaskType, predTask.TaskType);
 
-                    // Calculate TimePeriod (hours per day) and Lag
+                    // Calculate TimePeriod (hours per day) using PREDECESSOR's calendar (for lag conversion)
                     string predClndrIdKey = predTask.ClndrIdKey;
                     decimal hoursPerDay = 0;
                     if (!string.IsNullOrEmpty(predClndrIdKey) && calendarHoursLookup.TryGetValue(predClndrIdKey, out decimal hpd))
@@ -1474,7 +1480,7 @@ namespace XerToCsvConverter
                     }
                     SetTransformedField(transformed, finalIndexes, FieldNames.TimePeriodHoursPerDay, hoursPerDay > 0 ? hoursPerDay.ToString("F2", CultureInfo.InvariantCulture) : "");
 
-                    // Calculate Lag in days
+                    // Calculate Lag in days using PREDECESSOR's calendar
                     string lagHrCntStr = GetFieldValue(row, sourceIndexes, FieldNames.LagHrCnt);
                     decimal lagDays = 0;
                     if (!string.IsNullOrEmpty(lagHrCntStr) && decimal.TryParse(lagHrCntStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal lagHr) && hoursPerDay > 0)
@@ -1483,12 +1489,13 @@ namespace XerToCsvConverter
                     }
                     SetTransformedField(transformed, finalIndexes, FieldNames.Lag, lagDays != 0 ? lagDays.ToString("F2", CultureInfo.InvariantCulture) : "0");
 
-                    // Calculate Free Float
+                    // Calculate Free Float using SUCCESSOR's calendar (for working day calculations)
+                    string succClndrIdKey = succTask.ClndrIdKey;
                     string freeFloat = CalculateFreeFloat(
                         row, sourceIndexes,
                         succTask, predTask,
                         lagDays,
-                        predClndrIdKey,
+                        succClndrIdKey,  // CHANGED: Use successor's calendar for float calculation
                         calendarCalculators
                     );
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloat);
@@ -1578,13 +1585,15 @@ namespace XerToCsvConverter
         }
 
         // Calculates Free Float for a predecessor relationship
+        // Uses SUCCESSOR's calendar for working day calculations (float is measured in successor's time)
+        // Lag (already converted to days) was calculated using PREDECESSOR's calendar
         private string CalculateFreeFloat(
             string[] predRow,
             IReadOnlyDictionary<string, int> predIndexes,
             TaskData succTask,
             TaskData predTask,
             decimal lagDays,
-            string predClndrIdKey,
+            string succClndrIdKey,  // SUCCESSOR's calendar for float calculation
             Dictionary<string, WorkingDayCalculator> calendarCalculators)
         {
             // Business rule: Only calculate for Not Started tasks, exclude LOE and WBS types
@@ -1602,9 +1611,10 @@ namespace XerToCsvConverter
             // Get relationship type
             string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
 
-            // Get calendar calculator (use default if not found)
+            // Get SUCCESSOR's calendar calculator (use default if not found)
+            // Float is measured in how much the successor can slip, so use successor's calendar
             WorkingDayCalculator calculator = WorkingDayCalculator.Default;
-            if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var cal))
+            if (!string.IsNullOrEmpty(succClndrIdKey) && calendarCalculators.TryGetValue(succClndrIdKey, out var cal))
             {
                 calculator = cal;
             }
