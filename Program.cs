@@ -1417,12 +1417,15 @@ namespace XerToCsvConverter
         public XerTable Create02XerProject() => CreateSimpleKeyedTable(TableNames.Project, EnhancedTableNames.XerProject02,
             new List<Tuple<string, string>> { Tuple.Create(FieldNames.ProjIdKey, FieldNames.ProjectId) });
 
-        public XerTable Create06XerPredecessor()
+        public XerTable Create06XerPredecessor(ConcurrentDictionary<string, XerTable> cache)
         {
             var taskPredTable = _dataStore.GetTable(TableNames.TaskPred);
             var taskTable = _dataStore.GetTable(TableNames.Task);
             var calendarTable = _dataStore.GetTable(TableNames.Calendar);
-            var calendarDetailedTable = _dataStore.GetTable(EnhancedTableNames.XerCalendarDetailed11);
+
+            // --- FIX: Get the calendar table from the cache, not the _dataStore ---
+            cache.TryGetValue(EnhancedTableNames.XerCalendarDetailed11, out XerTable calendarDetailedTable);
+            // --- END FIX ---
 
             if (!IsTableValid(taskPredTable)) return null;
 
@@ -1462,7 +1465,7 @@ namespace XerToCsvConverter
                 // Build lookup dictionaries from task table
                 var taskLookup = BuildTaskLookupDictionary(taskTable);
                 var calendarHoursLookup = BuildCalendarHoursLookup(calendarTable);
-                var calendarCalculators = BuildCalendarCalculators(calendarDetailedTable);
+                var calendarCalculators = BuildCalendarCalculators(calendarDetailedTable); // This now receives the correct table
 
                 var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
                 var transformedRowsBag = new ConcurrentBag<DataRow>();
@@ -2548,7 +2551,7 @@ namespace XerToCsvConverter
                         return transformer.Create04XerBaselineTable(task01);
                     }
                     return null;
-                case EnhancedTableNames.XerPredecessor06: return transformer.Create06XerPredecessor();
+                case EnhancedTableNames.XerPredecessor06: return transformer.Create06XerPredecessor(cache);
                 case EnhancedTableNames.XerActvType07: return transformer.Create07XerActvType();
                 case EnhancedTableNames.XerActvCode08: return transformer.Create08XerActvCode();
                 case EnhancedTableNames.XerTaskActv09: return transformer.Create09XerTaskActv();
