@@ -1195,6 +1195,35 @@ namespace XerToCsvConverter
             return 0.0;
         }
 
+        private Dictionary<string, string> BuildProjectScheduleOptionsLookup(XerTable schedOptionsTable)
+        {
+            var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (!IsTableValid(schedOptionsTable)) return lookup;
+
+            var indexes = schedOptionsTable.FieldIndexes;
+            const string lagSettingCol = "sched_calendar_on_relationship_lag";
+
+            if (!indexes.ContainsKey(FieldNames.ProjectId) || !indexes.ContainsKey(lagSettingCol))
+            {
+                // Log or notify that the required column is missing
+                Console.WriteLine($"Warning: SCHEDOPTIONS table is missing '{FieldNames.ProjectId}' or '{lagSettingCol}'.");
+                return lookup;
+            }
+
+            foreach (var rowData in schedOptionsTable.Rows)
+            {
+                var row = rowData.Fields;
+                string projId = GetFieldValue(row, indexes, FieldNames.ProjectId);
+                string lagSetting = GetFieldValue(row, indexes, lagSettingCol);
+
+                if (!string.IsNullOrEmpty(projId))
+                {
+                    string compositeKey = CreateKey(rowData.SourceFilename, projId);
+                    lookup[compositeKey] = lagSetting;
+                }
+            }
+            return lookup;
+        }
         // Creates the Baseline table (04_XER_BASELINE) by finding the earliest MonthUpdate snapshot
         public XerTable Create04XerBaselineTable(XerTable task01Table)
         {
@@ -1422,10 +1451,11 @@ namespace XerToCsvConverter
             var taskPredTable = _dataStore.GetTable(TableNames.TaskPred);
             var taskTable = _dataStore.GetTable(TableNames.Task);
             var calendarTable = _dataStore.GetTable(TableNames.Calendar);
+            // Get the SCHEDOPTIONS table
+            var schedOptionsTable = _dataStore.GetTable("SCHEDOPTIONS");
 
-            // --- FIX: Get the calendar table from the cache, not the _dataStore ---
+            // Get the detailed calendar table from the cache
             cache.TryGetValue(EnhancedTableNames.XerCalendarDetailed11, out XerTable calendarDetailedTable);
-            // --- END FIX ---
 
             if (!IsTableValid(taskPredTable)) return null;
 
@@ -1462,10 +1492,12 @@ namespace XerToCsvConverter
                 var resultTable = new XerTable(EnhancedTableNames.XerPredecessor06, taskPredTable.RowCount);
                 resultTable.SetHeaders(finalHeaders);
 
-                // Build lookup dictionaries from task table
-                var taskLookup = BuildTaskLookupDictionary(taskTable);
+                // Build lookup dictionaries
+                var taskLookup = BuildTaskLookupDictionary(taskTable); // Now includes ActualStartDate
                 var calendarHoursLookup = BuildCalendarHoursLookup(calendarTable);
-                var calendarCalculators = BuildCalendarCalculators(calendarDetailedTable); // This now receives the correct table
+                var calendarCalculators = BuildCalendarCalculators(calendarDetailedTable);
+                // Build the new schedule options lookup
+                var schedOptionsLookup = BuildProjectScheduleOptionsLookup(schedOptionsTable);
 
                 var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
                 var transformedRowsBag = new ConcurrentBag<DataRow>();
@@ -1495,18 +1527,18 @@ namespace XerToCsvConverter
                     TaskData predTask = taskLookup.TryGetValue(predTaskIdKey, out var pt) ? pt : new TaskData();
 
                     // Set lookup columns
-                    SetTransformedField(transformed, finalIndexes, FieldNames.CalendarIdKey, succTask.ClndrIdKey); // Successor's calendar
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorClndrIdKey, predTask.ClndrIdKey); // Predecessor's calendar
-                    SetTransformedField(transformed, finalIndexes, FieldNames.StatusCode, succTask.StatusCode); // Successor's status
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStatusCode, predTask.StatusCode); // Predecessor's status
-                    SetTransformedField(transformed, finalIndexes, FieldNames.TaskType, succTask.TaskType); // Successor's task type
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorTaskType, predTask.TaskType); // Predecessor's task type
+                    SetTransformedField(transformed, finalIndexes, FieldNames.CalendarIdKey, succTask.ClndrIdKey);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorClndrIdKey, predTask.ClndrIdKey);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.StatusCode, succTask.StatusCode);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStatusCode, predTask.StatusCode);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.TaskType, succTask.TaskType);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorTaskType, predTask.TaskType);
                     SetTransformedField(transformed, finalIndexes, FieldNames.Start, DateParser.Format(succTask.EarlyStartDate));
                     SetTransformedField(transformed, finalIndexes, FieldNames.Finish, DateParser.Format(succTask.EarlyEndDate));
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStart, DateParser.Format(predTask.EarlyStartDate));
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFinish, DateParser.Format(predTask.EarlyEndDate));
 
-                    // Calculate TimePeriod (hours per day) using PREDECESSOR's calendar (for lag conversion)
+                    // Calculate TimePeriod (hours per day) using PREDECESSOR's calendar
                     string predClndrIdKey = predTask.ClndrIdKey;
                     decimal hoursPerDay = 0;
                     if (!string.IsNullOrEmpty(predClndrIdKey) && calendarHoursLookup.TryGetValue(predClndrIdKey, out decimal hpd))
@@ -1515,7 +1547,7 @@ namespace XerToCsvConverter
                     }
                     SetTransformedField(transformed, finalIndexes, FieldNames.TimePeriodHoursPerDay, hoursPerDay > 0 ? hoursPerDay.ToString("F2", CultureInfo.InvariantCulture) : "");
 
-                    // Calculate Lag in days using PREDECESSOR's calendar
+                    // Calculate Lag in days
                     string lagHrCntStr = GetFieldValue(row, sourceIndexes, FieldNames.LagHrCnt);
                     decimal lagDays = 0;
                     if (!string.IsNullOrEmpty(lagHrCntStr) && decimal.TryParse(lagHrCntStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal lagHr) && hoursPerDay > 0)
@@ -1524,17 +1556,16 @@ namespace XerToCsvConverter
                     }
                     SetTransformedField(transformed, finalIndexes, FieldNames.Lag, lagDays != 0 ? lagDays.ToString("F2", CultureInfo.InvariantCulture) : "0");
 
-                    // Calculate Free Float using P6's two-step logic:
-                    // Step 1: Project date with lag using PREDECESSOR's calendar
-                    // Step 2: Measure float from projected date using SUCCESSOR's calendar
+                    // Calculate Free Float
                     string succClndrIdKey = succTask.ClndrIdKey;
                     string freeFloat = CalculateFreeFloat(
                         row, sourceIndexes,
                         succTask, predTask,
                         lagDays,
-                        predClndrIdKey,  // Predecessor's calendar for lag projection
-                        succClndrIdKey,  // Successor's calendar for float measurement
-                        calendarCalculators
+                        predClndrIdKey,
+                        succClndrIdKey,
+                        calendarCalculators,
+                        schedOptionsLookup // Pass the new lookup
                     );
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloat);
 
@@ -1563,11 +1594,13 @@ namespace XerToCsvConverter
         // Helper structure for task data used in predecessor calculations
         private struct TaskData
         {
+            public string ProjIdKey;
             public string ClndrIdKey;
             public string StatusCode;
             public string TaskType;
             public DateTime? EarlyStartDate;
             public DateTime? EarlyEndDate;
+            public DateTime? ActualStartDate;
         }
 
         // Builds a lookup dictionary for task data needed by predecessor table
@@ -1582,16 +1615,21 @@ namespace XerToCsvConverter
                 var row = rowData.Fields;
                 string taskId = GetFieldValue(row, indexes, FieldNames.TaskId);
                 string clndrId = GetFieldValue(row, indexes, FieldNames.CalendarId);
+                string projId = GetFieldValue(row, indexes, FieldNames.ProjectId); // Get ProjId
+
                 string taskIdKey = CreateKey(rowData.SourceFilename, taskId);
                 string clndrIdKey = CreateKey(rowData.SourceFilename, clndrId);
+                string projIdKey = CreateKey(rowData.SourceFilename, projId); // Create ProjIdKey
 
                 var taskData = new TaskData
                 {
+                    ProjIdKey = projIdKey, // Store ProjIdKey
                     ClndrIdKey = clndrIdKey,
                     StatusCode = GetFieldValue(row, indexes, FieldNames.StatusCode),
                     TaskType = GetFieldValue(row, indexes, FieldNames.TaskType),
                     EarlyStartDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyStartDate)),
-                    EarlyEndDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyEndDate))
+                    EarlyEndDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyEndDate)),
+                    ActualStartDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActStartDate)) // Store ActualStart
                 };
 
                 lookup[taskIdKey] = taskData;
@@ -1621,73 +1659,100 @@ namespace XerToCsvConverter
 
             return calculators;
         }
-
-        // Calculates Free Float using the correct P6 two-step logic:
-        // Step 1: Project a date by adding lag to predecessor's date (using predecessor's calendar)
-        // Step 2: Calculate working days from projected date to successor's date (using successor's calendar)
-        // This avoids the "apples-to-oranges" problem of subtracting lag days from a span calculated in a different calendar
         private string CalculateFreeFloat(
             string[] predRow,
             IReadOnlyDictionary<string, int> predIndexes,
             TaskData succTask,
             TaskData predTask,
             decimal lagDays,
-            string predClndrIdKey,  // PREDECESSOR's calendar for projecting with lag
-            string succClndrIdKey,  // SUCCESSOR's calendar for float calculation
-            Dictionary<string, WorkingDayCalculator> calendarCalculators)
+            string predClndrIdKey,  // PREDECESSOR's calendar ID
+            string succClndrIdKey,  // SUCCESSOR's calendar ID
+            Dictionary<string, WorkingDayCalculator> calendarCalculators,
+            Dictionary<string, string> schedOptionsLookup)
         {
-            // Business rule: Only calculate for Not Started tasks, exclude LOE and WBS types
+            // --- Business rule validation ---
             const string NotStarted = "TK_NotStart";
+            const string InProgress = "TK_Active"; // P6 code for In Progress
             const string LOE = "TT_LOE";
             const string WBS = "TT_WBS";
 
-            if (predTask.StatusCode != NotStarted || succTask.StatusCode != NotStarted)
+            // 1. The Successor MUST be Not Started.
+            if (succTask.StatusCode != NotStarted)
                 return "";
 
+            // 2. The Predecessor MUST be Not Started OR In Progress.
+            if (predTask.StatusCode != NotStarted && predTask.StatusCode != InProgress)
+                return "";
+
+            // 3. Exclude LOE and WBS Summary types
             if (succTask.TaskType == LOE || succTask.TaskType == WBS ||
                 predTask.TaskType == LOE || predTask.TaskType == WBS)
                 return "";
 
+            // --- Calendar Setup ---
+
             // Get relationship type
             string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
 
-            // Get PREDECESSOR's calendar for projecting the date with lag
+            // Get PREDECESSOR's calendar
             WorkingDayCalculator predCalendar = WorkingDayCalculator.Default;
             if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var predCal))
             {
                 predCalendar = predCal;
             }
 
-            // Get SUCCESSOR's calendar for measuring the float
+            // Get SUCCESSOR's calendar
             WorkingDayCalculator succCalendar = WorkingDayCalculator.Default;
             if (!string.IsNullOrEmpty(succClndrIdKey) && calendarCalculators.TryGetValue(succClndrIdKey, out var succCal))
             {
                 succCalendar = succCal;
             }
 
-            // STEP 1: Determine predecessor's base date and project it with lag
+            // Determine which calendar to use for LAG PROJECTION (based on SCHEDOPTIONS)
+            string lagCalendarSetting = "rcal_Predecessor"; // P6 Default
+            if (schedOptionsLookup != null && !string.IsNullOrEmpty(succTask.ProjIdKey) && schedOptionsLookup.TryGetValue(succTask.ProjIdKey, out string setting))
+            {
+                if (!string.IsNullOrEmpty(setting))
+                {
+                    lagCalendarSetting = setting;
+                }
+            }
+
+            WorkingDayCalculator lagProjectionCalendar = (lagCalendarSetting == "rcal_Successor")
+                ? succCalendar
+                : predCalendar;
+
+            // --- STEP 1: Determine Base Date and Target Date ---
             DateTime? predBaseDate = null;
             DateTime? succTargetDate = null;
 
             switch (predType)
             {
-                case "PR_FS": // Finish-to-Start (most common)
+                case "PR_FS": // Finish-to-Start
+                              // This is correct. For In-Progress, EarlyEndDate is the "Remaining Finish".
                     predBaseDate = predTask.EarlyEndDate;
                     succTargetDate = succTask.EarlyStartDate;
                     break;
 
                 case "PR_SS": // Start-to-Start
-                    predBaseDate = predTask.EarlyStartDate;
+                              // Use Actual Start if In-Progress, otherwise use Early Start.
+                    predBaseDate = (predTask.StatusCode == InProgress && predTask.ActualStartDate.HasValue)
+                        ? predTask.ActualStartDate
+                        : predTask.EarlyStartDate;
                     succTargetDate = succTask.EarlyStartDate;
                     break;
 
                 case "PR_FF": // Finish-to-Finish
+                              // This is correct. For In-Progress, EarlyEndDate is the "Remaining Finish".
                     predBaseDate = predTask.EarlyEndDate;
                     succTargetDate = succTask.EarlyEndDate;
                     break;
 
                 case "PR_SF": // Start-to-Finish
-                    predBaseDate = predTask.EarlyStartDate;
+                              // Use Actual Start if In-Progress, otherwise use Early Start.
+                    predBaseDate = (predTask.StatusCode == InProgress && predTask.ActualStartDate.HasValue)
+                        ? predTask.ActualStartDate
+                        : predTask.EarlyStartDate;
                     succTargetDate = succTask.EarlyEndDate;
                     break;
 
@@ -1699,28 +1764,27 @@ namespace XerToCsvConverter
             if (!predBaseDate.HasValue || !succTargetDate.HasValue)
                 return "";
 
-            // STEP 1: Project the date by adding lag using PREDECESSOR's calendar
-            DateTime projectedDate = predCalendar.AddWorkingDays(predBaseDate.Value, lagDays);
+            // --- STEP 2: Project Date with Lag ---
+            DateTime projectedDate = lagProjectionCalendar.AddWorkingDays(predBaseDate.Value, lagDays);
 
-            // STEP 2: Calculate working days from projected date to successor's target date using SUCCESSOR's calendar
+            // --- STEP 3: Measure Float ---
             int freeFloat = 0;
 
             if (predType == "PR_FS")
             {
-                // For FS: Count from day after projected date to day before successor start
+                // For FS: Count the *gap* between the dates
                 freeFloat = succCalendar.CountWorkingDays(projectedDate, succTargetDate.Value, startInclusive: false, endInclusive: false);
             }
             else
             {
-                // For SS, FF, SF: Count from projected date to target date
+                // For SS, FF, SF: Count the *span* of the dates
                 freeFloat = succCalendar.CountWorkingDays(projectedDate, succTargetDate.Value, startInclusive: true, endInclusive: true);
-                freeFloat--; // Subtract 1 to match P6 logic
+                freeFloat--; // Subtract 1 to match P6 logic (e.g., Mon to Wed is 2 days of float, not 3)
             }
 
             // Format result
             return freeFloat.ToString("F2", CultureInfo.InvariantCulture);
         }
-
         public XerTable Create07XerActvType() => CreateSimpleKeyedTable(TableNames.ActvType, EnhancedTableNames.XerActvType07,
             new List<Tuple<string, string>> { Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId) });
 
@@ -2753,7 +2817,7 @@ namespace XerToCsvConverter
 
         private void AboutToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            ShowInfo("Primavera P6 XER to CSV Converter\nVersion: 2.3 (Optimized)\n\nSOFTWARE COPYRIGHT NOTICE\r\nCopyright © 2025 Ricardo Aguirre. All Rights Reserved.\r\nUnauthorized use, copying, or sharing of this software is strictly prohibited. Written permission required for any use.\r\nTHE SOFTWARE IS PROVIDED \"AS IS\" WITHOUT WARRANTY OF ANY KIND. RICARDO AGUIRRE SHALL NOT BE LIABLE FOR ANY DAMAGES ARISING FROM USE OF THIS SOFTWARE.\r\nBy using this software, you agree to these terms.", "About");
+            ShowInfo("Primavera P6 XER to CSV Converter\nVersion: 2.4\n\nSOFTWARE COPYRIGHT NOTICE\r\nCopyright © 2025 Ricardo Aguirre. All Rights Reserved.\r\nUnauthorized use, copying, or sharing of this software is strictly prohibited. Written permission required for any use.\r\nTHE SOFTWARE IS PROVIDED \"AS IS\" WITHOUT WARRANTY OF ANY KIND. RICARDO AGUIRRE SHALL NOT BE LIABLE FOR ANY DAMAGES ARISING FROM USE OF THIS SOFTWARE.\r\nBy using this software, you agree to these terms.", "About");
         }
 
         private void BtnAddFile_Click(object sender, EventArgs e)
@@ -4166,7 +4230,7 @@ namespace XerToCsvConverter
             this.MinimumSize = new System.Drawing.Size(800, 550);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "Primavera P6 XER to CSV Converter v2.3";
+            this.Text = "Primavera P6 XER to CSV Converter v2.4";
             this.statusStrip.ResumeLayout(false);
             this.statusStrip.PerformLayout();
             this.menuStrip.ResumeLayout(false);
