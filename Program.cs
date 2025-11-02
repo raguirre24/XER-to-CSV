@@ -31,6 +31,11 @@ namespace XerToCsvConverter
         public static bool EnableGlobalStringInterning { get; set; } = true;
         public static int MaxStringInternLength { get; set; } = 512;
 
+        // Streaming/Chunked Export Configuration
+        public static bool EnableStreamingExport { get; set; } = true;
+        public static int CsvExportChunkSize { get; set; } = 10000; // Process 10K rows at a time
+        public static int StreamingExportThresholdRows { get; set; } = 50000; // Only use streaming for tables >50K rows
+
         static PerformanceConfig()
         {
             // Optimize Garbage Collection for large data processing
@@ -391,6 +396,20 @@ namespace XerToCsvConverter
 
         public IReadOnlyDictionary<string, int> FieldIndexes => _fieldIndexes;
 
+        // PERFORMANCE OPTIMIZATION: Streaming support - yields rows in chunks for memory-efficient processing
+        // This allows processing large tables without holding all rows in memory during export/transformation
+        public IEnumerable<IEnumerable<DataRow>> GetRowsInChunks(int chunkSize)
+        {
+            if (chunkSize <= 0) throw new ArgumentException("Chunk size must be greater than zero", nameof(chunkSize));
+
+            for (int i = 0; i < _rows.Count; i += chunkSize)
+            {
+                int takeCount = Math.Min(chunkSize, _rows.Count - i);
+                // Use Skip/Take to create a lazy enumerable that doesn't copy data
+                yield return _rows.Skip(i).Take(takeCount);
+            }
+        }
+
         public static string GetFieldValueSafe(DataRow row, int index)
         {
             if (row.Fields != null && index >= 0 && index < row.Fields.Length)
@@ -670,6 +689,93 @@ namespace XerToCsvConverter
             catch (Exception ex)
             {
                 throw new Exception($"Failed to write CSV file '{Path.GetFileName(csvFilePath)}'. {ex.Message}", ex);
+            }
+        }
+
+        // PERFORMANCE OPTIMIZATION: Streaming CSV export for large tables
+        // Processes rows in chunks to reduce memory footprint during export
+        // Automatically used for tables larger than StreamingExportThresholdRows
+        public void WriteTableToCsvStreaming(XerTable table, string csvFilePath)
+        {
+            if (table == null || table.Headers == null) return;
+            if (table.IsEmpty && table.Headers.Length == 0) return;
+
+            int bufferSize = PerformanceConfig.CsvWriteBufferSize;
+            int chunkSize = PerformanceConfig.CsvExportChunkSize;
+
+            try
+            {
+                // Use buffered FileStream and StreamWriter
+                using (var fileStream = new FileStream(csvFilePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize))
+                // Use UTF8 encoding for output
+                using (var writer = new StreamWriter(fileStream, Encoding.UTF8, bufferSize))
+                {
+                    string[] headerRow = table.Headers;
+                    // Use a reusable StringBuilder for line construction
+                    var lineBuilder = new StringBuilder(PerformanceConfig.StringBuilderInitialCapacity);
+
+                    // Write Headers (same as non-streaming version)
+                    for (int i = 0; i < headerRow.Length; i++)
+                    {
+                        if (i > 0) lineBuilder.Append(',');
+                        lineBuilder.Append(EscapeCsvField(headerRow[i]));
+                    }
+                    // Add FileName column
+                    if (headerRow.Length > 0) lineBuilder.Append(',');
+                    lineBuilder.Append(EscapeCsvField(FieldNames.FileName));
+
+                    writer.WriteLine(lineBuilder.ToString());
+                    lineBuilder.Clear();
+
+                    // Write Data Rows in chunks - reduces memory pressure
+                    foreach (var chunk in table.GetRowsInChunks(chunkSize))
+                    {
+                        foreach (var dataRow in chunk)
+                        {
+                            string[] rowFields = dataRow.Fields;
+                            if (rowFields == null) continue;
+
+                            for (int j = 0; j < rowFields.Length; j++)
+                            {
+                                if (j > 0) lineBuilder.Append(',');
+                                lineBuilder.Append(EscapeCsvField(rowFields[j] ?? string.Empty));
+                            }
+                            // Add FileName data
+                            if (rowFields.Length > 0) lineBuilder.Append(',');
+                            lineBuilder.Append(EscapeCsvField(dataRow.SourceFilename));
+
+                            writer.WriteLine(lineBuilder.ToString());
+                            lineBuilder.Clear();
+                        }
+
+                        // Flush after each chunk to ensure data is written and memory can be reclaimed
+                        writer.Flush();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"Failed to write CSV file '{Path.GetFileName(csvFilePath)}'. {ex.Message}", ex);
+            }
+        }
+
+        // Smart export method that automatically chooses streaming or standard based on table size
+        public void WriteTableToCsvSmart(XerTable table, string csvFilePath)
+        {
+            if (table == null || table.Headers == null) return;
+            if (table.IsEmpty && table.Headers.Length == 0) return;
+
+            // Decision: Use streaming for large tables or if globally enabled
+            bool useStreaming = PerformanceConfig.EnableStreamingExport &&
+                                table.RowCount >= PerformanceConfig.StreamingExportThresholdRows;
+
+            if (useStreaming)
+            {
+                WriteTableToCsvStreaming(table, csvFilePath);
+            }
+            else
+            {
+                WriteTableToCsv(table, csvFilePath);
             }
         }
 
@@ -2565,7 +2671,8 @@ namespace XerToCsvConverter
                             if (tableToExport != null && !tableToExport.IsEmpty)
                             {
                                 string csvFilePath = Path.Combine(outputDirectory, $"{tableName}.csv");
-                                _exporter.WriteTableToCsv(tableToExport, csvFilePath);
+                                // Use smart export that automatically chooses streaming for large tables
+                                _exporter.WriteTableToCsvSmart(tableToExport, csvFilePath);
                                 exportedFiles.Add(csvFilePath);
                             }
                         }
