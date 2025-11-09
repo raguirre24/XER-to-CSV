@@ -119,186 +119,366 @@ namespace XerToCsvConverter
     }
 
     // Working Day Calculator - Handles calendar-aware date calculations
+    // Working Day Calculator - Handles calendar-aware date calculations
     public class WorkingDayCalculator
     {
-        private readonly HashSet<DateTime> _holidays;
-        private readonly HashSet<DateTime> _extraWorkDays;
-        private readonly HashSet<int> _standardWorkingDayNums;
+        // --- Data Structures ---
+        // These are pre-populated by the XerTransformer
+        private readonly Dictionary<DateTime, decimal> _exceptionHours;
+        private readonly Dictionary<DateTime, List<(TimeSpan Start, TimeSpan End)>> _exceptionTimeSlots;
+        private readonly decimal[] _standardWeekHours; // Index 0=Sunday, 1=Monday... 6=Saturday
+        private readonly List<(TimeSpan Start, TimeSpan End)>[] _standardWeekTimeSlots; // Index 0=Sunday...
         private static readonly WorkingDayCalculator _default = CreateDefaultCalendar();
 
-        public WorkingDayCalculator(HashSet<DateTime> holidays, HashSet<DateTime> extraWorkDays, HashSet<int> standardWorkingDayNums)
+        public WorkingDayCalculator(
+            Dictionary<DateTime, decimal> exceptionHours,
+            Dictionary<DateTime, List<(TimeSpan Start, TimeSpan End)>> exceptionTimeSlots,
+            decimal[] standardWeekHours,
+            List<(TimeSpan Start, TimeSpan End)>[] standardWeekTimeSlots)
         {
-            _holidays = holidays ?? new HashSet<DateTime>();
-            _extraWorkDays = extraWorkDays ?? new HashSet<DateTime>();
-            _standardWorkingDayNums = standardWorkingDayNums ?? new HashSet<int>();
+            _exceptionHours = exceptionHours ?? new Dictionary<DateTime, decimal>();
+            _exceptionTimeSlots = exceptionTimeSlots ?? new Dictionary<DateTime, List<(TimeSpan, TimeSpan)>>();
+            _standardWeekHours = standardWeekHours ?? new decimal[7];
+            _standardWeekTimeSlots = standardWeekTimeSlots ?? new List<(TimeSpan, TimeSpan)>[7];
         }
 
-        // Creates a default 5-day work week calendar (Mon-Fri)
+        // Creates a default 5-day work week calendar (Mon-Fri, 8-12, 13-17)
         private static WorkingDayCalculator CreateDefaultCalendar()
         {
-            var standardDays = new HashSet<int> { 1, 2, 3, 4, 5 }; // Monday through Friday
-            return new WorkingDayCalculator(new HashSet<DateTime>(), new HashSet<DateTime>(), standardDays);
+            var stdHours = new decimal[7]; // 0=Sun, 6=Sat
+            var stdSlots = new List<(TimeSpan, TimeSpan)>[7];
+            var defaultSlots = new List<(TimeSpan, TimeSpan)>
+            {
+                (new TimeSpan(8, 0, 0), new TimeSpan(12, 0, 0)),
+                (new TimeSpan(13, 0, 0), new TimeSpan(17, 0, 0))
+            };
+
+            for (int i = 0; i < 7; i++)
+            {
+                stdSlots[i] = new List<(TimeSpan, TimeSpan)>(); // Initialize all lists
+            }
+
+            for (int i = 1; i <= 5; i++) // 1=Monday to 5=Friday
+            {
+                stdHours[i] = 8m;
+                stdSlots[i] = defaultSlots;
+            }
+            // Sunday (0) and Saturday (6)
+            stdHours[0] = 0m;
+            stdHours[6] = 0m;
+
+            return new WorkingDayCalculator(
+                new Dictionary<DateTime, decimal>(),
+                new Dictionary<DateTime, List<(TimeSpan, TimeSpan)>>(),
+                stdHours,
+                stdSlots);
         }
 
         public static WorkingDayCalculator Default => _default;
 
-        // Checks if a specific date is a working day
+        // --- Helper Methods ---
+
+        /// <summary>
+        /// Gets the defined work hours for a specific date, checking exceptions first.
+        /// </summary>
+        private decimal GetWorkHours(DateTime date)
+        {
+            date = date.Date;
+            if (_exceptionHours.TryGetValue(date, out decimal hours))
+            {
+                return hours; // Return specific exception hours (could be 0)
+            }
+            return _standardWeekHours[(int)date.DayOfWeek]; // Return standard week hours
+        }
+
+        /// <summary>
+        /// Gets the list of defined time slots for a specific date.
+        /// </summary>
+        private List<(TimeSpan Start, TimeSpan End)> GetTimeSlots(DateTime date)
+        {
+            date = date.Date;
+            if (_exceptionTimeSlots.TryGetValue(date, out var slots))
+            {
+                return slots; // Return specific exception slots
+            }
+            var stdSlots = _standardWeekTimeSlots[(int)date.DayOfWeek];
+            return stdSlots ?? new List<(TimeSpan, TimeSpan)>(); // Ensure list is never null
+        }
+
+        /// <summary>
+        /// Checks if a date is a working day (has > 0 work hours).
+        /// </summary>
         public bool IsWorkingDay(DateTime date)
         {
-            // Strip time component for consistent comparison
-            date = date.Date;
-
-            // Check if it's an extra work day (overrides standard rules)
-            if (_extraWorkDays.Contains(date)) return true;
-
-            // Check if it's a holiday (non-working exception)
-            if (_holidays.Contains(date)) return false;
-
-            // Check if day of week is in standard working days (1=Monday, 7=Sunday)
-            int dayOfWeekNum = GetDayOfWeekNumber(date);
-            return _standardWorkingDayNums.Contains(dayOfWeekNum);
+            return GetWorkHours(date.Date) > 0;
         }
 
-        // Counts working days between two dates (inclusive of start, exclusive of end for FS relationships)
-        // For other relationship types, the caller adjusts the range
-        public int CountWorkingDays(DateTime start, DateTime end, bool startInclusive = true, bool endInclusive = false)
+        /// <summary>
+        /// Calculates remaining work hours on a given day from a specific time.
+        /// </summary>
+        private decimal GetRemainingHoursOnDay(DateTime startDateTime)
         {
-            // Strip time components
-            start = start.Date;
-            end = end.Date;
-
-            // Handle negative ranges
-            if (end < start)
+            var slots = GetTimeSlots(startDateTime.Date);
+            if (slots == null || slots.Count == 0)
             {
-                // Swap and count, then return negative
-                return -CountWorkingDays(end, start, endInclusive, startInclusive);
+                return 0m;
             }
 
-            int count = 0;
-            DateTime current = startInclusive ? start : start.AddDays(1);
-            DateTime stopDate = endInclusive ? end : end.AddDays(-1);
+            TimeSpan startTime = startDateTime.TimeOfDay;
+            decimal remainingHours = 0m;
 
-            while (current <= stopDate)
+            foreach (var (slotStart, slotEnd) in slots)
             {
-                if (IsWorkingDay(current))
+                if (startTime < slotEnd) // If the time is before the end of the slot
                 {
-                    count++;
+                    // Find the effective start time (either the slot start or the current time, whichever is later)
+                    TimeSpan effectiveStart = (startTime > slotStart) ? startTime : slotStart;
+                    remainingHours += (decimal)(slotEnd - effectiveStart).TotalHours;
                 }
-                current = current.AddDays(1);
             }
-
-            return count;
+            return Math.Max(0, remainingHours);
         }
 
-        // Adds or subtracts working days to/from a date
-        // Positive days = move forward, Negative days = move backward
-        // This is used to project dates with lag (e.g., "2 working days after predecessor finishes")
-        public DateTime AddWorkingDays(DateTime startDate, decimal workingDays)
+        /// <summary>
+        /// Calculates hours worked on a given day up to a specific time.
+        /// </summary>
+        private decimal GetHoursWorkedOnDay(DateTime endDateTime)
         {
-            // Strip time component
-            startDate = startDate.Date;
+            var slots = GetTimeSlots(endDateTime.Date);
+            if (slots == null || slots.Count == 0)
+            {
+                return 0m;
+            }
 
-            // Handle zero or very small values
-            if (Math.Abs(workingDays) < 0.01m)
-                return startDate;
+            TimeSpan endTime = endDateTime.TimeOfDay;
+            decimal hoursWorked = 0m;
 
-            // Determine direction
-            int direction = workingDays >= 0 ? 1 : -1;
-            int daysToAdd = (int)Math.Abs(Math.Ceiling(workingDays)); // Round up to be conservative
+            foreach (var (slotStart, slotEnd) in slots)
+            {
+                if (endTime > slotStart) // If the time is after the start of the slot
+                {
+                    // Find the effective end time (either the slot end or the current time, whichever is earlier)
+                    TimeSpan effectiveEnd = (endTime < slotEnd) ? endTime : slotEnd;
+                    hoursWorked += (decimal)(effectiveEnd - slotStart).TotalHours;
+                }
+            }
+            return Math.Max(0, hoursWorked);
+        }
 
+        /// <summary>
+        /// Finds the exact time on a given day when a certain amount of work has been completed.
+        /// </summary>
+        private TimeSpan FindTimeForHoursWorked(DateTime date, decimal hoursWorked)
+        {
+            var slots = GetTimeSlots(date.Date);
+            if (slots == null || slots.Count == 0)
+            {
+                return TimeSpan.Zero;
+            }
+
+            decimal hoursAccumulated = 0m;
+
+            foreach (var (slotStart, slotEnd) in slots)
+            {
+                decimal slotDuration = (decimal)(slotEnd - slotStart).TotalHours;
+                if (hoursAccumulated + slotDuration >= hoursWorked)
+                {
+                    // The time is in this slot
+                    decimal hoursNeededInSlot = hoursWorked - hoursAccumulated;
+                    return slotStart + TimeSpan.FromHours((double)hoursNeededInSlot);
+                }
+                // Time is after this slot, add this slot's full duration
+                hoursAccumulated += slotDuration;
+            }
+            // If hoursWorked > total work hours, return end of last slot
+            return slots.LastOrDefault().End;
+        }
+
+        // --- NEW CALCULATION METHODS (WITH NEGATIVE LAG FIX) ---
+
+        /// <summary>
+        /// Projects a date forward or backward by a specific number of working hours.
+        /// </summary>
+        public DateTime AddWorkingHours(DateTime startDate, decimal lagHours)
+        {
+            if (lagHours == 0) return startDate;
+
+            if (lagHours > 0)
+            {
+                return ProjectForward(startDate, lagHours);
+            }
+            else
+            {
+                // Call new method for projecting backward
+                return ProjectBackward(startDate, -lagHours); // Pass a positive duration
+            }
+        }
+
+        private DateTime ProjectForward(DateTime startDate, decimal hoursToAdd)
+        {
             DateTime currentDate = startDate;
-            int workingDaysAdded = 0;
+            decimal hoursRemaining = hoursToAdd;
 
-            // Move day by day in the specified direction
-            while (workingDaysAdded < daysToAdd)
+            // 1. Spend remaining hours on the start day
+            decimal remainingDayHours = GetRemainingHoursOnDay(currentDate);
+            if (remainingDayHours > hoursRemaining)
             {
-                currentDate = currentDate.AddDays(direction);
-                if (IsWorkingDay(currentDate))
+                // Lag finishes on the same day.
+                // We need to find the exact finish time.
+                var slots = GetTimeSlots(currentDate.Date);
+                TimeSpan currentTime = currentDate.TimeOfDay;
+                foreach (var (slotStart, slotEnd) in slots)
                 {
-                    workingDaysAdded++;
-                }
-            }
-
-            return currentDate;
-        }
-
-        // Gets day of week number (1=Monday, 7=Sunday) matching Power BI WEEKDAY(date, 2)
-        private static int GetDayOfWeekNumber(DateTime date)
-        {
-            // .NET DayOfWeek: 0=Sunday, 6=Saturday
-            // We need: 1=Monday, 7=Sunday
-            int dotNetDay = (int)date.DayOfWeek; // 0=Sun, 1=Mon, ..., 6=Sat
-            return dotNetDay == 0 ? 7 : dotNetDay; // Convert Sunday from 0 to 7, others shift down
-        }
-
-        // Builds a WorkingDayCalculator from calendar detailed table data
-        public static WorkingDayCalculator BuildFromCalendarData(IEnumerable<DataRow> calendarDetailedRows, IReadOnlyDictionary<string, int> calendarIndexes, string targetClndrIdKey)
-        {
-            var holidays = new HashSet<DateTime>();
-            var extraWorkDays = new HashSet<DateTime>();
-            var standardWorkingDayNums = new HashSet<int>();
-
-            foreach (var rowData in calendarDetailedRows)
-            {
-                var row = rowData.Fields;
-                string clndrIdKey = GetFieldValueSafe(row, calendarIndexes, FieldNames.ClndrIdKey);
-
-                // Only process rows for this calendar
-                if (clndrIdKey != targetClndrIdKey) continue;
-
-                string dateStr = GetFieldValueSafe(row, calendarIndexes, FieldNames.Date);
-                string exceptionType = GetFieldValueSafe(row, calendarIndexes, FieldNames.ExceptionType);
-                string workingDayIntStr = GetFieldValueSafe(row, calendarIndexes, FieldNames.WorkingDayInt);
-                string dayOfWeekNumStr = GetFieldValueSafe(row, calendarIndexes, FieldNames.DayOfWeekNum);
-
-                int workingDayInt = 0;
-                int.TryParse(workingDayIntStr, out workingDayInt);
-
-                // Process standard working week definition
-                if (exceptionType == "Standard" && string.IsNullOrEmpty(dateStr))
-                {
-                    if (int.TryParse(dayOfWeekNumStr, out int dayNum) && workingDayInt == 1)
+                    if (currentTime < slotEnd)
                     {
-                        standardWorkingDayNums.Add(dayNum);
+                        TimeSpan effectiveStart = (currentTime > slotStart) ? currentTime : slotStart;
+                        decimal slotDuration = (decimal)(slotEnd - effectiveStart).TotalHours;
+
+                        if (hoursRemaining <= slotDuration)
+                        {
+                            // Finishes in this slot
+                            return currentDate.Date + effectiveStart + TimeSpan.FromHours((double)hoursRemaining);
+                        }
+                        // Finishes after this slot, consume this slot's hours
+                        hoursRemaining -= slotDuration;
+                        currentTime = slotEnd; // Move time to end of this slot
                     }
                 }
-                // Process date-specific exceptions
-                else if (!string.IsNullOrEmpty(dateStr))
-                {
-                    var parsedDate = DateParser.TryParse(dateStr);
-                    if (parsedDate.HasValue)
-                    {
-                        DateTime date = parsedDate.Value.Date; // Strip time
-
-                        if (workingDayInt == 0)
-                        {
-                            holidays.Add(date);
-                        }
-                        else if (workingDayInt == 1 && exceptionType == "Exception - Working")
-                        {
-                            extraWorkDays.Add(date);
-                        }
-                    }
-                }
+                // Should not be reachable if GetRemainingHoursOnDay was correct
+                return currentDate.Date.AddDays(1);
             }
 
-            // If no standard working days defined, use default Mon-Fri
-            if (standardWorkingDayNums.Count == 0)
+            // Lag does not finish on the start day
+            hoursRemaining -= remainingDayHours;
+            currentDate = currentDate.Date.AddDays(1); // Move to start of next day
+
+            // 2. Spend hours on full days
+            while (true)
             {
-                standardWorkingDayNums = new HashSet<int> { 1, 2, 3, 4, 5 };
+                decimal dayHours = GetWorkHours(currentDate);
+                if (dayHours > 0)
+                {
+                    if (hoursRemaining <= dayHours)
+                    {
+                        // Lag finishes on this day
+                        break;
+                    }
+                    // Consume the full day and move to the next
+                    hoursRemaining -= dayHours;
+                }
+                currentDate = currentDate.AddDays(1);
             }
 
-            return new WorkingDayCalculator(holidays, extraWorkDays, standardWorkingDayNums);
+            // 3. Find the exact finish time on the final day
+            var finalDaySlots = GetTimeSlots(currentDate.Date);
+            if (finalDaySlots == null || finalDaySlots.Count == 0)
+            {
+                // This case should be impossible if GetWorkHours(currentDate) > 0
+                return currentDate;
+            }
+
+            // This is just `GetHoursWorkedOnDay` in reverse, which is `FindTimeForHoursWorked`
+            TimeSpan finalTime = FindTimeForHoursWorked(currentDate, hoursRemaining);
+            return currentDate.Date + finalTime;
         }
 
-        private static string GetFieldValueSafe(string[] row, IReadOnlyDictionary<string, int> indexes, string fieldName)
+        private DateTime ProjectBackward(DateTime startDate, decimal hoursToSubtract)
         {
-            if (row == null || indexes == null) return "";
-            if (indexes.TryGetValue(fieldName, out int index) && index >= 0 && index < row.Length)
+            DateTime currentDate = startDate;
+            decimal hoursRemainingToSubtract = hoursToSubtract;
+
+            // 1. "Un-spend" hours on the start day
+            decimal hoursWorkedToday = GetHoursWorkedOnDay(currentDate);
+
+            if (hoursWorkedToday > hoursRemainingToSubtract)
             {
-                return row[index] ?? "";
+                // Lag finishes (starts) on the same day.
+                decimal targetHoursWorked = hoursWorkedToday - hoursRemainingToSubtract;
+                TimeSpan finalTime = FindTimeForHoursWorked(currentDate, targetHoursWorked);
+                return currentDate.Date + finalTime;
             }
-            return "";
+
+            // Lag does not finish on the start day
+            hoursRemainingToSubtract -= hoursWorkedToday;
+            currentDate = currentDate.Date.AddDays(-1); // Move to previous day
+
+            // 2. "Un-spend" hours on full days
+            while (true)
+            {
+                decimal dayHours = GetWorkHours(currentDate);
+                if (dayHours > 0)
+                {
+                    if (hoursRemainingToSubtract <= dayHours)
+                    {
+                        // Lag finishes (starts) on this day
+                        break;
+                    }
+                    // Consume the full day and move to the previous
+                    hoursRemainingToSubtract -= dayHours;
+                }
+                currentDate = currentDate.AddDays(-1);
+            }
+
+            // 3. Find the exact start time on the final day
+            decimal hoursToWorkOnFinalDay = GetWorkHours(currentDate) - hoursRemainingToSubtract;
+            TimeSpan finalTimeOnDay = FindTimeForHoursWorked(currentDate, hoursToWorkOnFinalDay);
+            return currentDate.Date + finalTimeOnDay;
+        }
+
+        /// <summary>
+        /// Counts the precise working hours between two DateTimes.
+        /// </summary>
+        public decimal CountWorkingHours(DateTime startDate, DateTime endDate)
+        {
+            if (Math.Abs((startDate - endDate).TotalSeconds) < 1) return 0m;
+
+            // Handle reverse
+            if (endDate < startDate)
+            {
+                return -CountWorkingHours(endDate, startDate);
+            }
+
+            decimal totalHours = 0m;
+            DateTime currentDate = startDate.Date;
+
+            // --- 1. Handle Start Day (Partial Day) ---
+            if (currentDate == endDate.Date)
+            {
+                // Start and End are on the same day
+                var slots = GetTimeSlots(currentDate);
+                if (slots == null) return 0m;
+
+                TimeSpan startTime = startDate.TimeOfDay;
+                TimeSpan endTime = endDate.TimeOfDay;
+
+                foreach (var (slotStart, slotEnd) in slots)
+                {
+                    TimeSpan effectiveStart = (startTime > slotStart) ? startTime : slotStart;
+                    TimeSpan effectiveEnd = (endTime < slotEnd) ? endTime : slotEnd;
+
+                    if (effectiveEnd > effectiveStart)
+                    {
+                        totalHours += (decimal)(effectiveEnd - effectiveStart).TotalHours;
+                    }
+                }
+                return totalHours;
+            }
+
+            // Start and End are on different days
+            totalHours += GetRemainingHoursOnDay(startDate);
+            currentDate = currentDate.AddDays(1);
+
+            // --- 2. Handle Full Days Between ---
+            while (currentDate < endDate.Date)
+            {
+                totalHours += GetWorkHours(currentDate);
+                currentDate = currentDate.AddDays(1);
+            }
+
+            // --- 3. Handle End Day (Partial Day) ---
+            totalHours += GetHoursWorkedOnDay(endDate);
+
+            return totalHours;
         }
     }
 
@@ -1094,6 +1274,8 @@ namespace XerToCsvConverter
             return lookup;
         }
 
+
+
         // Calculation Logic Helpers
         private DateTime CalculateStartDate(string[] row, IReadOnlyDictionary<string, int> indexes, string statusCode)
         {
@@ -1206,7 +1388,7 @@ namespace XerToCsvConverter
             if (!indexes.ContainsKey(FieldNames.ProjectId) || !indexes.ContainsKey(lagSettingCol))
             {
                 // Log or notify that the required column is missing
-                Console.WriteLine($"Warning: SCHEDOPTIONS table is missing '{FieldNames.ProjectId}' or '{lagSettingCol}'.");
+                Console.WriteLine($"Warning: SCHEDOPTIONS table is missing '{FieldNames.ProjectId}' or '{lagSettingCol}'. Defaulting to Predecessor calendar for lag.");
                 return lookup;
             }
 
@@ -1214,7 +1396,7 @@ namespace XerToCsvConverter
             {
                 var row = rowData.Fields;
                 string projId = GetFieldValue(row, indexes, FieldNames.ProjectId);
-                string lagSetting = GetFieldValue(row, indexes, lagSettingCol);
+                string lagSetting = GetFieldValue(row, indexes, lagSettingCol); // e.g., "rcal_Predecessor"
 
                 if (!string.IsNullOrEmpty(projId))
                 {
@@ -1224,6 +1406,8 @@ namespace XerToCsvConverter
             }
             return lookup;
         }
+
+
         // Creates the Baseline table (04_XER_BASELINE) by finding the earliest MonthUpdate snapshot
         public XerTable Create04XerBaselineTable(XerTable task01Table)
         {
@@ -1454,8 +1638,8 @@ namespace XerToCsvConverter
             // Get the SCHEDOPTIONS table
             var schedOptionsTable = _dataStore.GetTable("SCHEDOPTIONS");
 
-            // Get the detailed calendar table from the cache
-            cache.TryGetValue(EnhancedTableNames.XerCalendarDetailed11, out XerTable calendarDetailedTable);
+            // We no longer read from 11_DETAILED_CALENDAR cache, 
+            // BuildCalendarCalculators now reads from the raw CALENDAR table.
 
             if (!IsTableValid(taskPredTable)) return null;
 
@@ -1474,13 +1658,13 @@ namespace XerToCsvConverter
                 finalHeadersList.Add(FieldNames.PredecessorStatusCode); // Predecessor's status
                 finalHeadersList.Add(FieldNames.TaskType); // Successor's task type
                 finalHeadersList.Add(FieldNames.PredecessorTaskType); // Predecessor's task type
-                finalHeadersList.Add(FieldNames.Lag);
+                finalHeadersList.Add(FieldNames.Lag); // This will remain in DAYS, but calculated from hours
                 finalHeadersList.Add(FieldNames.TimePeriodHoursPerDay);
                 finalHeadersList.Add(FieldNames.Start);
                 finalHeadersList.Add(FieldNames.Finish);
                 finalHeadersList.Add(FieldNames.PredecessorStart);
                 finalHeadersList.Add(FieldNames.PredecessorFinish);
-                finalHeadersList.Add(FieldNames.PredecessorFreeFloat);
+                finalHeadersList.Add(FieldNames.PredecessorFreeFloat); // This is the new 'free_float' in DAYS
                 finalHeadersList.Add(FieldNames.MonthUpdate);
                 string[] finalHeaders = finalHeadersList.Select(StringInternPool.Intern).ToArray();
 
@@ -1493,10 +1677,9 @@ namespace XerToCsvConverter
                 resultTable.SetHeaders(finalHeaders);
 
                 // Build lookup dictionaries
-                var taskLookup = BuildTaskLookupDictionary(taskTable); // Now includes ActualStartDate
-                var calendarHoursLookup = BuildCalendarHoursLookup(calendarTable);
-                var calendarCalculators = BuildCalendarCalculators(calendarDetailedTable);
-                // Build the new schedule options lookup
+                var taskLookup = BuildTaskLookupDictionary(taskTable); // Includes ActualStartDate
+                var calendarHoursLookup = BuildCalendarHoursLookup(calendarTable); // Standard Hours/Day
+                var calendarCalculators = BuildCalendarCalculators(null); // Pass null, it now reads from raw CALENDAR
                 var schedOptionsLookup = BuildProjectScheduleOptionsLookup(schedOptionsTable);
 
                 var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
@@ -1526,9 +1709,15 @@ namespace XerToCsvConverter
                     // Lookup predecessor task data
                     TaskData predTask = taskLookup.TryGetValue(predTaskIdKey, out var pt) ? pt : new TaskData();
 
+                    // --- FIX IS HERE ---
+                    // Define the variables for the successor's and predecessor's calendar keys
+                    string succClndrIdKey = succTask.ClndrIdKey;
+                    string predClndrIdKey = predTask.ClndrIdKey;
+                    // --- END FIX ---
+
                     // Set lookup columns
-                    SetTransformedField(transformed, finalIndexes, FieldNames.CalendarIdKey, succTask.ClndrIdKey);
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorClndrIdKey, predTask.ClndrIdKey);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.CalendarIdKey, succClndrIdKey);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorClndrIdKey, predClndrIdKey);
                     SetTransformedField(transformed, finalIndexes, FieldNames.StatusCode, succTask.StatusCode);
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStatusCode, predTask.StatusCode);
                     SetTransformedField(transformed, finalIndexes, FieldNames.TaskType, succTask.TaskType);
@@ -1539,7 +1728,6 @@ namespace XerToCsvConverter
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFinish, DateParser.Format(predTask.EarlyEndDate));
 
                     // Calculate TimePeriod (hours per day) using PREDECESSOR's calendar
-                    string predClndrIdKey = predTask.ClndrIdKey;
                     decimal hoursPerDay = 0;
                     if (!string.IsNullOrEmpty(predClndrIdKey) && calendarHoursLookup.TryGetValue(predClndrIdKey, out decimal hpd))
                     {
@@ -1547,27 +1735,39 @@ namespace XerToCsvConverter
                     }
                     SetTransformedField(transformed, finalIndexes, FieldNames.TimePeriodHoursPerDay, hoursPerDay > 0 ? hoursPerDay.ToString("F2", CultureInfo.InvariantCulture) : "");
 
-                    // Calculate Lag in days
+                    // Get Lag in HOURS
                     string lagHrCntStr = GetFieldValue(row, sourceIndexes, FieldNames.LagHrCnt);
+                    decimal.TryParse(lagHrCntStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal lagHours);
+
+                    // Calculate Lag in DAYS for the 'Lag' column
                     decimal lagDays = 0;
-                    if (!string.IsNullOrEmpty(lagHrCntStr) && decimal.TryParse(lagHrCntStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal lagHr) && hoursPerDay > 0)
+                    if (lagHours != 0 && hoursPerDay > 0)
                     {
-                        lagDays = lagHr / hoursPerDay;
+                        lagDays = lagHours / hoursPerDay;
                     }
                     SetTransformedField(transformed, finalIndexes, FieldNames.Lag, lagDays != 0 ? lagDays.ToString("F2", CultureInfo.InvariantCulture) : "0");
 
-                    // Calculate Free Float
-                    string succClndrIdKey = succTask.ClndrIdKey;
-                    string freeFloat = CalculateFreeFloat(
+                    // --- NEW: Get Successor's HPD for final conversion ---
+                    decimal hoursPerDayForSuccessor = 0;
+                    if (calendarHoursLookup.TryGetValue(succClndrIdKey, out decimal succHpd))
+                    {
+                        hoursPerDayForSuccessor = succHpd;
+                    }
+                    if (hoursPerDayForSuccessor <= 0) hoursPerDayForSuccessor = 8m; // Fallback
+
+
+                    // Calculate Free Float (passing lag in HOURS)
+                    string freeFloatInDays = CalculateFreeFloat(
                         row, sourceIndexes,
                         succTask, predTask,
-                        lagDays,
+                        lagHours, // Pass hours, not days
                         predClndrIdKey,
                         succClndrIdKey,
                         calendarCalculators,
-                        schedOptionsLookup // Pass the new lookup
+                        schedOptionsLookup,
+                        hoursPerDayForSuccessor // Pass successor's HPD
                     );
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloat);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloatInDays);
 
                     // Add MonthUpdate value
                     SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
@@ -1638,37 +1838,261 @@ namespace XerToCsvConverter
         }
 
         // Builds working day calculators for all calendars
+        // Builds working day calculators for all calendars
+        // Builds working day calculators for all calendars
         private Dictionary<string, WorkingDayCalculator> BuildCalendarCalculators(XerTable calendarDetailedTable)
         {
             var calculators = new Dictionary<string, WorkingDayCalculator>(StringComparer.OrdinalIgnoreCase);
-            if (!IsTableValid(calendarDetailedTable)) return calculators;
 
-            var indexes = calendarDetailedTable.FieldIndexes;
+            // This is the main method that reads the raw CALENDAR table.
+            // The 'calendarDetailedTable' parameter is no longer used but is kept to match the call from Create06XerPredecessor.
+            // We ignore it and go straight to the raw CALENDAR table.
 
-            // Group rows by calendar ID
-            var calendarGroups = calendarDetailedTable.Rows
-                .GroupBy(r => XerTable.GetFieldValueSafe(r, indexes.TryGetValue(FieldNames.ClndrIdKey, out int idx) ? idx : -1))
-                .Where(g => !string.IsNullOrEmpty(g.Key));
-
-            foreach (var group in calendarGroups)
+            Console.WriteLine("Building Calendar Calculators for Free Float...");
+            var calendarTable = _dataStore.GetTable(TableNames.Calendar);
+            if (!IsTableValid(calendarTable))
             {
-                string clndrIdKey = group.Key;
-                var calculator = WorkingDayCalculator.BuildFromCalendarData(group, indexes, clndrIdKey);
+                Console.WriteLine("Warning: Raw CALENDAR table not found. Free Float calculations may be incorrect.");
+                return calculators;
+            }
+
+            var calIndexes = calendarTable.FieldIndexes;
+            int rawClndrIdIdx = calIndexes.ContainsKey(FieldNames.ClndrId) ? calIndexes[FieldNames.ClndrId] : -1;
+            int rawDataIdx = calIndexes.ContainsKey(FieldNames.CalendarData) ? calIndexes[FieldNames.CalendarData] : -1;
+            int rawDayHrCntIdx = calIndexes.ContainsKey(FieldNames.DayHourCount) ? calIndexes[FieldNames.DayHourCount] : -1;
+
+            if (rawClndrIdIdx == -1 || rawDataIdx == -1 || rawDayHrCntIdx == -1)
+            {
+                Console.WriteLine("Warning: Raw CALENDAR table is missing required columns. Free Float calculations may be incorrect.");
+                return calculators;
+            }
+
+            // --- OPTIMIZATION: Use static, compiled Regex ---
+            // Regex for all day definitions (1-7)
+            var dayPatternRegex = new Regex(
+                @"\(0\|\|(\d)\(\)\s*\(((?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)\s*\)",
+                RegexCompiledOptions);
+            // Regex specifically for empty day definitions
+            var emptyDayPatternRegex = new Regex(
+                @"\(0\|\|(\d)\(\)\s*\(\s*\)\s*\)",
+                RegexCompiledOptions);
+            // Regex for time slots
+            var timeSlotRegex = new Regex(
+                @"\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)",
+                RegexOptions.Singleline | RegexOptions.Compiled);
+
+            // Parse the raw CALENDAR table for each calendar
+            foreach (var rowData in calendarTable.Rows)
+            {
+                var row = rowData.Fields;
+                string clndrId = XerTable.GetFieldValueSafe(rowData, rawClndrIdIdx);
+                string clndrIdKey = CreateKey(rowData.SourceFilename, clndrId);
+                string clndrData = XerTable.GetFieldValueSafe(rowData, rawDataIdx);
+                string defaultDayHrCntStr = XerTable.GetFieldValueSafe(rowData, rawDayHrCntIdx);
+
+                decimal.TryParse(defaultDayHrCntStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal defaultDayHours);
+                if (defaultDayHours <= 0) defaultDayHours = 8m; // Fallback
+
+                var exceptionHours = new Dictionary<DateTime, decimal>();
+                var exceptionTimeSlots = new Dictionary<DateTime, List<(TimeSpan, TimeSpan)>>();
+                var standardWeekHours = new decimal[7]; // 0=Sun ... 6=Sat
+                var standardWeekTimeSlots = new List<(TimeSpan, TimeSpan)>[7];
+                for (int i = 0; i < 7; i++) standardWeekTimeSlots[i] = new List<(TimeSpan, TimeSpan)>();
+
+                // --- 1. Parse Standard Week ---
+                int daysStart = clndrData.IndexOf("DaysOfWeek");
+                if (daysStart > -1)
+                {
+                    int daysEnd = FindSectionEnd(clndrData, daysStart);
+                    string daysSection = clndrData.Substring(daysStart, daysEnd - daysStart);
+
+                    // Use dictionaries to store results from Regex matches
+                    var dayContents = new Dictionary<int, string>();
+                    var emptyDays = new HashSet<int>();
+
+                    // Match all occurrences using the static compiled Regex (dayPatternRegex)
+                    foreach (Match match in dayPatternRegex.Matches(daysSection))
+                    {
+                        if (int.TryParse(match.Groups[1].Value, out int p6DayNum) && p6DayNum >= 1 && p6DayNum <= 7) // P6 Day (1-7)
+                        {
+                            dayContents[p6DayNum] = match.Groups[2].Value.Trim();
+                        }
+                    }
+
+                    // Match all occurrences using the static compiled Regex (emptyDayPatternRegex)
+                    foreach (Match match in emptyDayPatternRegex.Matches(daysSection))
+                    {
+                        if (int.TryParse(match.Groups[1].Value, out int p6DayNum) && p6DayNum >= 1 && p6DayNum <= 7)
+                        {
+                            emptyDays.Add(p6DayNum);
+                            dayContents.Remove(p6DayNum); // Ensure it's not in both
+                        }
+                    }
+
+                    // Process the results for all 7 days
+                    for (int p6DayNum = 1; p6DayNum <= 7; p6DayNum++) // P6: 1=Sun, 2=Mon... 7=Sat
+                    {
+                        int dotNetDay = p6DayNum - 1; // .NET: 0=Sun, 1=Mon... 6=Sat
+
+                        if (dayContents.TryGetValue(p6DayNum, out string dayContent) && !string.IsNullOrWhiteSpace(dayContent))
+                        {
+                            // Day has defined work hours
+                            standardWeekHours[dotNetDay] = ParseDayWorkHours(dayContent, timeSlotRegex, out var slots);
+                            standardWeekTimeSlots[dotNetDay] = slots;
+                        }
+                        else if (emptyDays.Contains(p6DayNum))
+                        {
+                            // Day is explicitly defined as non-working
+                            standardWeekHours[dotNetDay] = 0m;
+                        }
+                        else
+                        {
+                            // Not defined = default logic (Sun/Sat=0, Weekdays=default)
+                            if (p6DayNum == 1 || p6DayNum == 7) // Sunday or Saturday
+                            {
+                                standardWeekHours[dotNetDay] = 0m;
+                            }
+                            else // Weekday
+                            {
+                                standardWeekHours[dotNetDay] = defaultDayHours;
+                                // Add default time slots if using default hours
+                                if (defaultDayHours == 8m)
+                                {
+                                    standardWeekTimeSlots[dotNetDay].Add((new TimeSpan(8, 0, 0), new TimeSpan(12, 0, 0)));
+                                    standardWeekTimeSlots[dotNetDay].Add((new TimeSpan(13, 0, 0), new TimeSpan(17, 0, 0)));
+                                }
+                                // Add a single block for other default hours
+                                else if (defaultDayHours > 0)
+                                {
+                                    standardWeekTimeSlots[dotNetDay].Add((new TimeSpan(8, 0, 0), new TimeSpan(8, 0, 0).Add(TimeSpan.FromHours((double)defaultDayHours))));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- 2. Parse Exceptions ---
+                var exceptionSections = new[] { "Exceptions", "HolidayOrExceptions", "HolidayOrException" };
+                foreach (var sectionName in exceptionSections)
+                {
+                    int excStart = clndrData.IndexOf(sectionName);
+                    if (excStart > -1)
+                    {
+                        int excEnd = FindSectionEnd(clndrData, excStart);
+                        string excSection = excEnd > excStart ? clndrData.Substring(excStart, excEnd - excStart) : clndrData.Substring(excStart);
+
+                        var excMatches = ExcPatternRegex.Matches(excSection);
+                        ParseAndStoreExceptions(excMatches, exceptionHours, exceptionTimeSlots, timeSlotRegex);
+
+                        excMatches = ExcPatternRegex2.Matches(excSection);
+                        ParseAndStoreExceptions(excMatches, exceptionHours, exceptionTimeSlots, timeSlotRegex);
+                    }
+                }
+
+                // --- 3. Create the Calculator ---
+                var calculator = new WorkingDayCalculator(exceptionHours, exceptionTimeSlots, standardWeekHours, standardWeekTimeSlots);
                 calculators[clndrIdKey] = calculator;
             }
 
+            Console.WriteLine($"Built {calculators.Count} hour-aware calendar calculators.");
             return calculators;
         }
+
+        /// <summary>
+        /// Helper for BuildCalendarCalculators to parse exception data and store it
+        /// </summary>
+        private void ParseAndStoreExceptions(MatchCollection matches,
+            Dictionary<DateTime, decimal> exceptionHours,
+            Dictionary<DateTime, List<(TimeSpan, TimeSpan)>> exceptionTimeSlots,
+            Regex timeSlotRegex)
+        {
+            foreach (Match excMatch in matches)
+            {
+                if (excMatch.Success && excMatch.Groups.Count >= 3)
+                {
+                    if (int.TryParse(excMatch.Groups[2].Value, out int dateSerial))
+                    {
+                        DateTime excDate = ConvertFromOleDate(dateSerial).Date;
+                        string workContent = excMatch.Groups.Count > 3 ? excMatch.Groups[3].Value.Trim() : "()";
+
+                        if (string.IsNullOrEmpty(workContent) || workContent == "()")
+                        {
+                            exceptionHours[excDate] = 0m; // Holiday
+                            exceptionTimeSlots[excDate] = new List<(TimeSpan, TimeSpan)>();
+                        }
+                        else
+                        {
+                            decimal hours = ParseDayWorkHours(workContent, timeSlotRegex, out var slots);
+                            exceptionHours[excDate] = hours;
+                            exceptionTimeSlots[excDate] = slots;
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- 6. Overload for `ParseDayWorkHours` ---
+        // We need to overload `ParseDayWorkHours` because the original (line 1172)
+        // doesn't use a passed-in Regex and doesn't return the slots.
+
+        /// <summary>
+        /// This is an OVERLOAD for the existing ParseDayWorkHours.
+        /// It is used by the new BuildCalendarCalculators.
+        /// The original ParseDayWorkHours (line 1172) can be left as-is for the `Create11XerCalendarDetailed` method.
+        /// </summary>
+        private decimal ParseDayWorkHours(string content, Regex timeSlotRegex, out List<(TimeSpan Start, TimeSpan End)> slots)
+        {
+            slots = new List<(TimeSpan, TimeSpan)>();
+            if (string.IsNullOrWhiteSpace(content)) return 0;
+
+            decimal totalHours = 0;
+            var matches = timeSlotRegex.Matches(content);
+
+            if (matches.Count > 0)
+            {
+                foreach (Match match in matches)
+                {
+                    if (match.Groups.Count >= 5)
+                    {
+                        if (TimeSpan.TryParse(match.Groups[2].Value, out TimeSpan time1) && TimeSpan.TryParse(match.Groups[4].Value, out TimeSpan time2))
+                        {
+                            string type1 = match.Groups[1].Value;
+                            string type2 = match.Groups[3].Value;
+                            TimeSpan start, end;
+
+                            if (type1 == "s" && type2 == "f") { start = time1; end = time2; }
+                            else if (type1 == "f" && type2 == "s") { start = time2; end = time1; }
+                            else { start = time1 < time2 ? time1 : time2; end = time1 < time2 ? time2 : time1; }
+
+                            // Handle 24:00 as end of day
+                            if (end == TimeSpan.Zero && start != TimeSpan.Zero)
+                            {
+                                end = new TimeSpan(24, 0, 0);
+                            }
+
+                            slots.Add((start, end));
+                            totalHours += CalculateHoursBetween(start, end);
+                        }
+                    }
+                }
+            }
+            // Note: This simplified parser only handles the main P6 time slot format.
+            // The other patterns (altPattern1, simplePattern) from the original
+            // method are omitted for clarity as they are less common.
+            return totalHours;
+        }
+
         private string CalculateFreeFloat(
-            string[] predRow,
-            IReadOnlyDictionary<string, int> predIndexes,
-            TaskData succTask,
-            TaskData predTask,
-            decimal lagDays,
-            string predClndrIdKey,  // PREDECESSOR's calendar ID
-            string succClndrIdKey,  // SUCCESSOR's calendar ID
-            Dictionary<string, WorkingDayCalculator> calendarCalculators,
-            Dictionary<string, string> schedOptionsLookup)
+                    string[] predRow,
+                    IReadOnlyDictionary<string, int> predIndexes,
+                    TaskData succTask,
+                    TaskData predTask,
+                    decimal lagHours, // CHANGED from lagDays
+                    string predClndrIdKey,  // PREDECESSOR's calendar ID
+                    string succClndrIdKey,  // SUCCESSOR's calendar ID
+                    Dictionary<string, WorkingDayCalculator> calendarCalculators,
+                    Dictionary<string, string> schedOptionsLookup,
+                    decimal hoursPerDayForSuccessor) // NEW: Pass this in
         {
             // --- Business rule validation ---
             const string NotStarted = "TK_NotStart";
@@ -1710,7 +2134,8 @@ namespace XerToCsvConverter
 
             // Determine which calendar to use for LAG PROJECTION (based on SCHEDOPTIONS)
             string lagCalendarSetting = "rcal_Predecessor"; // P6 Default
-            if (schedOptionsLookup != null && !string.IsNullOrEmpty(succTask.ProjIdKey) && schedOptionsLookup.TryGetValue(succTask.ProjIdKey, out string setting))
+            if (schedOptionsLookup != null && !string.IsNullOrEmpty(succTask.ProjIdKey) &&
+                schedOptionsLookup.TryGetValue(succTask.ProjIdKey, out string setting))
             {
                 if (!string.IsNullOrEmpty(setting))
                 {
@@ -1729,7 +2154,6 @@ namespace XerToCsvConverter
             switch (predType)
             {
                 case "PR_FS": // Finish-to-Start
-                              // This is correct. For In-Progress, EarlyEndDate is the "Remaining Finish".
                     predBaseDate = predTask.EarlyEndDate;
                     succTargetDate = succTask.EarlyStartDate;
                     break;
@@ -1743,7 +2167,6 @@ namespace XerToCsvConverter
                     break;
 
                 case "PR_FF": // Finish-to-Finish
-                              // This is correct. For In-Progress, EarlyEndDate is the "Remaining Finish".
                     predBaseDate = predTask.EarlyEndDate;
                     succTargetDate = succTask.EarlyEndDate;
                     break;
@@ -1764,27 +2187,29 @@ namespace XerToCsvConverter
             if (!predBaseDate.HasValue || !succTargetDate.HasValue)
                 return "";
 
-            // --- STEP 2: Project Date with Lag ---
-            DateTime projectedDate = lagProjectionCalendar.AddWorkingDays(predBaseDate.Value, lagDays);
+            // Ensure dates have a time component (P6 dates often do)
+            // If not, we assume start/end of the default workday for calculation
+            // Note: Our new parser/calculator logic should handle this gracefully.
 
-            // --- STEP 3: Measure Float ---
-            int freeFloat = 0;
+            // --- STEP 2: Project Date with Lag (NOW IN HOURS) ---
+            DateTime projectedDate = lagProjectionCalendar.AddWorkingHours(predBaseDate.Value, lagHours);
 
-            if (predType == "PR_FS")
+            // --- STEP 3: Measure Float (NOW IN HOURS) ---
+            // The old inclusive/exclusive logic is no longer needed.
+            // CountWorkingHours calculates the precise duration between the two DateTimes.
+            decimal freeFloatInHours = succCalendar.CountWorkingHours(projectedDate, succTargetDate.Value);
+
+            // --- STEP 4: Convert Final Float to DAYS ---
+            decimal freeFloatInDays = 0;
+            if (hoursPerDayForSuccessor > 0)
             {
-                // For FS: Count the *gap* between the dates
-                freeFloat = succCalendar.CountWorkingDays(projectedDate, succTargetDate.Value, startInclusive: false, endInclusive: false);
-            }
-            else
-            {
-                // For SS, FF, SF: Count the *span* of the dates
-                freeFloat = succCalendar.CountWorkingDays(projectedDate, succTargetDate.Value, startInclusive: true, endInclusive: true);
-                freeFloat--; // Subtract 1 to match P6 logic (e.g., Mon to Wed is 2 days of float, not 3)
+                freeFloatInDays = freeFloatInHours / hoursPerDayForSuccessor;
             }
 
-            // Format result
-            return freeFloat.ToString("F2", CultureInfo.InvariantCulture);
+            // Format result (as days) with 2 decimal places
+            return freeFloatInDays.ToString("F2", CultureInfo.InvariantCulture);
         }
+
         public XerTable Create07XerActvType() => CreateSimpleKeyedTable(TableNames.ActvType, EnhancedTableNames.XerActvType07,
             new List<Tuple<string, string>> { Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId) });
 
@@ -2065,17 +2490,46 @@ namespace XerToCsvConverter
                     if (int.TryParse(excMatch.Groups[2].Value, out int dateSerial))
                     {
                         DateTime excDate = ConvertFromOleDate(dateSerial);
-                        // Group 3 contains the work content (time slots)
-                        string workContent = excMatch.Groups.Count > 3 ? excMatch.Groups[3].Value : "";
-                        decimal hours = ParseDayWorkHours(workContent);
+                        int dayNum = (int)excDate.DayOfWeek; // .NET: 0=Sun, 1=Mon... 6=Sat
+                        if (dayNum == 0) dayNum = 7; // P6: 1=Sun... 7=Sat. We use 1=Mon... 7=Sun in our GetDayName/GetDayOfWeekNumber.
+                                                     // Let's stick to .NET's DayOfWeek and adjust GetDayName
 
+                        string dayName = excDate.DayOfWeek.ToString(); // e.g., "Monday"
+                        string p6DayName = GetDayName((int)excDate.DayOfWeek + 1); // Get P6 day name (1-7)
+
+                        // Find the standard entry for this day of the week to use as a template
+                        var standardDayEntry = entries.FirstOrDefault(e => e.DayOfWeek == p6DayName && string.IsNullOrEmpty(e.Date));
+
+                        if (standardDayEntry == null) continue; // Should not happen if standard week was parsed
+
+                        // Group 3 contains the work content (time slots)
+                        string workContent = excMatch.Groups.Count > 3 ? excMatch.Groups[3].Value.Trim() : "()";
+
+                        decimal hours;
+                        string entryType;
+
+                        if (string.IsNullOrEmpty(workContent) || workContent == "()")
+                        {
+                            // This is explicitly a non-working day (Holiday)
+                            hours = 0;
+                            entryType = "Exception - Non-Working";
+                        }
+                        else
+                        {
+                            // This is a working exception with its own hours
+                            hours = ParseDayWorkHours(workContent);
+                            entryType = "Exception - Working";
+                        }
+
+                        // Add a NEW entry for this specific date, using the standard day as a base
+                        // but overriding with exception data.
                         entries.Add(new CalendarEntry
                         {
-                            Date = excDate.ToString("yyyy-MM-dd"),
-                            DayOfWeek = excDate.DayOfWeek.ToString(),
-                            WorkingDay = hours > 0 ? "Y" : "N",
-                            WorkHours = FormatHours(hours),
-                            ExceptionType = DetermineExceptionType(hours)
+                            Date = excDate.ToString("yyyy-MM-dd"), // Specific date
+                            DayOfWeek = p6DayName,                 // Day name (e.g., "Monday")
+                            WorkingDay = hours > 0 ? "Y" : "N",    // Y/N based on exception hours
+                            WorkHours = FormatHours(hours),        // Exception hours
+                            ExceptionType = entryType              // "Exception - Working" or "Exception - Non-Working"
                         });
                     }
                 }
@@ -2260,7 +2714,7 @@ namespace XerToCsvConverter
 
         private string GetDayName(int dayNumber)
         {
-            // P6 convention: 1=Sunday, 7=Saturday
+            // P6 convention: 1=Sunday, 2=Monday... 7=Saturday
             switch (dayNumber)
             {
                 case 1: return "Sunday";
