@@ -1801,6 +1801,7 @@ namespace XerToCsvConverter
             public DateTime? EarlyStartDate;
             public DateTime? EarlyEndDate;
             public DateTime? ActualStartDate;
+            public DateTime? ActualEndDate;
         }
 
         // Builds a lookup dictionary for task data needed by predecessor table
@@ -1829,7 +1830,8 @@ namespace XerToCsvConverter
                     TaskType = GetFieldValue(row, indexes, FieldNames.TaskType),
                     EarlyStartDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyStartDate)),
                     EarlyEndDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyEndDate)),
-                    ActualStartDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActStartDate)) // Store ActualStart
+                    ActualStartDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActStartDate)),
+                    ActualEndDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActEndDate))
                 };
 
                 lookup[taskIdKey] = taskData;
@@ -2087,65 +2089,42 @@ namespace XerToCsvConverter
                     IReadOnlyDictionary<string, int> predIndexes,
                     TaskData succTask,
                     TaskData predTask,
-                    decimal lagHours, // CHANGED from lagDays
-                    string predClndrIdKey,  // PREDECESSOR's calendar ID
-                    string succClndrIdKey,  // SUCCESSOR's calendar ID
+                    decimal lagHours,
+                    string predClndrIdKey,
+                    string succClndrIdKey,
                     Dictionary<string, WorkingDayCalculator> calendarCalculators,
                     Dictionary<string, string> schedOptionsLookup,
-                    decimal hoursPerDayForSuccessor) // NEW: Pass this in
+                    decimal hoursPerDayForSuccessor)
         {
             // --- Business rule validation ---
             const string NotStarted = "TK_NotStart";
-            const string InProgress = "TK_Active"; // P6 code for In Progress
+            const string InProgress = "TK_Active";
+            const string Complete = "TK_Complete";
             const string LOE = "TT_LOE";
             const string WBS = "TT_WBS";
 
-            // 1. The Successor MUST be Not Started.
-            if (succTask.StatusCode != NotStarted)
-                return "";
-
-            // 2. The Predecessor MUST be Not Started OR In Progress.
-            if (predTask.StatusCode != NotStarted && predTask.StatusCode != InProgress)
-                return "";
-
-            // 3. Exclude LOE and WBS Summary types
+            // 1. Exclude LOE and WBS Summary types
             if (succTask.TaskType == LOE || succTask.TaskType == WBS ||
                 predTask.TaskType == LOE || predTask.TaskType == WBS)
                 return "";
 
             // --- Calendar Setup ---
-
-            // Get relationship type
             string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
-
-            // Get PREDECESSOR's calendar
             WorkingDayCalculator predCalendar = WorkingDayCalculator.Default;
             if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var predCal))
-            {
                 predCalendar = predCal;
-            }
 
-            // Get SUCCESSOR's calendar
             WorkingDayCalculator succCalendar = WorkingDayCalculator.Default;
             if (!string.IsNullOrEmpty(succClndrIdKey) && calendarCalculators.TryGetValue(succClndrIdKey, out var succCal))
-            {
                 succCalendar = succCal;
-            }
 
-            // Determine which calendar to use for LAG PROJECTION (based on SCHEDOPTIONS)
-            string lagCalendarSetting = "rcal_Predecessor"; // P6 Default
+            string lagCalendarSetting = "rcal_Predecessor";
             if (schedOptionsLookup != null && !string.IsNullOrEmpty(succTask.ProjIdKey) &&
                 schedOptionsLookup.TryGetValue(succTask.ProjIdKey, out string setting))
             {
-                if (!string.IsNullOrEmpty(setting))
-                {
-                    lagCalendarSetting = setting;
-                }
+                if (!string.IsNullOrEmpty(setting)) lagCalendarSetting = setting;
             }
-
-            WorkingDayCalculator lagProjectionCalendar = (lagCalendarSetting == "rcal_Successor")
-                ? succCalendar
-                : predCalendar;
+            WorkingDayCalculator lagProjectionCalendar = (lagCalendarSetting == "rcal_Successor") ? succCalendar : predCalendar;
 
             // --- STEP 1: Determine Base Date and Target Date ---
             DateTime? predBaseDate = null;
@@ -2154,29 +2133,43 @@ namespace XerToCsvConverter
             switch (predType)
             {
                 case "PR_FS": // Finish-to-Start
-                    predBaseDate = predTask.EarlyEndDate;
+                              // Target is Start. Successor MUST be Not Started.
+                    if (succTask.StatusCode != NotStarted) return "";
                     succTargetDate = succTask.EarlyStartDate;
+
+                    // Predecessor driving date: Actual Finish if complete, else Early Finish.
+                    predBaseDate = (predTask.StatusCode == Complete && predTask.ActualEndDate.HasValue)
+                        ? predTask.ActualEndDate : predTask.EarlyEndDate;
                     break;
 
                 case "PR_SS": // Start-to-Start
-                              // Use Actual Start if In-Progress, otherwise use Early Start.
-                    predBaseDate = (predTask.StatusCode == InProgress && predTask.ActualStartDate.HasValue)
-                        ? predTask.ActualStartDate
-                        : predTask.EarlyStartDate;
+                              // Target is Start. Successor MUST be Not Started.
+                    if (succTask.StatusCode != NotStarted) return "";
                     succTargetDate = succTask.EarlyStartDate;
+
+                    // Predecessor driving date: Actual Start if In Progress/Complete, else Early Start.
+                    predBaseDate = (predTask.StatusCode == InProgress || predTask.StatusCode == Complete) && predTask.ActualStartDate.HasValue
+                        ? predTask.ActualStartDate : predTask.EarlyStartDate;
                     break;
 
                 case "PR_FF": // Finish-to-Finish
-                    predBaseDate = predTask.EarlyEndDate;
+                              // Target is Finish. Successor can be Not Started or In Progress.
+                    if (succTask.StatusCode == Complete) return "";
                     succTargetDate = succTask.EarlyEndDate;
+
+                    // Predecessor driving date: Actual Finish if complete, else Early Finish.
+                    predBaseDate = (predTask.StatusCode == Complete && predTask.ActualEndDate.HasValue)
+                        ? predTask.ActualEndDate : predTask.EarlyEndDate;
                     break;
 
                 case "PR_SF": // Start-to-Finish
-                              // Use Actual Start if In-Progress, otherwise use Early Start.
-                    predBaseDate = (predTask.StatusCode == InProgress && predTask.ActualStartDate.HasValue)
-                        ? predTask.ActualStartDate
-                        : predTask.EarlyStartDate;
+                              // Target is Finish. Successor can be Not Started or In Progress.
+                    if (succTask.StatusCode == Complete) return "";
                     succTargetDate = succTask.EarlyEndDate;
+
+                    // Predecessor driving date: Actual Start if In Progress/Complete, else Early Start.
+                    predBaseDate = (predTask.StatusCode == InProgress || predTask.StatusCode == Complete) && predTask.ActualStartDate.HasValue
+                        ? predTask.ActualStartDate : predTask.EarlyStartDate;
                     break;
 
                 default:
@@ -2187,16 +2180,10 @@ namespace XerToCsvConverter
             if (!predBaseDate.HasValue || !succTargetDate.HasValue)
                 return "";
 
-            // Ensure dates have a time component (P6 dates often do)
-            // If not, we assume start/end of the default workday for calculation
-            // Note: Our new parser/calculator logic should handle this gracefully.
-
             // --- STEP 2: Project Date with Lag (NOW IN HOURS) ---
             DateTime projectedDate = lagProjectionCalendar.AddWorkingHours(predBaseDate.Value, lagHours);
 
             // --- STEP 3: Measure Float (NOW IN HOURS) ---
-            // The old inclusive/exclusive logic is no longer needed.
-            // CountWorkingHours calculates the precise duration between the two DateTimes.
             decimal freeFloatInHours = succCalendar.CountWorkingHours(projectedDate, succTargetDate.Value);
 
             // --- STEP 4: Convert Final Float to DAYS ---
@@ -2206,7 +2193,6 @@ namespace XerToCsvConverter
                 freeFloatInDays = freeFloatInHours / hoursPerDayForSuccessor;
             }
 
-            // Format result (as days) with 2 decimal places
             return freeFloatInDays.ToString("F2", CultureInfo.InvariantCulture);
         }
 
