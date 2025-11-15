@@ -2085,31 +2085,34 @@ namespace XerToCsvConverter
         }
 
         private string CalculateFreeFloat(
-                    string[] predRow,
-                    IReadOnlyDictionary<string, int> predIndexes,
-                    TaskData succTask,
-                    TaskData predTask,
-                    decimal lagHours,
-                    string predClndrIdKey,
-                    string succClndrIdKey,
-                    Dictionary<string, WorkingDayCalculator> calendarCalculators,
-                    Dictionary<string, string> schedOptionsLookup,
-                    decimal hoursPerDayForSuccessor)
+            string[] predRow,
+            IReadOnlyDictionary<string, int> predIndexes,
+            TaskData succTask,
+            TaskData predTask,
+            decimal lagHours,
+            string predClndrIdKey,
+            string succClndrIdKey,
+            Dictionary<string, WorkingDayCalculator> calendarCalculators,
+            Dictionary<string, string> schedOptionsLookup,
+            decimal hoursPerDayForSuccessor)
         {
-            // --- Business rule validation ---
-            const string NotStarted = "TK_NotStart";
             const string InProgress = "TK_Active";
             const string Complete = "TK_Complete";
             const string LOE = "TT_LOE";
             const string WBS = "TT_WBS";
 
-            // 1. Exclude LOE and WBS Summary types
+            // Exclude LOE and WBS Summary types
             if (succTask.TaskType == LOE || succTask.TaskType == WBS ||
                 predTask.TaskType == LOE || predTask.TaskType == WBS)
                 return "";
 
+            // Skip completed predecessors - constraint already satisfied (forward-looking approach)
+            if (predTask.StatusCode == Complete)
+                return "";
+
             // --- Calendar Setup ---
             string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
+
             WorkingDayCalculator predCalendar = WorkingDayCalculator.Default;
             if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var predCal))
                 predCalendar = predCal;
@@ -2122,7 +2125,8 @@ namespace XerToCsvConverter
             if (schedOptionsLookup != null && !string.IsNullOrEmpty(succTask.ProjIdKey) &&
                 schedOptionsLookup.TryGetValue(succTask.ProjIdKey, out string setting))
             {
-                if (!string.IsNullOrEmpty(setting)) lagCalendarSetting = setting;
+                if (!string.IsNullOrEmpty(setting))
+                    lagCalendarSetting = setting;
             }
             WorkingDayCalculator lagProjectionCalendar = (lagCalendarSetting == "rcal_Successor") ? succCalendar : predCalendar;
 
@@ -2133,60 +2137,64 @@ namespace XerToCsvConverter
             switch (predType)
             {
                 case "PR_FS": // Finish-to-Start
-                              // Target is Start. Successor MUST be Not Started.
-                    if (succTask.StatusCode != NotStarted) return "";
                     succTargetDate = succTask.EarlyStartDate;
 
-                    // Predecessor driving date: Actual Finish if complete, else Early Finish.
-                    predBaseDate = (predTask.StatusCode == Complete && predTask.ActualEndDate.HasValue)
-                        ? predTask.ActualEndDate : predTask.EarlyEndDate;
+                    // Predecessor is Not Started or In Progress (Complete already filtered)
+                    // For In Progress: Use Early Finish (Data Date + Remaining Duration)
+                    // For Not Started: Use Early Finish (calculated)
+                    predBaseDate = predTask.EarlyEndDate;
                     break;
 
                 case "PR_SS": // Start-to-Start
-                              // Target is Start. Successor MUST be Not Started.
-                    if (succTask.StatusCode != NotStarted) return "";
                     succTargetDate = succTask.EarlyStartDate;
 
-                    // Predecessor driving date: Actual Start if In Progress/Complete, else Early Start.
-                    predBaseDate = (predTask.StatusCode == InProgress || predTask.StatusCode == Complete) && predTask.ActualStartDate.HasValue
-                        ? predTask.ActualStartDate : predTask.EarlyStartDate;
+                    // For In Progress: Use Actual Start (when work really began)
+                    // For Not Started: Use Early Start (calculated)
+                    if (predTask.StatusCode == InProgress && predTask.ActualStartDate.HasValue)
+                    {
+                        predBaseDate = predTask.ActualStartDate;
+                    }
+                    else
+                    {
+                        predBaseDate = predTask.EarlyStartDate;
+                    }
                     break;
 
                 case "PR_FF": // Finish-to-Finish
-                              // Target is Finish. Successor can be Not Started or In Progress.
-                    if (succTask.StatusCode == Complete) return "";
                     succTargetDate = succTask.EarlyEndDate;
 
-                    // Predecessor driving date: Actual Finish if complete, else Early Finish.
-                    predBaseDate = (predTask.StatusCode == Complete && predTask.ActualEndDate.HasValue)
-                        ? predTask.ActualEndDate : predTask.EarlyEndDate;
+                    // Same as FS - use Early Finish
+                    predBaseDate = predTask.EarlyEndDate;
                     break;
 
                 case "PR_SF": // Start-to-Finish
-                              // Target is Finish. Successor can be Not Started or In Progress.
-                    if (succTask.StatusCode == Complete) return "";
                     succTargetDate = succTask.EarlyEndDate;
 
-                    // Predecessor driving date: Actual Start if In Progress/Complete, else Early Start.
-                    predBaseDate = (predTask.StatusCode == InProgress || predTask.StatusCode == Complete) && predTask.ActualStartDate.HasValue
-                        ? predTask.ActualStartDate : predTask.EarlyStartDate;
+                    // Same as SS
+                    if (predTask.StatusCode == InProgress && predTask.ActualStartDate.HasValue)
+                    {
+                        predBaseDate = predTask.ActualStartDate;
+                    }
+                    else
+                    {
+                        predBaseDate = predTask.EarlyStartDate;
+                    }
                     break;
 
                 default:
-                    return ""; // Unknown relationship type
+                    return "";
             }
 
-            // Validate dates
             if (!predBaseDate.HasValue || !succTargetDate.HasValue)
                 return "";
 
-            // --- STEP 2: Project Date with Lag (NOW IN HOURS) ---
+            // --- STEP 2: Project Date with Lag ---
             DateTime projectedDate = lagProjectionCalendar.AddWorkingHours(predBaseDate.Value, lagHours);
 
-            // --- STEP 3: Measure Float (NOW IN HOURS) ---
+            // --- STEP 3: Measure Float ---
             decimal freeFloatInHours = succCalendar.CountWorkingHours(projectedDate, succTargetDate.Value);
 
-            // --- STEP 4: Convert Final Float to DAYS ---
+            // --- STEP 4: Convert to DAYS ---
             decimal freeFloatInDays = 0;
             if (hoursPerDayForSuccessor > 0)
             {
@@ -2665,13 +2673,27 @@ namespace XerToCsvConverter
 
         private decimal CalculateHoursBetween(TimeSpan start, TimeSpan end)
         {
-            if (start == TimeSpan.Zero && end == TimeSpan.Zero) return 0;
-            if (start == end) return 0;
+            if (start == end)
+            {
+                // FIX: P6 uses (s|00:00|f|00:00) to represent a full 24-hour workday.
+                if (start == TimeSpan.Zero)
+                {
+                    return 24m;
+                }
 
-            if (end > start) return (decimal)(end - start).TotalHours;
+                // Any other identical time (e.g., s|08:00|f|08:00) is 0 hours.
+                return 0m;
+            }
+
+            if (end > start)
+            {
+                // Standard day shift (e.g., 08:00 to 17:00)
+                return (decimal)(end - start).TotalHours;
+            }
             else
             {
-                // Handle overnight shifts (e.g., 22:00 to 06:00)
+                // Overnight shift (e.g., 22:00 to 06:00)
+                // This also handles (s|08:00|f|00:00), which is 16 hours.
                 return (decimal)(TimeSpan.FromHours(24) - start + end).TotalHours;
             }
         }
