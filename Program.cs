@@ -53,11 +53,33 @@ namespace XerToCsvConverter
         public const string PredecessorClndrIdKey = "predecessor_clndr_id_key"; public const string PredecessorStatusCode = "predecessor_status_code"; public const string Lag = "lag"; public const string TimePeriodHoursPerDay = "time_period_hours_per_day"; public const string PredecessorStart = "predecessor_start"; public const string PredecessorFinish = "predecessor_finish"; public const string PredecessorTaskType = "predecessor_task_type"; public const string PredecessorFreeFloat = "free_float"; public const string PredType = "pred_type"; public const string LagHrCnt = "lag_hr_cnt";
         // New fields for enhanced calendar detailed table
         public const string DayOfWeekNum = "day_of_week_num"; public const string WorkingDayInt = "working_day_int";
+
+        // ** NEW FIELDS FOR RESOURCE DISTRIBUTION (TABLE 15) **
+        public const string ActRegQty = "act_reg_qty"; public const string ActOtQty = "act_ot_qty"; public const string RemainQty = "remain_qty";
+        public const string RsrcShortName = "rsrc_short_name"; public const string RsrcName = "rsrc_name"; public const string RsrcType = "rsrc_type"; // ** ADDED THIS **
+        public const string UnitName = "unit_name"; public const string UnitAbbr = "unit_abbreviation";
+        public const string DistributionMonth = "distribution_month"; public const string MonthStartDate = "month_start_date"; public const string MonthEndDate = "month_end_date";
+        public const string MonthlyQuantity = "monthly_quantity"; public const string DistributionType = "distribution_type"; public const string IsActual = "is_actual";
+        public const string ProjectName = "ProjectName"; public const string ProjectTaskCode = "project_task_code"; public const string ProjectResource = "project_resource"; public const string Unit = "Unit";
     }
 
-    internal static class EnhancedTableNames { public const string XerTask01 = "01_XER_TASK"; public const string XerProject02 = "02_XER_PROJECT"; public const string XerProjWbs03 = "03_XER_PROJWBS"; public const string XerBaseline04 = "04_XER_BASELINE"; public const string XerPredecessor06 = "06_XER_PREDECESSOR"; public const string XerActvType07 = "07_XER_ACTVTYPE"; public const string XerActvCode08 = "08_XER_ACTVCODE"; public const string XerTaskActv09 = "09_XER_TASKACTV"; public const string XerCalendar10 = "10_XER_CALENDAR"; public const string XerCalendarDetailed11 = "11_XER_CALENDAR_DETAILED"; public const string XerRsrc12 = "12_XER_RSRC"; public const string XerTaskRsrc13 = "13_XER_TASKRSRC"; public const string XerUmeasure14 = "14_XER_UMEASURE"; }
-
-    // Custom String Interning Pool to reduce memory footprint by reusing identical strings
+    internal static class EnhancedTableNames
+    {
+        public const string XerTask01 = "01_XER_TASK";
+        public const string XerProject02 = "02_XER_PROJECT";
+        public const string XerProjWbs03 = "03_XER_PROJWBS";
+        public const string XerBaseline04 = "04_XER_BASELINE";
+        public const string XerPredecessor06 = "06_XER_PREDECESSOR";
+        public const string XerActvType07 = "07_XER_ACTVTYPE";
+        public const string XerActvCode08 = "08_XER_ACTVCODE";
+        public const string XerTaskActv09 = "09_XER_TASKACTV";
+        public const string XerCalendar10 = "10_XER_CALENDAR";
+        public const string XerCalendarDetailed11 = "11_XER_CALENDAR_DETAILED";
+        public const string XerRsrc12 = "12_XER_RSRC";
+        public const string XerTaskRsrc13 = "13_XER_TASKRSRC";
+        public const string XerUmeasure14 = "14_XER_UMEASURE";
+        public const string XerResourceDist15 = "15_XER_RESOURCE_DISTRIBUTION"; // ** NEW **
+    }
     public static class StringInternPool
     {
         // Initialize pool with estimated capacity
@@ -2792,7 +2814,245 @@ namespace XerToCsvConverter
                 Date = ""
             }).ToList();
         }
+
+        // Creates the Resource Distribution table (15_XER_RESOURCE_DISTRIBUTION)
+        public XerTable Create15XerResourceDistribution()
+        {
+            var taskRsrcTable = _dataStore.GetTable(TableNames.TaskRsrc);
+            var taskTable = _dataStore.GetTable(TableNames.Task);
+            var rsrcTable = _dataStore.GetTable(TableNames.Rsrc);
+            var projectTable = _dataStore.GetTable(TableNames.Project);
+            var calendarTable = _dataStore.GetTable(TableNames.Calendar);
+            var umeasureTable = _dataStore.GetTable(TableNames.Umeasure);
+
+            if (!IsTableValid(taskRsrcTable) || !IsTableValid(taskTable) || !IsTableValid(projectTable)) return null;
+
+            try
+            {
+                string[] distColumns = {
+                    FieldNames.TaskIdKey, FieldNames.RsrcIdKey, FieldNames.ClndrIdKey, FieldNames.ProjIdKey,
+                    FieldNames.DistributionMonth, FieldNames.MonthStartDate, FieldNames.MonthEndDate,
+                    FieldNames.MonthlyQuantity, FieldNames.DistributionType,
+                    FieldNames.Start, FieldNames.Finish,
+                    FieldNames.IsActual, FieldNames.StatusCode, FieldNames.TaskCode,
+                    FieldNames.Unit,
+                    FieldNames.ProjectName, FieldNames.RsrcShortName, FieldNames.RsrcName,
+                    FieldNames.RsrcType, FieldNames.ProjectTaskCode, FieldNames.ProjectResource,
+                    FieldNames.MonthUpdate
+                };
+
+                var finalIndexes = distColumns
+                    .Select((name, index) => new { name, index })
+                    .ToDictionary(item => item.name, item => item.index, StringComparer.OrdinalIgnoreCase);
+
+                var resultTable = new XerTable(EnhancedTableNames.XerResourceDist15, taskRsrcTable.RowCount * 5);
+                resultTable.SetHeaders(distColumns.Select(StringInternPool.Intern).ToArray());
+
+                // 1. Build Lookups
+                Console.WriteLine("Building lookups for Resource Distribution...");
+                var taskLookup = BuildTaskLookupDictionary(taskTable);
+                var projDataDates = BuildProjectDataDatesLookup(projectTable);
+
+                var projNameLookup = new Dictionary<string, string>();
+                var pIdx = projectTable.FieldIndexes;
+                foreach (var row in projectTable.Rows)
+                {
+                    string id = GetFieldValue(row.Fields, pIdx, FieldNames.ProjectId);
+                    string name = GetFieldValue(row.Fields, pIdx, "proj_short_name");
+                    if (string.IsNullOrEmpty(name)) name = id;
+                    if (!string.IsNullOrEmpty(id)) projNameLookup[CreateKey(row.SourceFilename, id)] = name;
+                }
+
+                var rsrcLookup = BuildResourceLookup(rsrcTable, umeasureTable);
+                var calendars = BuildCalendarCalculators(null);
+                var calendarHours = BuildCalendarHoursLookup(calendarTable);
+
+                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
+                var resultBag = new ConcurrentBag<DataRow>();
+                var trIdx = taskRsrcTable.FieldIndexes;
+
+                Parallel.ForEach(taskRsrcTable.Rows, parallelOptions, sourceRow =>
+                {
+                    var row = sourceRow.Fields;
+                    string filename = sourceRow.SourceFilename;
+
+                    // Calculated Fields
+                    double.TryParse(GetFieldValue(row, trIdx, FieldNames.ActRegQty), NumberStyles.Any, CultureInfo.InvariantCulture, out double actReg);
+                    double.TryParse(GetFieldValue(row, trIdx, FieldNames.ActOtQty), NumberStyles.Any, CultureInfo.InvariantCulture, out double actOt);
+                    double actualQty = actReg + actOt;
+                    double.TryParse(GetFieldValue(row, trIdx, FieldNames.RemainQty), NumberStyles.Any, CultureInfo.InvariantCulture, out double remainQty);
+
+                    string taskId = GetFieldValue(row, trIdx, FieldNames.TaskId);
+                    string rsrcId = GetFieldValue(row, trIdx, FieldNames.RsrcId);
+                    string taskIdKey = CreateKey(filename, taskId);
+                    string rsrcIdKey = CreateKey(filename, rsrcId);
+
+                    if (!taskLookup.TryGetValue(taskIdKey, out TaskData taskData)) taskData = new TaskData();
+
+                    string clndrIdKey = taskData.ClndrIdKey;
+                    string statusCode = taskData.StatusCode;
+                    string projIdKey = taskData.ProjIdKey;
+                    DateTime dataDate = projDataDates.TryGetValue(projIdKey, out var dd) ? dd : DateTime.MinValue;
+
+                    string rsrcName = "", rsrcShort = "", rsrcType = "", unitName = "";
+                    if (rsrcLookup.TryGetValue(rsrcIdKey, out var rInfo))
+                    {
+                        rsrcName = rInfo.Name;
+                        rsrcShort = rInfo.ShortName;
+                        rsrcType = rInfo.Type;
+                        unitName = rInfo.Unit;
+                    }
+
+                    // Logic Branch 1: Actuals
+                    if (actualQty > 0 && (statusCode == "TK_Complete" || statusCode == "TK_Active"))
+                    {
+                        DateTime startDate = taskData.ActualStartDate ?? DateTime.MinValue;
+                        DateTime endDate = (statusCode == "TK_Complete") ? (taskData.ActualEndDate ?? dataDate) : dataDate;
+
+                        if (startDate != DateTime.MinValue && endDate >= startDate)
+                        {
+                            GenerateDistributionRows(resultBag, filename, finalIndexes, taskIdKey, rsrcIdKey, clndrIdKey, projIdKey, startDate, endDate, actualQty, true, statusCode, taskData.TaskType, row, trIdx, calendars, calendarHours, projNameLookup, rsrcName, rsrcShort, rsrcType, unitName);
+                        }
+                    }
+
+                    // Logic Branch 2: Remaining
+                    if (remainQty > 0 && (statusCode == "TK_NotStart" || statusCode == "TK_Active"))
+                    {
+                        DateTime startDate = (statusCode == "TK_Active") ? dataDate : (taskData.EarlyStartDate ?? DateTime.MinValue);
+                        DateTime endDate = taskData.EarlyEndDate ?? DateTime.MinValue;
+                        if (startDate < dataDate && statusCode == "TK_Active") startDate = dataDate;
+
+                        if (startDate != DateTime.MinValue && endDate != DateTime.MinValue && endDate >= startDate)
+                        {
+                            GenerateDistributionRows(resultBag, filename, finalIndexes, taskIdKey, rsrcIdKey, clndrIdKey, projIdKey, startDate, endDate, remainQty, false, statusCode, taskData.TaskType, row, trIdx, calendars, calendarHours, projNameLookup, rsrcName, rsrcShort, rsrcType, unitName);
+                        }
+                    }
+                });
+
+                resultTable.AddRows(resultBag);
+                return resultTable;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error creating {EnhancedTableNames.XerResourceDist15}: {ex.Message}");
+                return null;
+            }
+        }
+        private Dictionary<string, (string ShortName, string Name, string Type, string Unit)> BuildResourceLookup(XerTable rsrcTable, XerTable umeasureTable)
+        {
+            var lookup = new Dictionary<string, (string, string, string, string)>();
+            if (!IsTableValid(rsrcTable)) return lookup;
+
+            var unitMap = new Dictionary<string, string>();
+            if (IsTableValid(umeasureTable))
+            {
+                var uIdx = umeasureTable.FieldIndexes;
+                foreach (var row in umeasureTable.Rows)
+                {
+                    string id = GetFieldValue(row.Fields, uIdx, FieldNames.UnitId);
+                    string name = GetFieldValue(row.Fields, uIdx, FieldNames.UnitAbbr);
+                    if (string.IsNullOrEmpty(name)) name = GetFieldValue(row.Fields, uIdx, FieldNames.UnitName);
+                    if (!string.IsNullOrEmpty(id)) unitMap[CreateKey(row.SourceFilename, id)] = name;
+                }
+            }
+
+            var rIdx = rsrcTable.FieldIndexes;
+            foreach (var row in rsrcTable.Rows)
+            {
+                string id = GetFieldValue(row.Fields, rIdx, FieldNames.RsrcId);
+                string shortName = GetFieldValue(row.Fields, rIdx, FieldNames.RsrcShortName);
+                string rName = GetFieldValue(row.Fields, rIdx, FieldNames.RsrcName);
+                string type = GetFieldValue(row.Fields, rIdx, FieldNames.RsrcType);
+                string unitId = GetFieldValue(row.Fields, rIdx, FieldNames.UnitId);
+                string unitName = "";
+                if (!string.IsNullOrEmpty(unitId))
+                {
+                    string unitKey = CreateKey(row.SourceFilename, unitId);
+                    unitMap.TryGetValue(unitKey, out unitName);
+                }
+                if (!string.IsNullOrEmpty(id))
+                {
+                    string key = CreateKey(row.SourceFilename, id);
+                    lookup[key] = (shortName, rName, type, unitName);
+                }
+            }
+            return lookup;
+        }
+        private void GenerateDistributionRows(ConcurrentBag<DataRow> bag, string filename, IReadOnlyDictionary<string, int> indexes, string taskIdKey, string rsrcIdKey, string clndrIdKey, string projIdKey, DateTime startDate, DateTime endDate, double totalQty, bool isActual, string statusCode, string taskType, string[] sourceRow, IReadOnlyDictionary<string, int> sourceIdx, Dictionary<string, WorkingDayCalculator> calendars, Dictionary<string, decimal> calendarHoursLookup, Dictionary<string, string> projNameLookup, string rsrcName, string rsrcShort, string rsrcType, string unitName)
+        {
+            WorkingDayCalculator calculator = WorkingDayCalculator.Default;
+            if (!string.IsNullOrEmpty(clndrIdKey) && calendars.TryGetValue(clndrIdKey, out var cal)) calculator = cal;
+
+            decimal hoursPerDay = 8m;
+            if (!string.IsNullOrEmpty(clndrIdKey) && calendarHoursLookup.TryGetValue(clndrIdKey, out decimal hpd)) hoursPerDay = hpd;
+            if (hoursPerDay == 0) hoursPerDay = 8m;
+
+            decimal totalHours = calculator.CountWorkingHours(startDate, endDate);
+            double totalWorkingDays = (double)(totalHours / hoursPerDay);
+            double totalCalendarDays = (endDate - startDate).TotalDays + 1;
+            bool useWorkingDays = totalWorkingDays > 0;
+
+            DateTime currentMonthStart = new DateTime(startDate.Year, startDate.Month, 1);
+            DateTime finalMonthStart = new DateTime(endDate.Year, endDate.Month, 1);
+
+            while (currentMonthStart <= finalMonthStart)
+            {
+                DateTime currentMonthEnd = currentMonthStart.AddMonths(1).AddDays(-1);
+                DateTime periodStart = (startDate > currentMonthStart) ? startDate : currentMonthStart;
+                DateTime periodEnd = (endDate < currentMonthEnd) ? endDate : currentMonthEnd;
+
+                if (periodStart <= periodEnd)
+                {
+                    double distributedQty = 0;
+                    if (useWorkingDays)
+                    {
+                        decimal periodHours = calculator.CountWorkingHours(periodStart, periodEnd);
+                        double periodWorkingDays = (double)(periodHours / hoursPerDay);
+                        distributedQty = totalQty * (periodWorkingDays / totalWorkingDays);
+                    }
+                    else
+                    {
+                        double periodCalendarDays = (periodEnd - periodStart).TotalDays + 1;
+                        distributedQty = totalQty * (periodCalendarDays / totalCalendarDays);
+                    }
+
+                    if (distributedQty > 0 || isActual)
+                    {
+                        string[] newRow = new string[indexes.Count];
+                        SetTransformedField(newRow, indexes, FieldNames.TaskIdKey, taskIdKey);
+                        SetTransformedField(newRow, indexes, FieldNames.RsrcIdKey, rsrcIdKey);
+                        SetTransformedField(newRow, indexes, FieldNames.ClndrIdKey, clndrIdKey);
+                        SetTransformedField(newRow, indexes, FieldNames.ProjIdKey, projIdKey);
+                        SetTransformedField(newRow, indexes, FieldNames.DistributionMonth, currentMonthStart.ToString("yyyy-MM-dd"));
+                        SetTransformedField(newRow, indexes, FieldNames.MonthStartDate, periodStart.ToString("yyyy-MM-dd"));
+                        SetTransformedField(newRow, indexes, FieldNames.MonthEndDate, periodEnd.ToString("yyyy-MM-dd"));
+                        SetTransformedField(newRow, indexes, FieldNames.MonthlyQuantity, distributedQty.ToString("F4", CultureInfo.InvariantCulture));
+                        SetTransformedField(newRow, indexes, FieldNames.DistributionType, useWorkingDays ? "Working Days" : "Calendar Days");
+                        SetTransformedField(newRow, indexes, FieldNames.Start, startDate.ToString("yyyy-MM-dd"));
+                        SetTransformedField(newRow, indexes, FieldNames.Finish, endDate.ToString("yyyy-MM-dd"));
+                        SetTransformedField(newRow, indexes, FieldNames.IsActual, isActual ? "1" : "0");
+                        SetTransformedField(newRow, indexes, FieldNames.StatusCode, statusCode);
+                        SetTransformedField(newRow, indexes, FieldNames.RsrcShortName, rsrcShort);
+                        SetTransformedField(newRow, indexes, FieldNames.RsrcName, rsrcName);
+                        SetTransformedField(newRow, indexes, FieldNames.RsrcType, rsrcType);
+                        SetTransformedField(newRow, indexes, FieldNames.Unit, unitName);
+                        SetTransformedField(newRow, indexes, FieldNames.TaskCode, GetFieldValue(sourceRow, sourceIdx, FieldNames.TaskCode));
+
+                        string projName = "";
+                        if (projNameLookup.TryGetValue(projIdKey, out string pName)) projName = pName;
+                        SetTransformedField(newRow, indexes, FieldNames.ProjectName, projName);
+                        SetTransformedField(newRow, indexes, FieldNames.ProjectResource, $"{projName} - {rsrcName}");
+                        SetTransformedField(newRow, indexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(filename));
+
+                        for (int k = 0; k < newRow.Length; k++) newRow[k] = StringInternPool.Intern(newRow[k] ?? string.Empty);
+                        bag.Add(new DataRow(newRow, filename));
+                    }
+                }
+                currentMonthStart = currentMonthStart.AddMonths(1);
+            }
+        }
     }
+
 
     // Orchestrates the overall processing workflow (Parsing, Transformation, Exporting)
     public class ProcessingService
@@ -3063,7 +3323,6 @@ namespace XerToCsvConverter
 
             return exportedFiles.ToList();
         }
-
         private XerTable GenerateEnhancedTable(XerTransformer transformer, string tableName, ConcurrentDictionary<string, XerTable> cache)
         {
             switch (tableName)
@@ -3086,7 +3345,7 @@ namespace XerToCsvConverter
                 case EnhancedTableNames.XerRsrc12: return transformer.Create12XerRsrc();
                 case EnhancedTableNames.XerTaskRsrc13: return transformer.Create13XerTaskRsrc();
                 case EnhancedTableNames.XerUmeasure14: return transformer.Create14XerUmeasure();
-                // TASK01 is handled separately due to dependencies, but included here for completeness
+                case EnhancedTableNames.XerResourceDist15: return transformer.Create15XerResourceDistribution(); // ** NEW **
                 case EnhancedTableNames.XerTask01: return transformer.Create01XerTaskTable();
             }
             return null;
@@ -3194,7 +3453,7 @@ namespace XerToCsvConverter
         private CancellationTokenSource _cancellationTokenSource; // UI/UX OPTIMIZATION: Cancellation token source
 
         // Power BI Dependency Flags
-        private bool _canCreateTask01 = false; private bool _canCreateProjWbs03 = false; private bool _canCreateBaseline04 = false; private bool _canCreateProject02 = false; private bool _canCreatePredecessor06 = false; private bool _canCreateActvType07 = false; private bool _canCreateActvCode08 = false; private bool _canCreateTaskActv09 = false; private bool _canCreateCalendar10 = false; private bool _canCreateCalendarDetailed11 = false; private bool _canCreateRsrc12 = false; private bool _canCreateTaskRsrc13 = false; private bool _canCreateUmeasure14 = false;
+        private bool _canCreateTask01 = false; private bool _canCreateProjWbs03 = false; private bool _canCreateBaseline04 = false; private bool _canCreateProject02 = false; private bool _canCreatePredecessor06 = false; private bool _canCreateActvType07 = false; private bool _canCreateActvCode08 = false; private bool _canCreateTaskActv09 = false; private bool _canCreateCalendar10 = false; private bool _canCreateCalendarDetailed11 = false; private bool _canCreateRsrc12 = false; private bool _canCreateTaskRsrc13 = false; private bool _canCreateUmeasure14 = false; private bool _canCreateResourceDist15 = false;
 
         public MainForm()
         {
@@ -3262,6 +3521,10 @@ namespace XerToCsvConverter
             this.lstTables.ItemCheck += new ItemCheckEventHandler(this.LstTables_ItemCheck);
             this.lstTables.CheckOnClick = true; // Allows checking with a single click
 
+            // --- CHANGE: Disable automatic sorting to enforce custom order (Enhanced at top) ---
+            this.lstTables.Sorted = false;
+            // ----------------------------------------------------------------------------------
+
             UpdateStatus("Ready");
             LogActivity("Application started.");
             UpdateInputButtonsState();
@@ -3269,7 +3532,6 @@ namespace XerToCsvConverter
             UpdatePbiCheckboxState();
             ResizeListViewColumns();
         }
-
         // --- Event Handlers ---
 
         private void ExitToolStripMenuItem_Click(object sender, EventArgs e)
@@ -3341,6 +3603,7 @@ namespace XerToCsvConverter
         }
 
         // Main Parsing Logic
+        // Main Parsing Logic
         private async void BtnParseXer_Click(object sender, EventArgs e)
         {
             if (!ValidateInputs()) return;
@@ -3392,8 +3655,11 @@ namespace XerToCsvConverter
                 }
                 else
                 {
-                    UpdateTableList();
+                    // --- CHANGE: Check Dependencies FIRST, then Update List ---
                     CheckEnhancedTableDependencies();
+                    UpdateTableList();
+                    // ---------------------------------------------------------
+
                     UpdatePbiCheckboxState();
                     UpdateExportButtonState();
                     toolStripProgressBar.Value = 100;
@@ -3423,7 +3689,6 @@ namespace XerToCsvConverter
                 _cancellationTokenSource = null;
             }
         }
-
         // Export Handlers
         private async void BtnExportAll_Click(object sender, EventArgs e)
         {
@@ -3464,19 +3729,25 @@ namespace XerToCsvConverter
         // Power BI Handlers
         private void ChkCreatePowerBiTables_CheckedChanged(object sender, EventArgs e)
         {
-            UpdateExportButtonState();
-            SaveSettings(); // Persist the change
+            // --- CHANGE: Act as a bulk selector for the list box ---
+            bool shouldSelect = chkCreatePowerBiTables.Checked;
 
-            if (chkCreatePowerBiTables.Checked && !AnyPbiDependencyMet())
+            lstTables.BeginUpdate();
+            for (int i = 0; i < lstTables.Items.Count; i++)
             {
-                // Provide feedback if the user enables it but dependencies are missing
-                ShowWarning(GetMissingDependenciesMessage("Cannot create any Power BI tables due to missing dependencies."));
+                string tableName = lstTables.Items[i].ToString();
+                if (IsEnhancedTableName(tableName))
+                {
+                    lstTables.SetItemChecked(i, shouldSelect);
+                }
             }
-        }
+            lstTables.EndUpdate();
 
+            UpdateExportButtonState();
+            // -------------------------------------------------------
+        }
         private void BtnPbiDetails_Click(object sender, EventArgs e)
         {
-            // Generate detailed status report
             string message = "Power BI Enhanced Table Generation Status:\n\n";
             message += GetPbiTableStatusDetail(EnhancedTableNames.XerTask01, _canCreateTask01);
             message += GetPbiTableStatusDetail(EnhancedTableNames.XerProject02, _canCreateProject02);
@@ -3491,6 +3762,7 @@ namespace XerToCsvConverter
             message += GetPbiTableStatusDetail(EnhancedTableNames.XerRsrc12, _canCreateRsrc12);
             message += GetPbiTableStatusDetail(EnhancedTableNames.XerTaskRsrc13, _canCreateTaskRsrc13);
             message += GetPbiTableStatusDetail(EnhancedTableNames.XerUmeasure14, _canCreateUmeasure14);
+            message += GetPbiTableStatusDetail(EnhancedTableNames.XerResourceDist15, _canCreateResourceDist15); // ** NEW **
 
             message += "\n" + GetMissingDependenciesMessage("Summary:");
             ShowInfo(message, "Power BI Details");
@@ -3568,30 +3840,23 @@ namespace XerToCsvConverter
 
         private List<string> GetAllTableNamesToExport()
         {
-            var names = _allTableNames.ToList();
-            AddAvailablePbiTables(names);
-            return names.Distinct().OrderBy(n => n).ToList();
+            return _allTableNames.Distinct().OrderBy(n => n).ToList();
         }
-
-        // UI/UX OPTIMIZATION: Updated for CheckedListBox
         private List<string> GetSelectedTableNamesToExport()
         {
-            // Get checked items from the CheckedListBox
+            // --- CHANGE: Trust the CheckedListBox completely ---
             var names = lstTables.CheckedItems.Cast<string>().ToList();
 
-            if (names.Count == 0 && _dataStore.TableCount > 0 && !chkCreatePowerBiTables.Checked)
+            if (names.Count == 0)
             {
-                ShowWarning("Please check at least one table from the list, or enable Power BI table generation.");
+                ShowWarning("Please check at least one table from the list.");
                 return new List<string>();
             }
 
-            AddAvailablePbiTables(names);
             return names.Distinct().OrderBy(n => n).ToList();
         }
-
         private void AddAvailablePbiTables(List<string> names)
         {
-            // Include enhanced tables if the checkbox is checked and dependencies are met
             if (chkCreatePowerBiTables.Checked)
             {
                 if (_canCreateTask01) names.Add(EnhancedTableNames.XerTask01);
@@ -3607,6 +3872,7 @@ namespace XerToCsvConverter
                 if (_canCreateRsrc12) names.Add(EnhancedTableNames.XerRsrc12);
                 if (_canCreateTaskRsrc13) names.Add(EnhancedTableNames.XerTaskRsrc13);
                 if (_canCreateUmeasure14) names.Add(EnhancedTableNames.XerUmeasure14);
+                if (_canCreateResourceDist15) names.Add(EnhancedTableNames.XerResourceDist15); // ** NEW **
             }
         }
 
@@ -3704,24 +3970,21 @@ namespace XerToCsvConverter
                 }
                 else if (IsEnhancedTableName(tableName))
                 {
-                    // Enhanced table requested
-                    if (chkCreatePowerBiTables.Checked)
+                    // --- CHANGE: Enhanced table requested via ListBox selection ---
+                    // Double check dependency just to be safe, though UpdateTableList
+                    // should have prevented it from appearing if invalid.
+                    if (CheckSpecificPbiDependency(tableName))
                     {
-                        if (CheckSpecificPbiDependency(tableName))
-                        {
-                            finalTablesToExport.Add(tableName);
-                        }
-                        else
-                        {
-                            // Dependency missing
-                            skippedPbi.Add(tableName);
-                        }
+                        finalTablesToExport.Add(tableName);
+                    }
+                    else
+                    {
+                        skippedPbi.Add(tableName);
                     }
                 }
             }
             return (finalTablesToExport.Distinct().ToList(), skippedPbi);
         }
-
         // --- Dependency Management ---
 
         private void CheckEnhancedTableDependencies()
@@ -3740,7 +4003,7 @@ namespace XerToCsvConverter
 
             _canCreateTask01 = hasTask && hasCalendar && hasProject;
             _canCreateProjWbs03 = hasProjWbs;
-            _canCreateBaseline04 = _canCreateTask01; // Depends on Task01 being possible
+            _canCreateBaseline04 = _canCreateTask01;
             _canCreateProject02 = hasProject;
             _canCreatePredecessor06 = hasTaskPred;
             _canCreateActvType07 = hasActvType;
@@ -3751,6 +4014,7 @@ namespace XerToCsvConverter
             _canCreateRsrc12 = hasRsrc;
             _canCreateTaskRsrc13 = hasTaskRsrc;
             _canCreateUmeasure14 = hasUmeasure;
+            _canCreateResourceDist15 = hasTaskRsrc && hasTask && hasProject && hasCalendar; // ** NEW **
         }
 
         private bool CheckSpecificPbiDependency(string tableName)
@@ -3770,23 +4034,22 @@ namespace XerToCsvConverter
                 case EnhancedTableNames.XerRsrc12: return _canCreateRsrc12;
                 case EnhancedTableNames.XerTaskRsrc13: return _canCreateTaskRsrc13;
                 case EnhancedTableNames.XerUmeasure14: return _canCreateUmeasure14;
+                case EnhancedTableNames.XerResourceDist15: return _canCreateResourceDist15; // ** NEW **
                 default: return false;
             }
         }
-
         private bool AnyPbiDependencyMet()
         {
             return _canCreateTask01 || _canCreateProjWbs03 || _canCreateProject02 ||
                    _canCreatePredecessor06 || _canCreateActvType07 || _canCreateActvCode08 ||
                    _canCreateTaskActv09 || _canCreateCalendar10 || _canCreateCalendarDetailed11 ||
-                   _canCreateRsrc12 || _canCreateTaskRsrc13 || _canCreateUmeasure14;
+                   _canCreateRsrc12 || _canCreateTaskRsrc13 || _canCreateUmeasure14 ||
+                   _canCreateResourceDist15; // ** NEW **
         }
-
         private string GetMissingDependenciesMessage(string prefix)
         {
             var missing = new List<string>();
 
-            // Check dependencies for key tables (Task01 and Baseline04 rely on Task, Calendar, Project)
             if (!_canCreateTask01)
             {
                 if (!_dataStore.ContainsTable(TableNames.Task)) missing.Add(TableNames.Task);
@@ -3794,17 +4057,24 @@ namespace XerToCsvConverter
                 if (!_dataStore.ContainsTable(TableNames.Project)) missing.Add(TableNames.Project);
             }
 
-            // Check others (only if not already covered by the checks above)
             if (!_canCreateProjWbs03 && !_dataStore.ContainsTable(TableNames.ProjWbs)) missing.Add(TableNames.ProjWbs);
-            // Project02 dependency on Project is already checked above
             if (!_canCreatePredecessor06 && !_dataStore.ContainsTable(TableNames.TaskPred)) missing.Add(TableNames.TaskPred);
             if (!_canCreateActvType07 && !_dataStore.ContainsTable(TableNames.ActvType)) missing.Add(TableNames.ActvType);
             if (!_canCreateActvCode08 && !_dataStore.ContainsTable(TableNames.ActvCode)) missing.Add(TableNames.ActvCode);
             if (!_canCreateTaskActv09 && !_dataStore.ContainsTable(TableNames.TaskActv)) missing.Add(TableNames.TaskActv);
-            // Calendar10/11 dependency on Calendar is already checked above
             if (!_canCreateRsrc12 && !_dataStore.ContainsTable(TableNames.Rsrc)) missing.Add(TableNames.Rsrc);
             if (!_canCreateTaskRsrc13 && !_dataStore.ContainsTable(TableNames.TaskRsrc)) missing.Add(TableNames.TaskRsrc);
             if (!_canCreateUmeasure14 && !_dataStore.ContainsTable(TableNames.Umeasure)) missing.Add(TableNames.Umeasure);
+
+            // ** NEW **
+            if (!_canCreateResourceDist15)
+            {
+                if (!_dataStore.ContainsTable(TableNames.TaskRsrc)) missing.Add(TableNames.TaskRsrc);
+                if (!_dataStore.ContainsTable(TableNames.Task)) missing.Add(TableNames.Task);
+                if (!_dataStore.ContainsTable(TableNames.Calendar)) missing.Add(TableNames.Calendar);
+                // Project table already checked in Task01 logic, but essential here too
+                if (!_dataStore.ContainsTable(TableNames.Project)) missing.Add(TableNames.Project);
+            }
 
             var distinctMissing = missing.Distinct().OrderBy(s => s).ToList();
 
@@ -3814,7 +4084,6 @@ namespace XerToCsvConverter
             }
             return prefix + " All dependencies met.";
         }
-
         private bool IsEnhancedTableName(string name)
         {
             var enhancedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
@@ -3824,11 +4093,10 @@ namespace XerToCsvConverter
             EnhancedTableNames.XerActvCode08, EnhancedTableNames.XerTaskActv09,
             EnhancedTableNames.XerCalendar10, EnhancedTableNames.XerCalendarDetailed11,
             EnhancedTableNames.XerRsrc12, EnhancedTableNames.XerTaskRsrc13,
-            EnhancedTableNames.XerUmeasure14
+            EnhancedTableNames.XerUmeasure14, EnhancedTableNames.XerResourceDist15 // ** NEW **
         };
             return enhancedNames.Contains(name);
         }
-
         // --- UI Management Methods ---
 
         private void AddXerFiles(IEnumerable<string> filesToAdd)
@@ -3944,11 +4212,35 @@ namespace XerToCsvConverter
 
         private void UpdateTableList()
         {
-            _allTableNames = _dataStore.TableNames.ToList();
-            FilterTableList(txtTableFilter.Text);
-        }
+            // 1. Get Raw Tables (Sorted Alphabetically)
+            var rawTables = _dataStore.TableNames.OrderBy(n => n).ToList();
 
-        // UI/UX OPTIMIZATION: Updated for CheckedListBox to preserve checked state during filtering
+            // 2. Get Enhanced Tables (Collected based on dependencies)
+            var enhancedTables = new List<string>();
+            if (_canCreateTask01) enhancedTables.Add(EnhancedTableNames.XerTask01);
+            if (_canCreateProject02) enhancedTables.Add(EnhancedTableNames.XerProject02);
+            if (_canCreateProjWbs03) enhancedTables.Add(EnhancedTableNames.XerProjWbs03);
+            if (_canCreateBaseline04) enhancedTables.Add(EnhancedTableNames.XerBaseline04);
+            if (_canCreatePredecessor06) enhancedTables.Add(EnhancedTableNames.XerPredecessor06);
+            if (_canCreateActvType07) enhancedTables.Add(EnhancedTableNames.XerActvType07);
+            if (_canCreateActvCode08) enhancedTables.Add(EnhancedTableNames.XerActvCode08);
+            if (_canCreateTaskActv09) enhancedTables.Add(EnhancedTableNames.XerTaskActv09);
+            if (_canCreateCalendar10) enhancedTables.Add(EnhancedTableNames.XerCalendar10);
+            if (_canCreateCalendarDetailed11) enhancedTables.Add(EnhancedTableNames.XerCalendarDetailed11);
+            if (_canCreateRsrc12) enhancedTables.Add(EnhancedTableNames.XerRsrc12);
+            if (_canCreateTaskRsrc13) enhancedTables.Add(EnhancedTableNames.XerTaskRsrc13);
+            if (_canCreateUmeasure14) enhancedTables.Add(EnhancedTableNames.XerUmeasure14);
+            if (_canCreateResourceDist15) enhancedTables.Add(EnhancedTableNames.XerResourceDist15);
+
+            // 3. Sort Enhanced Tables Alphabetically
+            enhancedTables.Sort();
+
+            // 4. Combine: Enhanced First, then Raw
+            _allTableNames = enhancedTables.Concat(rawTables).ToList();
+
+            // 5. Refresh the list display
+            FilterTableList(txtTableFilter.Text);
+        }        // UI/UX OPTIMIZATION: Updated for CheckedListBox to preserve checked state during filtering
         private void FilterTableList(string filter)
         {
             // Store currently checked items before clearing the list
@@ -4019,17 +4311,16 @@ namespace XerToCsvConverter
         private void UpdateExportButtonState()
         {
             bool hasOutput = !string.IsNullOrEmpty(_outputDirectory) && Directory.Exists(_outputDirectory);
-            bool hasParsedData = _dataStore.TableCount > 0;
-            bool pbiTablesSelectedAndPossible = chkCreatePowerBiTables.Checked && AnyPbiDependencyMet();
 
             // Check if any items are checked in the CheckedListBox
             bool hasCheckedTables = lstTables.CheckedItems.Count > 0;
 
-            btnExportAll.Enabled = hasOutput && (hasParsedData || pbiTablesSelectedAndPossible);
-            // Export Selected is enabled if raw tables are checked OR if PBI generation is enabled and possible
-            btnExportSelected.Enabled = hasOutput && (hasCheckedTables || pbiTablesSelectedAndPossible);
-        }
+            // Export All is enabled if we have any tables known
+            btnExportAll.Enabled = hasOutput && _allTableNames.Count > 0;
 
+            // Export Selected is enabled ONLY if items are actually checked
+            btnExportSelected.Enabled = hasOutput && hasCheckedTables;
+        }
         private void UpdateStatus(string message)
         {
             // Ensure updates happen on the UI thread
