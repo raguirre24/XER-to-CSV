@@ -1726,7 +1726,9 @@ namespace XerToCsvConverter;
 
 
 
-                    writer.WriteLine(lineBuilder.ToString());
+                    // PERFORMANCE: Write StringBuilder directly to avoid ToString() allocation
+                    writer.Write(lineBuilder);
+                    writer.WriteLine();
 
                     lineBuilder.Clear();
 
@@ -1762,11 +1764,11 @@ namespace XerToCsvConverter;
 
 
 
-                        // Write directly to the writer, leveraging its internal buffer.
-
-                        // This avoids allocating intermediate strings for every row in a batch list.
-
-                        writer.WriteLine(lineBuilder.ToString());
+                        // PERFORMANCE: Write StringBuilder directly to TextWriter without intermediate string allocation.
+                        // TextWriter.Write(StringBuilder) iterates through StringBuilder chunks and writes directly,
+                        // avoiding the heap allocation that ToString() would cause for every row.
+                        writer.Write(lineBuilder);
+                        writer.WriteLine();
 
                         lineBuilder.Clear();
 
