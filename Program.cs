@@ -12,6 +12,7 @@ using System.Runtime;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -59,10 +60,13 @@ namespace XerToCsvConverter;
         public bool GeneratePowerBI { get; set; }
     }
 
+    // .NET 8: JSON Source Generator for AOT-friendly, reflection-free serialization
+    [JsonSerializable(typeof(UserSettings))]
+    [JsonSourceGenerationOptions(WriteIndented = true)]
+    internal partial class UserSettingsJsonContext : JsonSerializerContext { }
+
     internal static class UserSettingsStore
     {
-        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions { WriteIndented = true };
-
         private static readonly string SettingsPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "XER to CSV",
@@ -78,7 +82,8 @@ namespace XerToCsvConverter;
                 }
 
                 string json = File.ReadAllText(SettingsPath);
-                return JsonSerializer.Deserialize<UserSettings>(json) ?? new UserSettings();
+                // .NET 8: Use source-generated JSON context for faster, AOT-compatible deserialization
+                return JsonSerializer.Deserialize(json, UserSettingsJsonContext.Default.UserSettings) ?? new UserSettings();
             }
             catch
             {
@@ -97,7 +102,8 @@ namespace XerToCsvConverter;
                     Directory.CreateDirectory(directory);
                 }
 
-                string json = JsonSerializer.Serialize(settings, JsonOptions);
+                // .NET 8: Use source-generated JSON context for faster, AOT-compatible serialization
+                string json = JsonSerializer.Serialize(settings, UserSettingsJsonContext.Default.UserSettings);
                 File.WriteAllText(SettingsPath, json);
             }
             catch
@@ -1668,6 +1674,8 @@ namespace XerToCsvConverter;
     public class CsvExporter
 
     {
+        // .NET 8: SearchValues<char> uses SIMD vectorization for fast character searching
+        private static readonly SearchValues<char> CsvSpecialChars = SearchValues.Create(",\r\n\"");
 
         // PERFORMANCE OPTIMIZATION: Removed explicit batching (List<string>), relying solely on StreamWriter buffering
 
@@ -1794,7 +1802,7 @@ namespace XerToCsvConverter;
 
 
 
-        // Efficient CSV field escaping
+        // Efficient CSV field escaping using .NET 8 SearchValues for SIMD-accelerated character search
 
         private static string EscapeCsvField(string field)
 
@@ -1803,48 +1811,17 @@ namespace XerToCsvConverter;
             if (string.IsNullOrEmpty(field)) return "";
 
 
+            // .NET 8: Use SearchValues with SIMD vectorization for fast special character detection
+            ReadOnlySpan<char> fieldSpan = field.AsSpan();
+            int specialIndex = fieldSpan.IndexOfAny(CsvSpecialChars);
 
-            bool needsQuotes = false;
+            // Check for leading/trailing whitespace
+            bool hasLeadingTrailingSpace = fieldSpan[0] == ' ' || fieldSpan[^1] == ' ';
 
-            bool hasQuotes = false;
+            if (specialIndex < 0 && !hasLeadingTrailingSpace) return field;
 
-
-
-            // Check if quoting is necessary (contains comma, newline, or quotes)
-
-            for (int i = 0; i < field.Length; i++)
-
-            {
-
-                char c = field[i];
-
-                if (c == ',' || c == '\r' || c == '\n') needsQuotes = true;
-
-                else if (c == '"') { needsQuotes = true; hasQuotes = true; }
-
-
-
-                if (needsQuotes && hasQuotes) break;
-
-            }
-
-
-
-            // Check for leading/trailing whitespace (also requires quotes)
-
-            if (!needsQuotes && field.Length > 0 && (field[0] == ' ' || field[field.Length - 1] == ' '))
-
-            {
-
-                needsQuotes = true;
-
-            }
-
-
-
-            if (!needsQuotes) return field;
-
-
+            // Check if field contains quotes (need to escape them)
+            bool hasQuotes = fieldSpan.Contains('"');
 
             // Escape internal quotes and wrap the field
 
@@ -1858,7 +1835,7 @@ namespace XerToCsvConverter;
 
                 sb.Append('"');
 
-                foreach (char c in field)
+                foreach (char c in fieldSpan)
 
                 {
 
@@ -1896,6 +1873,20 @@ namespace XerToCsvConverter;
     {
         private readonly XerDataStore _dataStore;
 
+        // .NET 8: FrozenSet for O(1) lookups on static field sets (faster than HashSet for reads)
+        private static readonly FrozenSet<string> HandledTaskFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            FieldNames.StatusCode, FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
+            FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
+            FieldNames.PercentComplete, FieldNames.DataDate,
+            FieldNames.ActStartDate, FieldNames.ActEndDate,
+            FieldNames.EarlyStartDate, FieldNames.EarlyEndDate,
+            FieldNames.LateStartDate, FieldNames.LateEndDate,
+            FieldNames.CstrDate,
+            FieldNames.TargetStartDate, FieldNames.TargetEndDate,
+            FieldNames.WbsIdKey, FieldNames.TaskIdKey, FieldNames.CalendarIdKey, FieldNames.ProjIdKey,
+            FieldNames.MonthUpdate
+        }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
         // Generated Regex for optimized pattern matching in calendar parsing
         [GeneratedRegex("""\(0\|\|(\d+)\(d\|(\d+)\)\s*\((.*?)\)\s*\)""", RegexOptions.Singleline)]
         private static partial Regex ExcPatternRegex();
@@ -1919,6 +1910,23 @@ namespace XerToCsvConverter;
         // Regex to extract YYMM from filename for MonthUpdate column
         [GeneratedRegex("""^(\d{4})""", RegexOptions.Singleline)]
         private static partial Regex MonthUpdateRegex();
+
+        // .NET 8: GeneratedRegex for time slot parsing in calendar work hours
+        // Pattern 1: (0||N (s|HH:MM|f|HH:MM) ()) - Most common format
+        [GeneratedRegex(@"\(0\|\|\d+\s*\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)\s*\(\s*\)\s*\)", RegexOptions.Singleline)]
+        private static partial Regex TimeSlotPattern1Regex();
+
+        // Pattern 2: (s|HH:MM|f|HH:MM) - Alternative format
+        [GeneratedRegex(@"\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)", RegexOptions.Singleline)]
+        private static partial Regex TimeSlotPattern2Regex();
+
+        // Pattern 3: s|HH:MM|f|HH:MM (Simplified format)
+        [GeneratedRegex(@"([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})", RegexOptions.Singleline)]
+        private static partial Regex TimeSlotPattern3Regex();
+
+        // Regex for collapsing multiple whitespace characters
+        [GeneratedRegex(@"\s{2,}", RegexOptions.Singleline)]
+        private static partial Regex MultiSpaceRegex();
 
 
         public XerTransformer(XerDataStore dataStore)
@@ -2381,42 +2389,11 @@ namespace XerToCsvConverter;
 
 
         // PERFORMANCE OPTIMIZATION: Updated to use dictionary for target indexes (O(1) lookup)
+        // Uses static FrozenSet (HandledTaskFields) for faster field exclusion checks
 
         private void CopyDirectFields(string[] sourceRow, IReadOnlyDictionary<string, int> sourceIndexes, string[] targetRow, IReadOnlyDictionary<string, int> targetIndexes)
 
         {
-
-            // Fields handled by specific transformation logic and should not be copied directly
-
-            var handledFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-
-            FieldNames.StatusCode, FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
-
-            FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
-
-            FieldNames.PercentComplete, FieldNames.DataDate,
-
-            // Date fields are handled by FormatDateFields
-
-            FieldNames.ActStartDate, FieldNames.ActEndDate,
-
-            FieldNames.EarlyStartDate, FieldNames.EarlyEndDate,
-
-            FieldNames.LateStartDate, FieldNames.LateEndDate,
-
-            FieldNames.CstrDate,
-
-            FieldNames.TargetStartDate, FieldNames.TargetEndDate,
-
-            // Key fields are generated separately
-
-            FieldNames.WbsIdKey, FieldNames.TaskIdKey, FieldNames.CalendarIdKey, FieldNames.ProjIdKey,
-
-            FieldNames.MonthUpdate // Don't copy this directly
-
-        };
-
-
 
             // Iterate over the target dictionary keys/values
 
@@ -2431,8 +2408,9 @@ namespace XerToCsvConverter;
 
 
                 // If the source has the column and it's not handled elsewhere, copy it
+                // Uses static FrozenSet for O(1) lookup
 
-                if (sourceIndexes.TryGetValue(colName, out int srcIndex) && !handledFields.Contains(colName))
+                if (sourceIndexes.TryGetValue(colName, out int srcIndex) && !HandledTaskFields.Contains(colName))
 
                 {
 
@@ -5263,9 +5241,9 @@ namespace XerToCsvConverter;
 
             result = CleanRegex1().Replace(result, "$1");
             result = CleanRegex2().Replace(result, "$1");
-            // Collapse multiple spaces (using non-compiled Regex here as it's run once per calendar)
+            // .NET 8: Use source-generated regex for collapsing multiple spaces
 
-            result = Regex.Replace(result, @"\s{2,}", " ");
+            result = MultiSpaceRegex().Replace(result, " ");
 
 
 
@@ -5278,6 +5256,7 @@ namespace XerToCsvConverter;
         // Parses work hours from time slot definitions within clndr_data
 
         // This logic handles various P6 time slot formats (s=start, f=finish)
+        // .NET 8: Uses GeneratedRegex for source-generated, compiled regex patterns
 
         private decimal ParseDayWorkHours(string content)
 
@@ -5292,16 +5271,9 @@ namespace XerToCsvConverter;
 
 
             // Pattern 1: (0||N (s|HH:MM|f|HH:MM) ()) - Most common format
+            // Uses source-generated regex for optimal performance
 
-            // Regex is defined locally here as these patterns are less critical than the main parsing ones,
-
-            // and compiling them adds overhead if they aren't used frequently.
-
-            string timeSlotPattern = @"\(0\|\|\d+\s*\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)\s*\(\s*\)\s*\)";
-
-            var timeSlotRegex = new Regex(timeSlotPattern, RegexOptions.Singleline);
-
-            var matches = timeSlotRegex.Matches(content);
+            var matches = TimeSlotPattern1Regex().Matches(content);
 
 
 
@@ -5325,11 +5297,7 @@ namespace XerToCsvConverter;
 
             // Pattern 2: (s|HH:MM|f|HH:MM) - Alternative format
 
-            string altPattern1 = @"\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)";
-
-            var altRegex1 = new Regex(altPattern1, RegexOptions.Singleline);
-
-            matches = altRegex1.Matches(content);
+            matches = TimeSlotPattern2Regex().Matches(content);
 
 
 
@@ -5353,11 +5321,7 @@ namespace XerToCsvConverter;
 
             // Pattern 3: s|HH:MM|f|HH:MM (Simplified format)
 
-            string simplePattern = @"([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})";
-
-            var simpleRegex = new Regex(simplePattern, RegexOptions.Singleline);
-
-            matches = simpleRegex.Matches(content);
+            matches = TimeSlotPattern3Regex().Matches(content);
 
 
 
