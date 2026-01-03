@@ -1670,29 +1670,21 @@ namespace XerToCsvConverter;
 
 
     // Handles exporting data to CSV format
-
     public class CsvExporter
-
     {
         // .NET 8: SearchValues<char> uses SIMD vectorization for fast character searching
         private static readonly SearchValues<char> CsvSpecialChars = SearchValues.Create(",\r\n\"");
 
         // PERFORMANCE OPTIMIZATION: Removed explicit batching (List<string>), relying solely on StreamWriter buffering
-
         public void WriteTableToCsv(XerTable? table, string csvFilePath)
         {
             if (table == null || table.Headers == null) return;
             if (table.IsEmpty && table.Headers.Length == 0) return;
 
-
             int bufferSize = PerformanceConfig.CsvWriteBufferSize;
 
-
-
             try
-
             {
-
                 // Use buffered FileStream and StreamWriter
                 var fileOptions = new FileStreamOptions
                 {
@@ -1708,159 +1700,83 @@ namespace XerToCsvConverter;
                 {
                     string[] headerRow = table.Headers;
 
-                    // Use a reusable StringBuilder for line construction
-
-                    var lineBuilder = new StringBuilder(PerformanceConfig.StringBuilderInitialCapacity);
-
-
-
                     // Write Headers
-
                     for (int i = 0; i < headerRow.Length; i++)
-
                     {
-
-                        if (i > 0) lineBuilder.Append(',');
-
-                        lineBuilder.Append(EscapeCsvField(headerRow[i]));
-
+                        if (i > 0) writer.Write(',');
+                        WriteEscapedField(writer, headerRow[i]);
                     }
 
                     // Add FileName column
-
-                    if (headerRow.Length > 0) lineBuilder.Append(',');
-
-                    lineBuilder.Append(EscapeCsvField(FieldNames.FileName));
-
-
-
-                    // PERFORMANCE: Write StringBuilder directly to avoid ToString() allocation
-                    writer.Write(lineBuilder);
+                    if (headerRow.Length > 0) writer.Write(',');
+                    WriteEscapedField(writer, FieldNames.FileName);
                     writer.WriteLine();
 
-                    lineBuilder.Clear();
-
-
-
                     // Write Data Rows
-
                     foreach (var dataRow in table.Rows)
-
                     {
-
                         string[] rowFields = dataRow.Fields;
-
                         if (rowFields == null) continue;
 
-
-
                         for (int j = 0; j < rowFields.Length; j++)
-
                         {
-
-                            if (j > 0) lineBuilder.Append(',');
-
-                            lineBuilder.Append(EscapeCsvField(rowFields[j] ?? string.Empty));
-
+                            if (j > 0) writer.Write(',');
+                            WriteEscapedField(writer, rowFields[j] ?? string.Empty);
                         }
 
                         // Add FileName data
-
-                        if (rowFields.Length > 0) lineBuilder.Append(',');
-
-                        lineBuilder.Append(EscapeCsvField(dataRow.SourceFilename));
-
-
-
-                        // PERFORMANCE: Write StringBuilder directly to TextWriter without intermediate string allocation.
-                        // TextWriter.Write(StringBuilder) iterates through StringBuilder chunks and writes directly,
-                        // avoiding the heap allocation that ToString() would cause for every row.
-                        writer.Write(lineBuilder);
+                        if (rowFields.Length > 0) writer.Write(',');
+                        WriteEscapedField(writer, dataRow.SourceFilename);
                         writer.WriteLine();
-
-                        lineBuilder.Clear();
-
                     }
 
-
-
                     writer.Flush();
-
                 }
-
             }
-
             catch (Exception ex)
-
             {
-
                 throw new Exception($"Failed to write CSV file '{Path.GetFileName(csvFilePath)}'. {ex.Message}", ex);
-
             }
-
         }
 
-
-
-        // Efficient CSV field escaping using .NET 8 SearchValues for SIMD-accelerated character search
-
-        private static string EscapeCsvField(string field)
-
+        // Efficient CSV field escaping writing directly to the stream to avoid allocations
+        private static void WriteEscapedField(TextWriter writer, string field)
         {
-
-            if (string.IsNullOrEmpty(field)) return "";
-
+            if (string.IsNullOrEmpty(field)) return;
 
             // .NET 8: Use SearchValues with SIMD vectorization for fast special character detection
             ReadOnlySpan<char> fieldSpan = field.AsSpan();
             int specialIndex = fieldSpan.IndexOfAny(CsvSpecialChars);
 
             // Check for leading/trailing whitespace
-            bool hasLeadingTrailingSpace = fieldSpan[0] == ' ' || fieldSpan[^1] == ' ';
+            bool hasLeadingTrailingSpace = fieldSpan.Length > 0 && (fieldSpan[0] == ' ' || fieldSpan[^1] == ' ');
 
-            if (specialIndex < 0 && !hasLeadingTrailingSpace) return field;
-
-            // Check if field contains quotes (need to escape them)
-            bool hasQuotes = fieldSpan.Contains('"');
+            if (specialIndex < 0 && !hasLeadingTrailingSpace)
+            {
+                writer.Write(field);
+                return;
+            }
 
             // Escape internal quotes and wrap the field
-
-            if (hasQuotes)
-
+            writer.Write('"');
+            
+            // If we have no quotes, we can construct the quoted string faster
+            if (!fieldSpan.Contains('"'))
             {
-
-                // Estimate capacity to avoid resizing
-
-                var sb = new StringBuilder(field.Length + 10);
-
-                sb.Append('"');
-
-                foreach (char c in fieldSpan)
-
-                {
-
-                    if (c == '"') sb.Append("\"\""); // Double up quotes
-
-                    else sb.Append(c);
-
-                }
-
-                sb.Append('"');
-
-                return sb.ToString();
-
+                writer.Write(field);
             }
-
             else
-
             {
-
-                return $"\"{field}\"";
-
+                // Process character by character for quotes
+                foreach (char c in fieldSpan)
+                {
+                    if (c == '"') writer.Write("\"\""); // Double up quotes
+                    else writer.Write(c);
+                }
             }
 
+            writer.Write('"');
         }
-
     }
 
 
