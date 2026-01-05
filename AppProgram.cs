@@ -17,7 +17,7 @@ Thank you for using this software.
 """;
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         if (EnableExpiration)
         {
