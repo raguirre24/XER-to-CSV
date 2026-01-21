@@ -4193,247 +4193,130 @@ namespace XerToCsvConverter;
 
 
 
-        private string CalculateFreeFloat(
+    private string CalculateFreeFloat(
+        string[] predRow,
+        IReadOnlyDictionary<string, int> predIndexes,
+        TaskData succTask,
+        TaskData predTask,
+        decimal lagHours,
+        string predClndrIdKey,
+        string succClndrIdKey,
+        Dictionary<string, WorkingDayCalculator> calendarCalculators,
+        Dictionary<string, string> schedOptionsLookup,
+        decimal hoursPerDayForSuccessor)
+    {
+        const string Complete = "TK_Complete";
+        const string Active = "TK_Active";
+        const string LOE = "TT_LOE";
+        const string WBS = "TT_WBS";
 
-            string[] predRow,
-
-            IReadOnlyDictionary<string, int> predIndexes,
-
-            TaskData succTask,
-
-            TaskData predTask,
-
-            decimal lagHours,
-
-            string predClndrIdKey,
-
-            string succClndrIdKey,
-
-            Dictionary<string, WorkingDayCalculator> calendarCalculators,
-
-            Dictionary<string, string> schedOptionsLookup,
-
-            decimal hoursPerDayForSuccessor)
-
+        // Rule 1: Exclude LOE and WBS Summary tasks (no meaningful float)
+        if (succTask.TaskType == LOE || succTask.TaskType == WBS ||
+            predTask.TaskType == LOE || predTask.TaskType == WBS)
         {
-
-            const string Complete = "TK_Complete";
-
-            const string LOE = "TT_LOE";
-
-            const string WBS = "TT_WBS";
-
-
-
-
-
-            // Rule 1: Exclude LOE and WBS Summary tasks (no meaningful float)
-
-            if (succTask.TaskType == LOE || succTask.TaskType == WBS ||
-
-                predTask.TaskType == LOE || predTask.TaskType == WBS)
-
-            {
-
-                return "";
-
-            }
-
-
-
-            // Rule 2: Exclude completed successors (float no longer meaningful)
-
-            if (succTask.StatusCode == Complete)
-
-            {
-
-                return "";
-
-            }
-
-
-
-            // Rule 3: Exclude completed predecessors (P6 shows blank)
-
-            // The constraint is historical - predecessor already finished
-
-            if (predTask.StatusCode == Complete)
-
-            {
-
-                return "";
-
-            }
-
-
-
-            WorkingDayCalculator predCalendar = WorkingDayCalculator.Default;
-
-            if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var predCal))
-
-            {
-
-                predCalendar = predCal;
-
-            }
-
-
-
-            WorkingDayCalculator succCalendar = WorkingDayCalculator.Default;
-
-            if (!string.IsNullOrEmpty(succClndrIdKey) && calendarCalculators.TryGetValue(succClndrIdKey, out var succCal))
-
-            {
-
-                succCalendar = succCal;
-
-            }
-
-
-
-            // Determine lag projection calendar based on project settings
-
-            string lagCalendarSetting = "rcal_Predecessor";
-
-            if (schedOptionsLookup != null && !string.IsNullOrEmpty(succTask.ProjIdKey) &&
-
-                schedOptionsLookup.TryGetValue(succTask.ProjIdKey, out string? setting))
-
-            {
-
-                if (!string.IsNullOrEmpty(setting))
-
-                {
-
-                    lagCalendarSetting = setting;
-
-                }
-
-            }
-
-
-
-            WorkingDayCalculator lagProjectionCalendar =
-
-                (lagCalendarSetting == "rcal_Successor") ? succCalendar : predCalendar;
-
-
-
-            // Get the relationship type from the predecessor row
-
-            string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
-
-
-
-            DateTime? predBaseDate = null;
-
-            DateTime? succTargetDate = null;
-
-
-
-            switch (predType)
-
-            {
-
-                case "PR_FS": // Finish-to-Start
-
-                              // Free Float = Succ.EarlyStart - (Pred.EarlyFinish + Lag)
-
-                    predBaseDate = predTask.EarlyEndDate;
-
-                    succTargetDate = succTask.EarlyStartDate;
-
-                    break;
-
-
-
-                case "PR_SS": // Start-to-Start
-
-                              // Free Float = Succ.EarlyStart - (Pred.EarlyStart + Lag)
-
-                    predBaseDate = predTask.EarlyStartDate;
-
-                    succTargetDate = succTask.EarlyStartDate;
-
-                    break;
-
-
-
-                case "PR_FF": // Finish-to-Finish
-
-                              // Free Float = Succ.EarlyFinish - (Pred.EarlyFinish + Lag)
-
-                    predBaseDate = predTask.EarlyEndDate;
-
-                    succTargetDate = succTask.EarlyEndDate;
-
-                    break;
-
-
-
-                case "PR_SF": // Start-to-Finish
-
-                              // Free Float = Succ.EarlyFinish - (Pred.EarlyStart + Lag)
-
-                    predBaseDate = predTask.EarlyStartDate;
-
-                    succTargetDate = succTask.EarlyEndDate;
-
-                    break;
-
-
-
-                default:
-
-                    return "";
-
-            }
-
-
-
-            // Validate dates exist
-
-            if (!predBaseDate.HasValue || !succTargetDate.HasValue)
-
-            {
-
-                return "";
-
-            }
-
-
-
-
-
-            DateTime projectedConstraintDate = lagProjectionCalendar.AddWorkingHours(predBaseDate.Value, lagHours);
-
-
-
-
-
-            decimal freeFloatInHours = succCalendar.CountWorkingHours(projectedConstraintDate, succTargetDate.Value);
-
-
-
-
-
-            decimal freeFloatInDays = 0;
-
-            if (hoursPerDayForSuccessor > 0)
-
-            {
-
-                freeFloatInDays = freeFloatInHours / hoursPerDayForSuccessor;
-
-            }
-
-
-
-            return freeFloatInDays.ToString("F2", CultureInfo.InvariantCulture);
-
+            return "";
         }
 
+        // Rule 2: Exclude completed successors (float no longer meaningful)
+        if (succTask.StatusCode == Complete)
+        {
+            return "";
+        }
 
+        // Rule 3: Exclude completed predecessors (look-forward approach)
+        if (predTask.StatusCode == Complete)
+        {
+            return "";
+        }
+
+        WorkingDayCalculator predCalendar = WorkingDayCalculator.Default;
+        if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var predCal))
+        {
+            predCalendar = predCal;
+        }
+
+        WorkingDayCalculator succCalendar = WorkingDayCalculator.Default;
+        if (!string.IsNullOrEmpty(succClndrIdKey) && calendarCalculators.TryGetValue(succClndrIdKey, out var succCal))
+        {
+            succCalendar = succCal;
+        }
+
+        // Determine lag projection calendar based on project settings
+        string lagCalendarSetting = "rcal_Predecessor";
+        if (schedOptionsLookup != null && !string.IsNullOrEmpty(succTask.ProjIdKey) &&
+            schedOptionsLookup.TryGetValue(succTask.ProjIdKey, out string? setting))
+        {
+            if (!string.IsNullOrEmpty(setting))
+            {
+                lagCalendarSetting = setting;
+            }
+        }
+
+        WorkingDayCalculator lagProjectionCalendar =
+            (lagCalendarSetting == "rcal_Successor") ? succCalendar : predCalendar;
+
+        // Get the relationship type from the predecessor row
+        string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
+
+        DateTime? predBaseDate = null;
+        DateTime? succTargetDate = null;
+
+        // Determine base dates based on relationship type and task status
+        // KEY FIX: Use Actual dates when predecessor/successor has started
+        switch (predType)
+        {
+            case "PR_FS": // Finish-to-Start
+                predBaseDate = predTask.EarlyEndDate;
+                succTargetDate = (succTask.StatusCode == Active) 
+                    ? succTask.ActualStartDate ?? succTask.EarlyStartDate 
+                    : succTask.EarlyStartDate;
+                break;
+
+            case "PR_SS": // Start-to-Start
+                // FIX: If predecessor started, use Actual Start (not Early Start)
+                predBaseDate = (predTask.StatusCode == Active) 
+                    ? predTask.ActualStartDate ?? predTask.EarlyStartDate 
+                    : predTask.EarlyStartDate;
+                succTargetDate = (succTask.StatusCode == Active) 
+                    ? succTask.ActualStartDate ?? succTask.EarlyStartDate 
+                    : succTask.EarlyStartDate;
+                break;
+
+            case "PR_FF": // Finish-to-Finish
+                predBaseDate = predTask.EarlyEndDate;
+                succTargetDate = succTask.EarlyEndDate;
+                break;
+
+            case "PR_SF": // Start-to-Finish
+                // FIX: If predecessor started, use Actual Start
+                predBaseDate = (predTask.StatusCode == Active) 
+                    ? predTask.ActualStartDate ?? predTask.EarlyStartDate 
+                    : predTask.EarlyStartDate;
+                succTargetDate = succTask.EarlyEndDate;
+                break;
+
+            default:
+                return "";
+        }
+
+        // Validate dates exist
+        if (!predBaseDate.HasValue || !succTargetDate.HasValue)
+        {
+            return "";
+        }
+
+        DateTime projectedConstraintDate = lagProjectionCalendar.AddWorkingHours(predBaseDate.Value, lagHours);
+
+        decimal freeFloatInHours = succCalendar.CountWorkingHours(projectedConstraintDate, succTargetDate.Value);
+
+        decimal freeFloatInDays = 0;
+        if (hoursPerDayForSuccessor > 0)
+        {
+            freeFloatInDays = freeFloatInHours / hoursPerDayForSuccessor;
+        }
+
+        return freeFloatInDays.ToString("F2", CultureInfo.InvariantCulture);
+    }
 
         public XerTable? Create07XerActvType() => CreateSimpleKeyedTable(TableNames.ActvType, EnhancedTableNames.XerActvType07,
             new List<Tuple<string, string>> { Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId) });
