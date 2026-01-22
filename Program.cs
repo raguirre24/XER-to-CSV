@@ -4215,8 +4215,7 @@ namespace XerToCsvConverter;
             return "";
         }
 
-        // Rule 2: Exclude completed predecessors only (constraint is historical)
-        // Completed successors ARE calculated (verified: CP2 shows 0 in P6)
+        // Rule 2: Exclude completed predecessors (constraint is historical)
         if (predTask.StatusCode == Complete)
         {
             return "";
@@ -4305,6 +4304,10 @@ namespace XerToCsvConverter;
         {
             freeFloatInDays = freeFloatInHours / hoursPerDayForSuccessor;
         }
+
+        // P6 clamps relationship free float to minimum 0
+        // Negative values mean the relationship isn't driving (constraint already satisfied or OOS)
+        freeFloatInDays = Math.Max(0, freeFloatInDays);
 
         return freeFloatInDays.ToString("F2", CultureInfo.InvariantCulture);
     }
