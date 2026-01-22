@@ -4191,8 +4191,6 @@ namespace XerToCsvConverter;
 
         }
 
-
-
     private string CalculateFreeFloat(
         string[] predRow,
         IReadOnlyDictionary<string, int> predIndexes,
@@ -4210,25 +4208,21 @@ namespace XerToCsvConverter;
         const string LOE = "TT_LOE";
         const string WBS = "TT_WBS";
 
-        // Rule 1: Exclude LOE and WBS Summary tasks (no meaningful float)
+        // Rule 1: Exclude LOE and WBS Summary tasks (don't drive the programme)
         if (succTask.TaskType == LOE || succTask.TaskType == WBS ||
             predTask.TaskType == LOE || predTask.TaskType == WBS)
         {
             return "";
         }
 
-        // Rule 2: Exclude completed successors (float no longer meaningful)
-        if (succTask.StatusCode == Complete)
-        {
-            return "";
-        }
-
-        // Rule 3: Exclude completed predecessors (look-forward approach)
+        // Rule 2: Exclude completed predecessors only (constraint is historical)
+        // Completed successors ARE calculated (verified: CP2 shows 0 in P6)
         if (predTask.StatusCode == Complete)
         {
             return "";
         }
 
+        // Get calendars
         WorkingDayCalculator predCalendar = WorkingDayCalculator.Default;
         if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var predCal))
         {
@@ -4255,31 +4249,25 @@ namespace XerToCsvConverter;
         WorkingDayCalculator lagProjectionCalendar =
             (lagCalendarSetting == "rcal_Successor") ? succCalendar : predCalendar;
 
-        // Get the relationship type from the predecessor row
+        // Get the relationship type
         string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
 
         DateTime? predBaseDate = null;
         DateTime? succTargetDate = null;
 
-        // Determine base dates based on relationship type and task status
-        // KEY FIX: Use Actual dates when predecessor/successor has started
         switch (predType)
         {
             case "PR_FS": // Finish-to-Start
                 predBaseDate = predTask.EarlyEndDate;
-                succTargetDate = (succTask.StatusCode == Active) 
-                    ? succTask.ActualStartDate ?? succTask.EarlyStartDate 
-                    : succTask.EarlyStartDate;
+                succTargetDate = succTask.EarlyStartDate;
                 break;
 
             case "PR_SS": // Start-to-Start
-                // FIX: If predecessor started, use Actual Start (not Early Start)
-                predBaseDate = (predTask.StatusCode == Active) 
-                    ? predTask.ActualStartDate ?? predTask.EarlyStartDate 
+                          // When predecessor is Active, use Actual Start
+                predBaseDate = (predTask.StatusCode == Active)
+                    ? predTask.ActualStartDate ?? predTask.EarlyStartDate
                     : predTask.EarlyStartDate;
-                succTargetDate = (succTask.StatusCode == Active) 
-                    ? succTask.ActualStartDate ?? succTask.EarlyStartDate 
-                    : succTask.EarlyStartDate;
+                succTargetDate = succTask.EarlyStartDate;
                 break;
 
             case "PR_FF": // Finish-to-Finish
@@ -4288,9 +4276,9 @@ namespace XerToCsvConverter;
                 break;
 
             case "PR_SF": // Start-to-Finish
-                // FIX: If predecessor started, use Actual Start
-                predBaseDate = (predTask.StatusCode == Active) 
-                    ? predTask.ActualStartDate ?? predTask.EarlyStartDate 
+                          // When predecessor is Active, use Actual Start
+                predBaseDate = (predTask.StatusCode == Active)
+                    ? predTask.ActualStartDate ?? predTask.EarlyStartDate
                     : predTask.EarlyStartDate;
                 succTargetDate = succTask.EarlyEndDate;
                 break;
@@ -4305,10 +4293,13 @@ namespace XerToCsvConverter;
             return "";
         }
 
+        // Project constraint date by lag hours
         DateTime projectedConstraintDate = lagProjectionCalendar.AddWorkingHours(predBaseDate.Value, lagHours);
 
+        // Calculate free float in working hours
         decimal freeFloatInHours = succCalendar.CountWorkingHours(projectedConstraintDate, succTargetDate.Value);
 
+        // Convert to days
         decimal freeFloatInDays = 0;
         if (hoursPerDayForSuccessor > 0)
         {
@@ -4318,7 +4309,7 @@ namespace XerToCsvConverter;
         return freeFloatInDays.ToString("F2", CultureInfo.InvariantCulture);
     }
 
-        public XerTable? Create07XerActvType() => CreateSimpleKeyedTable(TableNames.ActvType, EnhancedTableNames.XerActvType07,
+    public XerTable? Create07XerActvType() => CreateSimpleKeyedTable(TableNames.ActvType, EnhancedTableNames.XerActvType07,
             new List<Tuple<string, string>> { Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId) });
 
 
