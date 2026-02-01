@@ -3283,6 +3283,8 @@ namespace XerToCsvConverter;
 
                 finalHeadersList.Add(FieldNames.PredecessorFreeFloat); // This is the new 'free_float' in DAYS
 
+                finalHeadersList.Add(FieldNames.TotalFloat);
+
                 finalHeadersList.Add(FieldNames.MonthUpdate);
 
                 string[] finalHeaders = finalHeadersList.Select(s => StringInternPool.Intern(s) ?? string.Empty).ToArray();
@@ -3314,6 +3316,12 @@ namespace XerToCsvConverter;
                 var calendarCalculators = BuildCalendarCalculators(null); // Pass null, it now reads from raw CALENDAR
 
                 var schedOptionsLookup = BuildProjectScheduleOptionsLookup(schedOptionsTable);
+
+
+
+                // Build Total Float Lookup from 01_XER_TASK if available
+
+
 
 
 
@@ -3491,6 +3499,36 @@ namespace XerToCsvConverter;
 
 
 
+                    // --- NEW: Calculate Total Float for Successor ---
+
+                    string totalFloatVal = "";
+
+
+
+                    // Fallback to calculation if not found
+
+                    if (!string.Equals(succTask.StatusCode, "TK_Complete", StringComparison.OrdinalIgnoreCase) && 
+
+                        !string.IsNullOrEmpty(succTask.TotalFloatHrCnt) && hoursPerDayForSuccessor > 0)
+
+                    {
+
+                         if (decimal.TryParse(succTask.TotalFloatHrCnt, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal tfHours))
+
+                         {
+
+                             totalFloatVal = (tfHours / hoursPerDayForSuccessor).ToString("F1", CultureInfo.InvariantCulture);
+
+                         }
+
+                    }
+
+
+
+                    SetTransformedField(transformed, finalIndexes, FieldNames.TotalFloat, totalFloatVal);
+
+
+
                     // Add MonthUpdate value
 
                     SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
@@ -3553,6 +3591,8 @@ namespace XerToCsvConverter;
 
             public DateTime? ActualEndDate;
 
+            public string? TotalFloatHrCnt;
+
         }
 
 
@@ -3613,7 +3653,9 @@ namespace XerToCsvConverter;
 
                     ActualStartDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActStartDate)),
 
-                    ActualEndDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActEndDate))
+                    ActualEndDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActEndDate)),
+
+                    TotalFloatHrCnt = GetFieldValue(row, indexes, FieldNames.TotalFloatHrCnt)
 
                 };
 
@@ -6311,10 +6353,15 @@ namespace XerToCsvConverter;
             var enhancedTablesToGenerate = tablesToExport.Where(t => !dataStore.ContainsTable(t)).Distinct().ToList();
 
             if (enhancedTablesToGenerate.Count > 0)
+
             {
+
                 try
+
                 {
+
                     // Dependency Management: Pre-generate TASK01 if needed by others (e.g., BASELINE04), as it cannot be generated in the parallel loop if others depend on it.
+
                     bool needsTask01 = enhancedTablesToGenerate.Contains(EnhancedTableNames.XerTask01) || enhancedTablesToGenerate.Contains(EnhancedTableNames.XerBaseline04);
                     if (needsTask01)
                     {
