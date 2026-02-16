@@ -1,0 +1,502 @@
+@page "/"
+@using System.IO.Compression
+@using XerToCsvConverter
+@using XerToCsvConverter.Web.Services
+@inject IJSRuntime JS
+
+<PageTitle>XER to CSV Converter</PageTitle>
+
+<div class="page-container">
+    <div class="page-header">
+        <h1>XER to CSV Converter</h1>
+        <p>Convert Primavera P6 XER schedule files to CSV format</p>
+    </div>
+
+    @* === Step 1: File Upload === *@
+    <div class="panel">
+        <div class="panel-header">
+            <h2><span class="step-number">1</span> Add XER Files</h2>
+            @if (_uploadedFiles.Count > 0)
+            {
+                <button class="btn btn-sm btn-secondary" @onclick="ClearFiles" disabled="@_isProcessing">Clear All</button>
+            }
+        </div>
+        <div class="panel-body">
+            <div class="drop-zone @(_isDragOver ? "drag-over" : "")"
+                 @ondragenter="HandleDragEnter"
+                 @ondragleave="HandleDragLeave"
+                 @ondragover:preventDefault
+                 @ondrop:preventDefault>
+                <InputFile OnChange="HandleFileSelected" multiple accept=".xer"
+                           @ondragenter="HandleDragEnter"
+                           @ondragleave="HandleDragLeave"
+                           style="position:absolute;width:100%;height:100%;opacity:0;cursor:pointer;top:0;left:0;" />
+                <p>Drag and drop XER files here or click to browse</p>
+                <span class="hint">Accepts .xer files (multiple)</span>
+            </div>
+
+            @if (_uploadedFiles.Count > 0)
+            {
+                <ul class="file-list">
+                    @foreach (var file in _uploadedFiles)
+                    {
+                        <li class="file-item">
+                            <span class="file-name">@file.Name</span>
+                            <span class="file-status @file.Status.ToLowerInvariant()">@file.Status</span>
+                            <button class="btn-remove" @onclick="() => RemoveFile(file)" disabled="@_isProcessing" title="Remove">&times;</button>
+                        </li>
+                    }
+                </ul>
+            }
+
+            @if (_fileSizeWarning)
+            {
+                <div class="warning-banner">
+                    One or more files are larger than 10 MB. Parsing may be slow in the browser.
+                </div>
+            }
+        </div>
+    </div>
+
+    @* === Enhanced Tables Toggle === *@
+    <div class="panel">
+        <div class="panel-header">
+            <h2><span class="step-number">2</span> Options</h2>
+        </div>
+        <div class="panel-body">
+            <div class="toggle-row">
+                <input type="checkbox" id="chkPowerBi" @bind="_generatePowerBiTables" disabled="@_isProcessing" />
+                <label for="chkPowerBi">Include enhanced Power BI tables</label>
+            </div>
+        </div>
+    </div>
+
+    @* === Parse Button === *@
+    <div class="parse-area">
+        @if (_isProcessing)
+        {
+            <button class="btn btn-danger btn-lg" @onclick="CancelOperation">Cancel</button>
+        }
+        else
+        {
+            <button class="btn btn-primary btn-lg" @onclick="ParseFiles" disabled="@(_uploadedFiles.Count == 0)">
+                3. Parse and Load Tables
+            </button>
+        }
+    </div>
+
+    @* === Progress === *@
+    @if (_isProcessing || _progressPercent > 0)
+    {
+        <div class="progress-bar-container">
+            <div class="progress-bar-fill" style="width: @(_progressPercent)%"></div>
+        </div>
+        <p class="progress-label">@_progressMessage</p>
+    }
+
+    @* === Step 4: Table Selection & Export === *@
+    @if (_allTableNames.Count > 0)
+    {
+        <div class="two-col">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Tables to Export</h2>
+                    <span class="table-count">@_filteredTableNames.Count tables</span>
+                </div>
+                <div class="panel-body">
+                    <input type="text" class="table-filter" placeholder="Type to filter tables..."
+                           @bind="_tableFilter" @bind:event="oninput" @bind:after="FilterTables" />
+                    <div class="table-actions">
+                        <button class="btn btn-sm btn-secondary" @onclick="SelectAllTables">Select All</button>
+                        <button class="btn btn-sm btn-secondary" @onclick="DeselectAllTables">Deselect All</button>
+                    </div>
+                    <ul class="table-checklist">
+                        @foreach (var table in _filteredTableNames)
+                        {
+                            <li>
+                                <input type="checkbox" checked="@_selectedTables.Contains(table)"
+                                       @onchange="e => ToggleTable(table, (bool)(e.Value ?? false))" />
+                                <span class="@(IsEnhancedTable(table) ? "enhanced" : "")">@table</span>
+                            </li>
+                        }
+                    </ul>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Activity Log</h2>
+                </div>
+                <div class="panel-body">
+                    <div class="activity-log" @ref="_logElement">@_activityLog</div>
+                </div>
+            </div>
+        </div>
+
+        @* === Export === *@
+        <div class="export-area">
+            <button class="btn btn-primary" @onclick="ExportAll" disabled="@(_isProcessing || _allTableNames.Count == 0)">
+                Export All as ZIP
+            </button>
+            <button class="btn btn-secondary" @onclick="ExportSelected" disabled="@(_isProcessing || _selectedTables.Count == 0)">
+                Export Selected as ZIP
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    // --- State ---
+    private readonly List<UploadedFile> _uploadedFiles = new();
+    private readonly HashSet<string> _selectedTables = new(StringComparer.OrdinalIgnoreCase);
+    private List<string> _allTableNames = new();
+    private List<string> _filteredTableNames = new();
+
+    private bool _generatePowerBiTables;
+    private bool _isProcessing;
+    private bool _isDragOver;
+    private bool _fileSizeWarning;
+    private int _progressPercent;
+    private string _progressMessage = string.Empty;
+    private string _tableFilter = string.Empty;
+    private string _activityLog = string.Empty;
+
+    private XerDataStore? _dataStore;
+    private ProcessingService _processingService = new();
+    private CancellationTokenSource? _cts;
+
+    private ElementReference _logElement;
+    private DownloadService? _downloadService;
+
+    protected override void OnInitialized()
+    {
+        _downloadService = new DownloadService(JS);
+    }
+
+    // --- File Handling ---
+    private async Task HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        _fileSizeWarning = false;
+        const long maxAllowedSize = 100 * 1024 * 1024; // 100MB limit
+
+        foreach (var file in e.GetMultipleFiles(20))
+        {
+            if (!file.Name.EndsWith(".xer", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (_uploadedFiles.Any(f => f.Name.Equals(file.Name, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            if (file.Size > 10 * 1024 * 1024)
+                _fileSizeWarning = true;
+
+            using var ms = new MemoryStream();
+            await file.OpenReadStream(maxAllowedSize).CopyToAsync(ms);
+
+            _uploadedFiles.Add(new UploadedFile
+            {
+                Name = file.Name,
+                Data = ms.ToArray(),
+                Status = "Ready"
+            });
+        }
+        _isDragOver = false;
+    }
+
+    private void RemoveFile(UploadedFile file)
+    {
+        _uploadedFiles.Remove(file);
+        if (_uploadedFiles.Count == 0)
+        {
+            _fileSizeWarning = false;
+            ClearResults();
+        }
+    }
+
+    private void ClearFiles()
+    {
+        _uploadedFiles.Clear();
+        _fileSizeWarning = false;
+        ClearResults();
+    }
+
+    private void ClearResults()
+    {
+        _dataStore = null;
+        _allTableNames.Clear();
+        _filteredTableNames.Clear();
+        _selectedTables.Clear();
+        _progressPercent = 0;
+        _progressMessage = string.Empty;
+        _activityLog = string.Empty;
+    }
+
+    // --- Drag & Drop visual ---
+    private void HandleDragEnter() => _isDragOver = true;
+    private void HandleDragLeave() => _isDragOver = false;
+
+    // --- Parse ---
+    private async Task ParseFiles()
+    {
+        if (_uploadedFiles.Count == 0) return;
+
+        _isProcessing = true;
+        _cts = new CancellationTokenSource();
+        _activityLog = string.Empty;
+        _progressPercent = 0;
+        _allTableNames.Clear();
+        _filteredTableNames.Clear();
+        _selectedTables.Clear();
+
+        LogActivity("Starting parse...");
+
+        foreach (var f in _uploadedFiles) f.Status = "Pending";
+        StateHasChanged();
+
+        try
+        {
+            var progress = new Progress<ProcessingService.DetailedProgress>(p =>
+            {
+                _progressPercent = p.Percent;
+                _progressMessage = p.Message ?? string.Empty;
+
+                if (!string.IsNullOrEmpty(p.FilePath) && !string.IsNullOrEmpty(p.FileStatus))
+                {
+                    var file = _uploadedFiles.FirstOrDefault(f => f.Name == p.FilePath);
+                    if (file != null)
+                        file.Status = p.FileStatus;
+                }
+                InvokeAsync(StateHasChanged);
+            });
+
+            var files = _uploadedFiles.Select(f =>
+            {
+                var stream = new MemoryStream(f.Data);
+                return ((Stream)stream, f.Name);
+            });
+
+            await Task.Yield(); // Allow UI to render before heavy work
+            _dataStore = await _processingService.ParseXerStreamsAsync(files, progress, _cts.Token);
+
+            if (_dataStore.TableCount == 0)
+            {
+                LogActivity("No tables found in the uploaded files.");
+            }
+            else
+            {
+                LogActivity($"Parsed {_dataStore.TableCount} tables successfully.");
+
+                // Populate table list
+                _allTableNames = _dataStore.TableNames.OrderBy(n => n).ToList();
+
+                // Add enhanced table names if enabled
+                if (_generatePowerBiTables)
+                {
+                    AddEnhancedTableNames();
+                }
+
+                _filteredTableNames = new List<string>(_allTableNames);
+                foreach (var t in _allTableNames)
+                    _selectedTables.Add(t);
+
+                LogActivity($"{_allTableNames.Count} tables available for export.");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            LogActivity("Parsing was canceled.");
+        }
+        catch (Exception ex)
+        {
+            LogActivity($"Error: {ex.Message}");
+        }
+        finally
+        {
+            _isProcessing = false;
+            _progressPercent = 0;
+            _cts?.Dispose();
+            _cts = null;
+            StateHasChanged();
+        }
+    }
+
+    private void AddEnhancedTableNames()
+    {
+        if (_dataStore == null) return;
+
+        var enhanced = new List<string>();
+        if (_dataStore.ContainsTable(TableNames.Task) && _dataStore.ContainsTable(TableNames.Calendar) && _dataStore.ContainsTable(TableNames.Project))
+        {
+            enhanced.Add(EnhancedTableNames.XerTask01);
+            enhanced.Add(EnhancedTableNames.XerBaseline04);
+        }
+        if (_dataStore.ContainsTable(TableNames.Project))
+            enhanced.Add(EnhancedTableNames.XerProject02);
+        if (_dataStore.ContainsTable(TableNames.ProjWbs))
+            enhanced.Add(EnhancedTableNames.XerProjWbs03);
+        if (_dataStore.ContainsTable(TableNames.TaskPred) && _dataStore.ContainsTable(TableNames.Task))
+            enhanced.Add(EnhancedTableNames.XerPredecessor06);
+        if (_dataStore.ContainsTable(TableNames.ActvType))
+            enhanced.Add(EnhancedTableNames.XerActvType07);
+        if (_dataStore.ContainsTable(TableNames.ActvCode))
+            enhanced.Add(EnhancedTableNames.XerActvCode08);
+        if (_dataStore.ContainsTable(TableNames.TaskActv))
+            enhanced.Add(EnhancedTableNames.XerTaskActv09);
+        if (_dataStore.ContainsTable(TableNames.Calendar))
+        {
+            enhanced.Add(EnhancedTableNames.XerCalendar10);
+            enhanced.Add(EnhancedTableNames.XerCalendarDetailed11);
+        }
+        if (_dataStore.ContainsTable(TableNames.Rsrc))
+            enhanced.Add(EnhancedTableNames.XerRsrc12);
+        if (_dataStore.ContainsTable(TableNames.TaskRsrc))
+            enhanced.Add(EnhancedTableNames.XerTaskRsrc13);
+        if (_dataStore.ContainsTable(TableNames.Umeasure))
+            enhanced.Add(EnhancedTableNames.XerUmeasure14);
+        if (_dataStore.ContainsTable(TableNames.TaskRsrc) && _dataStore.ContainsTable(TableNames.Calendar) && _dataStore.ContainsTable(TableNames.Task))
+            enhanced.Add(EnhancedTableNames.XerResourceDist15);
+
+        foreach (var name in enhanced)
+        {
+            if (!_allTableNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+                _allTableNames.Add(name);
+        }
+        _allTableNames.Sort(StringComparer.OrdinalIgnoreCase);
+    }
+
+    // --- Export ---
+    private async Task ExportAll()
+    {
+        await ExportTables(_allTableNames);
+    }
+
+    private async Task ExportSelected()
+    {
+        await ExportTables(_selectedTables.ToList());
+    }
+
+    private async Task ExportTables(List<string> tables)
+    {
+        if (_dataStore == null || tables.Count == 0) return;
+
+        _isProcessing = true;
+        _cts = new CancellationTokenSource();
+        LogActivity($"Exporting {tables.Count} tables...");
+        StateHasChanged();
+
+        try
+        {
+            var progress = new Progress<(int percent, string message)>(p =>
+            {
+                _progressPercent = p.percent;
+                _progressMessage = p.message;
+                InvokeAsync(StateHasChanged);
+            });
+
+            await Task.Yield(); // Allow UI to render before heavy work
+            var csvData = await _processingService.ExportTablesToMemoryAsync(_dataStore, tables, progress, _cts.Token);
+
+            if (csvData.Count == 0)
+            {
+                LogActivity("No data to export.");
+                return;
+            }
+
+            LogActivity($"Generated {csvData.Count} CSV files. Creating ZIP...");
+            StateHasChanged();
+
+            // Create ZIP in memory
+            using var zipStream = new MemoryStream();
+            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                foreach (var kvp in csvData.OrderBy(k => k.Key))
+                {
+                    var entry = archive.CreateEntry($"{kvp.Key}.csv", CompressionLevel.Fastest);
+                    using var entryStream = entry.Open();
+                    await entryStream.WriteAsync(kvp.Value);
+                }
+            }
+
+            var zipBytes = zipStream.ToArray();
+            await _downloadService!.DownloadFileAsync("XER_Export.zip", zipBytes, "application/zip");
+
+            LogActivity($"Export complete. Downloaded XER_Export.zip ({csvData.Count} files, {zipBytes.Length / 1024:N0} KB).");
+        }
+        catch (OperationCanceledException)
+        {
+            LogActivity("Export was canceled.");
+        }
+        catch (Exception ex)
+        {
+            LogActivity($"Export error: {ex.Message}");
+        }
+        finally
+        {
+            _isProcessing = false;
+            _progressPercent = 0;
+            _cts?.Dispose();
+            _cts = null;
+            StateHasChanged();
+        }
+    }
+
+    // --- Cancel ---
+    private void CancelOperation()
+    {
+        _cts?.Cancel();
+        LogActivity("Cancellation requested...");
+    }
+
+    // --- Table Selection ---
+    private void ToggleTable(string table, bool selected)
+    {
+        if (selected)
+            _selectedTables.Add(table);
+        else
+            _selectedTables.Remove(table);
+    }
+
+    private void SelectAllTables()
+    {
+        foreach (var t in _filteredTableNames)
+            _selectedTables.Add(t);
+    }
+
+    private void DeselectAllTables()
+    {
+        foreach (var t in _filteredTableNames)
+            _selectedTables.Remove(t);
+    }
+
+    private void FilterTables()
+    {
+        if (string.IsNullOrWhiteSpace(_tableFilter))
+        {
+            _filteredTableNames = new List<string>(_allTableNames);
+        }
+        else
+        {
+            _filteredTableNames = _allTableNames
+                .Where(t => t.Contains(_tableFilter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+    }
+
+    private static bool IsEnhancedTable(string name) =>
+        name.Length > 3 && char.IsDigit(name[0]) && char.IsDigit(name[1]) && name[2] == '_';
+
+    // --- Logging ---
+    private void LogActivity(string message)
+    {
+        var timestamp = DateTime.Now.ToString("HH:mm:ss");
+        _activityLog += $"[{timestamp}] {message}\n";
+    }
+
+    // --- Model ---
+    private class UploadedFile
+    {
+        public string Name { get; set; } = string.Empty;
+        public byte[] Data { get; set; } = Array.Empty<byte>();
+        public string Status { get; set; } = "Ready";
+    }
+}

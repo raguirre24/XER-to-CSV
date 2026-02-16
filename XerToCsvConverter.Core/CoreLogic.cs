@@ -4,7 +4,6 @@ using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -49,12 +48,17 @@ namespace XerToCsvConverter;
         static PerformanceConfig()
         {
             // Optimize Garbage Collection for large data processing
-            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            // Guard for environments where GCSettings may not be available (e.g., Blazor WASM)
+            try
+            {
+                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            }
+            catch (PlatformNotSupportedException) { }
             // LatencyMode is managed by the MainForm: Batch during processing, Interactive when idle.
         }
     }
 
-    internal sealed class UserSettings
+    public sealed class UserSettings
     {
         public string LastOutputPath { get; set; } = string.Empty;
         public bool GeneratePowerBI { get; set; }
@@ -63,9 +67,9 @@ namespace XerToCsvConverter;
     // .NET 8: JSON Source Generator for AOT-friendly, reflection-free serialization
     [JsonSerializable(typeof(UserSettings))]
     [JsonSourceGenerationOptions(WriteIndented = true)]
-    internal partial class UserSettingsJsonContext : JsonSerializerContext { }
+    public partial class UserSettingsJsonContext : JsonSerializerContext { }
 
-    internal static class UserSettingsStore
+    public static class UserSettingsStore
     {
         private static readonly string SettingsPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -114,11 +118,11 @@ namespace XerToCsvConverter;
     }
 
 
-    internal static class TableNames { public const string Task = "TASK"; public const string Calendar = "CALENDAR"; public const string Project = "PROJECT"; public const string ProjWbs = "PROJWBS"; public const string TaskActv = "TASKACTV"; public const string ActvCode = "ACTVCODE"; public const string ActvType = "ACTVTYPE"; public const string TaskPred = "TASKPRED"; public const string Rsrc = "RSRC"; public const string TaskRsrc = "TASKRSRC"; public const string Umeasure = "UMEASURE"; }
+    public static class TableNames { public const string Task = "TASK"; public const string Calendar = "CALENDAR"; public const string Project = "PROJECT"; public const string ProjWbs = "PROJWBS"; public const string TaskActv = "TASKACTV"; public const string ActvCode = "ACTVCODE"; public const string ActvType = "ACTVTYPE"; public const string TaskPred = "TASKPRED"; public const string Rsrc = "RSRC"; public const string TaskRsrc = "TASKRSRC"; public const string Umeasure = "UMEASURE"; }
 
 
 
-    internal static class FieldNames
+    public static class FieldNames
 
     {
 
@@ -214,7 +218,7 @@ namespace XerToCsvConverter;
 
     }
 
-    internal static class EnhancedTableNames
+    public static class EnhancedTableNames
 
     {
 
@@ -1360,6 +1364,89 @@ namespace XerToCsvConverter;
 
 
 
+        // Parses XER content from a Stream (for in-memory / Blazor scenarios)
+        public XerDataStore ParseXerStream(Stream stream, string fileName, Action<int, string>? reportProgressAction, CancellationToken cancellationToken)
+        {
+            var fileStore = new XerDataStore();
+            string filename = StringInternPool.Intern(fileName);
+            int progressReportInterval = PerformanceConfig.ProgressReportIntervalLines;
+
+            var localTables = new Dictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
+            XerTable? currentTable = null;
+            int lineCount = 0;
+
+            long fileSize = stream.CanSeek ? stream.Length : 0;
+            long bytesRead = 0;
+            int lastReportedProgress = 0;
+
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+            string? line;
+
+            while ((line = reader.ReadLine()) != null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                bytesRead += line.Length + Environment.NewLine.Length;
+                lineCount++;
+
+                if (lineCount % progressReportInterval == 0 && fileSize > 0)
+                {
+                    int progress = Math.Min(100, (int)((double)bytesRead * 100 / fileSize));
+                    if (progress > lastReportedProgress)
+                    {
+                        reportProgressAction?.Invoke(progress, $"Parsing {filename}: {progress}%");
+                        lastReportedProgress = progress;
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                ReadOnlySpan<char> lineSpan = line.AsSpan();
+                if (lineSpan.Length < 2 || lineSpan[0] != '%') continue;
+
+                char typeChar = lineSpan[1];
+                switch (typeChar)
+                {
+                    case 'T':
+                        ReadOnlySpan<char> tableNameSpan = lineSpan[2..].Trim();
+                        if (!tableNameSpan.IsEmpty)
+                        {
+                            string currentTableName = StringInternPool.Intern(tableNameSpan);
+                            currentTable = new XerTable(currentTableName);
+                            localTables[currentTable.Name] = currentTable;
+                        }
+                        break;
+                    case 'F':
+                        if (currentTable != null)
+                        {
+                            ReadOnlySpan<char> fieldsLine = lineSpan[2..];
+                            if (!fieldsLine.IsEmpty && fieldsLine[0] == Delimiter) fieldsLine = fieldsLine[1..];
+                            string[] headers = FastSplitAndIntern(fieldsLine, Delimiter, trim: true);
+                            currentTable.SetHeaders(headers);
+                        }
+                        break;
+                    case 'R':
+                        if (currentTable != null && currentTable.Headers is not null)
+                        {
+                            ReadOnlySpan<char> dataLine = lineSpan[2..];
+                            if (!dataLine.IsEmpty && dataLine[0] == Delimiter) dataLine = dataLine[1..];
+                            string[] values = FastSplitAndIntern(dataLine, Delimiter, trim: false);
+                            currentTable.AddRow(new DataRow(values, filename));
+                        }
+                        break;
+                }
+            }
+
+            foreach (var kvp in localTables)
+            {
+                if (!kvp.Value.IsEmpty)
+                {
+                    fileStore.AddTable(kvp.Value);
+                }
+            }
+
+            reportProgressAction?.Invoke(100, $"Finished parsing {filename}");
+            return fileStore;
+        }
+
         // PERFORMANCE/UX OPTIMIZATION: Added CancellationToken, Optimized Encoding and Progress Reporting
 
         public XerDataStore ParseXerFile(string xerFilePath, Action<int, string>? reportProgressAction, CancellationToken cancellationToken)
@@ -1737,6 +1824,40 @@ namespace XerToCsvConverter;
             {
                 throw new Exception($"Failed to write CSV file '{Path.GetFileName(csvFilePath)}'. {ex.Message}", ex);
             }
+        }
+
+        // Writes table to a Stream (for in-memory / Blazor scenarios)
+        public void WriteTableToStream(XerTable? table, Stream outputStream)
+        {
+            if (table == null || table.Headers == null) return;
+            if (table.IsEmpty && table.Headers.Length == 0) return;
+
+            using var writer = new StreamWriter(outputStream, Encoding.UTF8, bufferSize: PerformanceConfig.CsvWriteBufferSize, leaveOpen: true);
+
+            string[] headerRow = table.Headers;
+            for (int i = 0; i < headerRow.Length; i++)
+            {
+                if (i > 0) writer.Write(',');
+                WriteEscapedField(writer, headerRow[i]);
+            }
+            if (headerRow.Length > 0) writer.Write(',');
+            WriteEscapedField(writer, FieldNames.FileName);
+            writer.WriteLine();
+
+            foreach (var dataRow in table.Rows)
+            {
+                string[] rowFields = dataRow.Fields;
+                if (rowFields == null) continue;
+                for (int j = 0; j < rowFields.Length; j++)
+                {
+                    if (j > 0) writer.Write(',');
+                    WriteEscapedField(writer, rowFields[j] ?? string.Empty);
+                }
+                if (rowFields.Length > 0) writer.Write(',');
+                WriteEscapedField(writer, dataRow.SourceFilename);
+                writer.WriteLine();
+            }
+            writer.Flush();
         }
 
         // Efficient CSV field escaping writing directly to the stream to avoid allocations
@@ -6233,7 +6354,7 @@ namespace XerToCsvConverter;
             // Fields for UI status visualization
             public string? FilePath;
             public string? FileStatus;
-            public Color? StatusColor;
+            public string? StatusColor;
         }
 
 
@@ -6267,13 +6388,13 @@ namespace XerToCsvConverter;
                     string shortFileName = Path.GetFileName(file);
 
                     // Report starting status for the file visualization
-                    progress?.Report(new DetailedProgress { Percent = (currentIndex - 1) * 100 / fileCount, Message = $"Starting: {shortFileName}", FilePath = file, FileStatus = "Processing", StatusColor = Color.Blue });
+                    progress?.Report(new DetailedProgress { Percent = (currentIndex - 1) * 100 / fileCount, Message = $"Starting: {shortFileName}", FilePath = file, FileStatus = "Processing", StatusColor = "Blue" });
 
                     try
                     {
                         if (!File.Exists(file))
                         {
-                            progress?.Report(new DetailedProgress { Percent = currentIndex * 100 / fileCount, Message = $"Skipped (Missing): {shortFileName}", FilePath = file, FileStatus = "Skipped", StatusColor = Color.Orange });
+                            progress?.Report(new DetailedProgress { Percent = currentIndex * 100 / fileCount, Message = $"Skipped (Missing): {shortFileName}", FilePath = file, FileStatus = "Skipped", StatusColor = "Orange" });
                             return ValueTask.CompletedTask;
                         }
 
@@ -6291,14 +6412,14 @@ namespace XerToCsvConverter;
                         intermediateStores.Add(singleFileStore);
 
                         // Report success status for the file visualization
-                        progress?.Report(new DetailedProgress { Percent = currentIndex * 100 / fileCount, Message = $"Completed: {shortFileName}", FilePath = file, FileStatus = "Success", StatusColor = Color.DarkGreen });
+                        progress?.Report(new DetailedProgress { Percent = currentIndex * 100 / fileCount, Message = $"Completed: {shortFileName}", FilePath = file, FileStatus = "Success", StatusColor = "DarkGreen" });
                     }
                     catch (Exception ex)
                     {
                         if (ex is OperationCanceledException) throw; // Propagate cancellation immediately
 
                         // Report failure status for the file visualization
-                        progress?.Report(new DetailedProgress { Percent = currentIndex * 100 / fileCount, Message = $"Failed: {shortFileName}", FilePath = file, FileStatus = "Error", StatusColor = Color.Red });
+                        progress?.Report(new DetailedProgress { Percent = currentIndex * 100 / fileCount, Message = $"Failed: {shortFileName}", FilePath = file, FileStatus = "Error", StatusColor = "Red" });
 
                         // If a file fails fundamentally (e.g., I/O error, corrupted format), throw an exception to stop the process
                         // This maintains the behavior of the original code where one failure stops the batch.
@@ -6463,6 +6584,136 @@ namespace XerToCsvConverter;
             }
 
             return exportedFiles.ToList();
+        }
+
+        // Parse XER from streams (for Blazor WASM / in-memory scenarios)
+        public async Task<XerDataStore> ParseXerStreamsAsync(
+            IEnumerable<(Stream stream, string fileName)> files,
+            IProgress<DetailedProgress>? progress,
+            CancellationToken cancellationToken)
+        {
+            StringInternPool.Clear();
+            DateParser.ClearCache();
+
+            var fileList = files.ToList();
+            int fileCount = fileList.Count;
+            var masterStore = new XerDataStore();
+
+            for (int i = 0; i < fileCount; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var (stream, fileName) = fileList[i];
+
+                progress?.Report(new DetailedProgress
+                {
+                    Percent = i * 100 / fileCount,
+                    Message = $"Parsing: {fileName}",
+                    FilePath = fileName,
+                    FileStatus = "Processing",
+                    StatusColor = "Blue"
+                });
+
+                try
+                {
+                    var singleStore = _parser.ParseXerStream(stream, fileName, null, cancellationToken);
+                    masterStore.MergeStore(singleStore);
+
+                    progress?.Report(new DetailedProgress
+                    {
+                        Percent = (i + 1) * 100 / fileCount,
+                        Message = $"Completed: {fileName}",
+                        FilePath = fileName,
+                        FileStatus = "Success",
+                        StatusColor = "DarkGreen"
+                    });
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    progress?.Report(new DetailedProgress
+                    {
+                        Percent = (i + 1) * 100 / fileCount,
+                        Message = $"Failed: {fileName}",
+                        FilePath = fileName,
+                        FileStatus = "Error",
+                        StatusColor = "Red"
+                    });
+                    throw new Exception($"Failed to parse file '{fileName}': {ex.Message}", ex);
+                }
+            }
+
+            return masterStore;
+        }
+
+        // Export tables to a dictionary of name -> CSV bytes (for Blazor WASM / in-memory scenarios)
+        public async Task<Dictionary<string, byte[]>> ExportTablesToMemoryAsync(
+            XerDataStore dataStore,
+            List<string> tablesToExport,
+            IProgress<(int percent, string message)>? progress,
+            CancellationToken cancellationToken)
+        {
+            var result = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            var transformer = new XerTransformer(dataStore);
+            var enhancedCache = new ConcurrentDictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
+
+            progress?.Report((0, "Generating enhanced tables..."));
+
+            var enhancedTablesToGenerate = tablesToExport.Where(t => !dataStore.ContainsTable(t)).Distinct().ToList();
+
+            if (enhancedTablesToGenerate.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                bool needsTask01 = enhancedTablesToGenerate.Contains(EnhancedTableNames.XerTask01) || enhancedTablesToGenerate.Contains(EnhancedTableNames.XerBaseline04);
+                if (needsTask01 && dataStore.ContainsTable(TableNames.Task) && dataStore.ContainsTable(TableNames.Calendar) && dataStore.ContainsTable(TableNames.Project))
+                {
+                    var task01Data = transformer.Create01XerTaskTable();
+                    if (task01Data != null) enhancedCache.TryAdd(EnhancedTableNames.XerTask01, task01Data);
+                }
+
+                bool needsCalendarDetailed = enhancedTablesToGenerate.Contains(EnhancedTableNames.XerCalendarDetailed11) || enhancedTablesToGenerate.Contains(EnhancedTableNames.XerPredecessor06);
+                if (needsCalendarDetailed && !enhancedCache.ContainsKey(EnhancedTableNames.XerCalendarDetailed11) && dataStore.ContainsTable(TableNames.Calendar))
+                {
+                    var calendarDetailedData = transformer.Create11XerCalendarDetailed();
+                    if (calendarDetailedData != null) enhancedCache.TryAdd(EnhancedTableNames.XerCalendarDetailed11, calendarDetailedData);
+                }
+
+                foreach (var tableName in enhancedTablesToGenerate)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (enhancedCache.ContainsKey(tableName)) continue;
+                    var generatedTable = GenerateEnhancedTable(transformer, tableName, enhancedCache);
+                    if (generatedTable != null) enhancedCache.TryAdd(tableName, generatedTable);
+                }
+            }
+
+            progress?.Report((80, "Exporting tables to CSV..."));
+            int total = tablesToExport.Count;
+            int count = 0;
+
+            foreach (var tableName in tablesToExport.OrderBy(n => n))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                XerTable? tableToExport = null;
+                if (dataStore.ContainsTable(tableName))
+                    tableToExport = dataStore.GetTable(tableName);
+                else if (enhancedCache.TryGetValue(tableName, out XerTable? cachedTable))
+                    tableToExport = cachedTable;
+
+                if (tableToExport != null && !tableToExport.IsEmpty)
+                {
+                    using var ms = new MemoryStream();
+                    _exporter.WriteTableToStream(tableToExport, ms);
+                    result[tableName] = ms.ToArray();
+                }
+
+                count++;
+                int percent = 80 + (int)((double)count / total * 20);
+                progress?.Report((percent, $"Exported: {tableName} ({count}/{total})"));
+            }
+
+            return result;
         }
 
         private static XerTable? GenerateEnhancedTable(XerTransformer transformer, string tableName, ConcurrentDictionary<string, XerTable> cache)
