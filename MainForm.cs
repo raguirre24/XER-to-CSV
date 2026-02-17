@@ -2789,7 +2789,7 @@ public class MainForm : Form
 
 
 
-	private void UpdateFileStatus(string filePath, string status, Color? color = null)
+	private void UpdateFileStatus(string filePath, string status, string? colorName = null)
 
 	{
 
@@ -2801,7 +2801,7 @@ public class MainForm : Form
 
 			{
 
-				UpdateFileStatus(filePath, status, color);
+				UpdateFileStatus(filePath, status, colorName);
 
 			});
 
@@ -2819,11 +2819,11 @@ public class MainForm : Form
 
 				item.SubItems[2].Text = status;
 
-				if (color.HasValue)
+				if (!string.IsNullOrEmpty(colorName))
 
 				{
 
-					item.ForeColor = color.Value;
+					item.ForeColor = Color.FromName(colorName);
 
 				}
 
