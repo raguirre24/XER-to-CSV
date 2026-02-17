@@ -141,6 +141,9 @@
             <button class="btn btn-secondary" @onclick="ExportSelected" disabled="@(_isProcessing || _selectedTables.Count == 0)">
                 Export Selected as ZIP
             </button>
+            <button class="btn btn-info" @onclick="ExportPowerBi" disabled="@(_isProcessing || !_allTableNames.Any(IsEnhancedTable))">
+                Export Power BI as ZIP
+            </button>
         </div>
     }
 </div>
@@ -373,6 +376,18 @@
     private async Task ExportSelected()
     {
         await ExportTables(_selectedTables.ToList());
+    }
+
+    private async Task ExportPowerBi()
+    {
+        var pbiTables = _allTableNames.Where(IsEnhancedTable).ToList();
+        if (pbiTables.Count == 0)
+        {
+            LogActivity("No Power BI enhanced tables available.");
+            return;
+        }
+        
+        await ExportTables(pbiTables);
     }
 
     private async Task ExportTables(List<string> tables)

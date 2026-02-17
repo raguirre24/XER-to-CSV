@@ -182,7 +182,7 @@ public class MainForm : Form
 
 	private Button btnCancelOperation = null!;
 
-
+	private Button btnExportPowerBi = null!;
 
 	private ToolTip toolTip = null!;
 
@@ -596,6 +596,8 @@ public class MainForm : Form
 
 		ApplyButtonStyle(btnPbiDetails, UiTheme.Panel, UiTheme.Border, UiTheme.Text, UiTheme.SurfaceAlt, UiTheme.Border);
 
+		ApplyButtonStyle(btnExportPowerBi, UiTheme.Accent, UiTheme.Accent, Color.White, UiTheme.AccentHover, UiTheme.AccentDown);
+
 		ApplyButtonStyle(btnCancelOperation, UiTheme.Danger, UiTheme.Danger, Color.White, UiTheme.DangerHover, UiTheme.DangerDown);
 
 
@@ -604,6 +606,8 @@ public class MainForm : Form
 		btnExportAll.Font = _uiFontBold;
 
 		btnExportSelected.Font = _uiFontBold;
+
+		btnExportPowerBi.Font = _uiFontBold;
 
 		btnCancelOperation.Font = _uiFontBold;
 
@@ -652,6 +656,8 @@ public class MainForm : Form
 		btnExportAll.Text = "Export all";
 
 		btnExportSelected.Text = "Export selected";
+
+		btnExportPowerBi.Text = "Export Power BI";
 
 		btnCancelOperation.Text = "Cancel";
 
@@ -980,93 +986,64 @@ public class MainForm : Form
 		splitContainerResults.Panel2.Controls.Add(grpActivityLog);
 
 
-		var exportLayout = new TableLayoutPanel
+		// Button Layout Redesign
+		
+		// 1. Cancel Button (Left)
+		btnCancelOperation.AutoSize = true;
+		btnCancelOperation.MinimumSize = new Size(100, 40);
+		btnCancelOperation.Dock = DockStyle.Left;
+		btnCancelOperation.Margin = new Padding(0);
 
+		// 2. Action Buttons Container (Right)
+		var flowActions = new FlowLayoutPanel
 		{
-
-			ColumnCount = 4,
-
-			RowCount = 1,
-
-			Dock = DockStyle.Fill,
-
-			Padding = new Padding(12, 10, 12, 10),
-
-			BackColor = Color.Transparent
-
+			Dock = DockStyle.Fill, 
+			WrapContents = true, 
+            AutoSize = true,
+			AutoSizeMode = AutoSizeMode.GrowAndShrink, 
+			BackColor = Color.Transparent,
+			Padding = new Padding(0)
 		};
 
-		exportLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+		// 3. Configure Action Buttons
+		// Reduce MinimumSize completely. Let size be content-based.
+		btnExportAll.AutoSize = true;
+		btnExportAll.MinimumSize = Size.Empty; 
+		btnExportAll.Margin = new Padding(5, 0, 0, 0); 
+		btnExportAll.Text = "Export All"; // Shorter text
+        btnExportAll.Dock = DockStyle.None;
+        btnExportAll.Anchor = AnchorStyles.None;
 
-		exportLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150f));
+		btnExportSelected.AutoSize = true;
+		btnExportSelected.MinimumSize = Size.Empty; 
+		btnExportSelected.Margin = new Padding(5, 0, 0, 0);
+		btnExportSelected.Text = "Export Selected"; // Shorter text
+        btnExportSelected.Dock = DockStyle.None;
+        btnExportSelected.Anchor = AnchorStyles.None;
 
-		exportLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150f));
+		btnExportPowerBi.AutoSize = true;
+		btnExportPowerBi.MinimumSize = Size.Empty; 
+		btnExportPowerBi.Margin = new Padding(5, 0, 0, 0);
+		btnExportPowerBi.Text = "Export Power BI"; // Shorter text
+        btnExportPowerBi.Dock = DockStyle.None;
+        btnExportPowerBi.Anchor = AnchorStyles.None;
 
-		exportLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150f));
+		// 4. Add to Flow (Order matters for RightToLeft: First added is Right-most)
+		flowActions.Controls.Add(btnExportAll);       // Far Right
+		flowActions.Controls.Add(btnExportSelected);  // Middle
+		flowActions.Controls.Add(btnExportPowerBi);   // Left
 
-		exportLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-
-
-		btnExportAll.AutoSize = false;
-
-		btnExportAll.MinimumSize = new Size(150, 40);
-
-		btnExportAll.Dock = DockStyle.Fill;
-
-		btnExportAll.Margin = new Padding(8, 0, 0, 0);
-
-
-		btnExportSelected.AutoSize = false;
-
-		btnExportSelected.MinimumSize = new Size(150, 40);
-
-		btnExportSelected.Dock = DockStyle.Fill;
-
-		btnExportSelected.Margin = new Padding(8, 0, 0, 0);
-
-
-		btnCancelOperation.AutoSize = false;
-
-		btnCancelOperation.MinimumSize = new Size(150, 40);
-
-		btnCancelOperation.Dock = DockStyle.Fill;
-
-		btnCancelOperation.Margin = new Padding(0, 0, 0, 0);
-
-
-		var spacer = new Panel
-
-		{
-
-			Dock = DockStyle.Fill,
-
-			BackColor = Color.Transparent
-
-		};
-
-
-		exportLayout.Controls.Add(spacer, 0, 0);
-
-		exportLayout.Controls.Add(btnCancelOperation, 1, 0);
-
-		exportLayout.Controls.Add(btnExportSelected, 2, 0);
-
-		exportLayout.Controls.Add(btnExportAll, 3, 0);
-
-
+		// 5. Container Configuration
 		panelExportActions.Controls.Clear();
-
-		panelExportActions.Padding = new Padding(0);
-
-		panelExportActions.AutoSize = false;
-
-		panelExportActions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-
-		panelExportActions.Height = 76;
-
-		panelExportActions.MinimumSize = new Size(0, 76);
-
-		panelExportActions.Controls.Add(exportLayout);
+		panelExportActions.Padding = new Padding(12, 10, 12, 10);
+		panelExportActions.AutoSize = true;
+        panelExportActions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        panelExportActions.Dock = DockStyle.Bottom; // Dock to bottom so it pushes content up
+		
+		// Add Controls (Dock order: Filled control added last in Z-order)
+        // Actually, just add them. Left dock takes left. Fill takes rest.
+		panelExportActions.Controls.Add(flowActions);       // Docks Fill
+		panelExportActions.Controls.Add(btnCancelOperation); // Docks Left
 
 
 		var rightLayout = new TableLayoutPanel
@@ -1627,6 +1604,20 @@ public class MainForm : Form
 
 	}
 
+	private async void BtnExportPowerBi_Click(object? sender, EventArgs e)
+	{
+		LogActivity("Starting export of Power BI tables...");
+		List<string> pbiTables = GetAvailablePbiTables();
+
+		if (pbiTables.Count == 0)
+		{
+			ShowWarning("No Power BI enhanced tables can be generated with the current data.");
+			return;
+		}
+
+		await ExportTablesAsync(pbiTables);
+	}
+
 
 
 	private void BtnCancelOperation_Click(object? sender, EventArgs e)
@@ -2059,120 +2050,44 @@ public class MainForm : Form
 
 		{
 
-			if (_canCreateTask01)
-
-			{
-
-				names.Add("01_XER_TASK");
-
-			}
-
-			if (_canCreateProject02)
-
-			{
-
-				names.Add("02_XER_PROJECT");
-
-			}
-
-			if (_canCreateProjWbs03)
-
-			{
-
-				names.Add("03_XER_PROJWBS");
-
-			}
-
-			if (_canCreateBaseline04)
-
-			{
-
-				names.Add("04_XER_BASELINE");
-
-			}
-
-			if (_canCreatePredecessor06)
-
-			{
-
-				names.Add("06_XER_PREDECESSOR");
-
-			}
-
-			if (_canCreateActvType07)
-
-			{
-
-				names.Add("07_XER_ACTVTYPE");
-
-			}
-
-			if (_canCreateActvCode08)
-
-			{
-
-				names.Add("08_XER_ACTVCODE");
-
-			}
-
-			if (_canCreateTaskActv09)
-
-			{
-
-				names.Add("09_XER_TASKACTV");
-
-			}
-
-			if (_canCreateCalendar10)
-
-			{
-
-				names.Add("10_XER_CALENDAR");
-
-			}
-
-			if (_canCreateCalendarDetailed11)
-
-			{
-
-				names.Add("11_XER_CALENDAR_DETAILED");
-
-			}
-
-			if (_canCreateRsrc12)
-
-			{
-
-				names.Add("12_XER_RSRC");
-
-			}
-
-			if (_canCreateTaskRsrc13)
-
-			{
-
-				names.Add("13_XER_TASKRSRC");
-
-			}
-
-			if (_canCreateUmeasure14)
-
-			{
-
-				names.Add("14_XER_UMEASURE");
-
-			}
-
-			if (_canCreateResourceDist15)
-
-			{
-
-				names.Add("15_XER_RESOURCE_DISTRIBUTION");
-
-			}
+			names.AddRange(GetAvailablePbiTables());
 
 		}
 
+	}
+	private List<string> GetAvailablePbiTables()
+	{
+		List<string> names = new List<string>();
+
+		if (_canCreateTask01) names.Add("01_XER_TASK");
+
+		if (_canCreateProject02) names.Add("02_XER_PROJECT");
+
+		if (_canCreateProjWbs03) names.Add("03_XER_PROJWBS");
+
+		if (_canCreateBaseline04) names.Add("04_XER_BASELINE");
+
+		if (_canCreatePredecessor06) names.Add("06_XER_PREDECESSOR");
+
+		if (_canCreateActvType07) names.Add("07_XER_ACTVTYPE");
+
+		if (_canCreateActvCode08) names.Add("08_XER_ACTVCODE");
+
+		if (_canCreateTaskActv09) names.Add("09_XER_TASKACTV");
+
+		if (_canCreateCalendar10) names.Add("10_XER_CALENDAR");
+
+		if (_canCreateCalendarDetailed11) names.Add("11_XER_CALENDAR_DETAILED");
+
+		if (_canCreateRsrc12) names.Add("12_XER_RSRC");
+
+		if (_canCreateTaskRsrc13) names.Add("13_XER_TASKRSRC");
+
+		if (_canCreateUmeasure14) names.Add("14_XER_UMEASURE");
+
+		if (_canCreateResourceDist15) names.Add("15_XER_RESOURCE_DISTRIBUTION");
+
+		return names;
 	}
 
 
@@ -3250,6 +3165,8 @@ public class MainForm : Form
 
 		btnExportSelected.Enabled = flag && flag2;
 
+		btnExportPowerBi.Enabled = flag && AnyPbiDependencyMet();
+
 	}
 
 
@@ -3692,6 +3609,8 @@ public class MainForm : Form
 
 		this.btnExportAll = new System.Windows.Forms.Button();
 
+		this.btnExportPowerBi = new System.Windows.Forms.Button();
+
 		this.grpPowerBI = new System.Windows.Forms.GroupBox();
 
 		this.btnPbiDetails = new System.Windows.Forms.Button();
@@ -3832,7 +3751,7 @@ public class MainForm : Form
 
 		this.splitContainerMain.Size = new System.Drawing.Size(884, 515);
 
-		this.splitContainerMain.SplitterDistance = 420;
+		this.splitContainerMain.SplitterDistance = 350;
 
 		this.splitContainerMain.TabIndex = 2;
 
@@ -4022,9 +3941,9 @@ public class MainForm : Form
 
 		this.btnClearFiles.Click += new System.EventHandler(BtnClearFiles_Click);
 
-		this.splitContainerResults.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-
-		this.splitContainerResults.Location = new System.Drawing.Point(8, 8);
+		this.splitContainerResults.Dock = System.Windows.Forms.DockStyle.Fill;
+		//this.splitContainerResults.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+		this.splitContainerResults.Location = new System.Drawing.Point(5, 5);
 
 		this.splitContainerResults.Name = "splitContainerResults";
 
@@ -4132,15 +4051,14 @@ public class MainForm : Form
 
 		this.txtActivityLog.TabIndex = 0;
 
-		this.panelExportActions.Anchor = System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+		this.panelExportActions.Dock = System.Windows.Forms.DockStyle.Bottom;
+		//this.panelExportActions.Anchor = System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+		this.panelExportActions.Location = new System.Drawing.Point(5, 470);
+		this.panelExportActions.AutoSize = true;
+		this.panelExportActions.AutoSizeMode = System.Windows.Forms.AutoSizeMode.GrowAndShrink;
+		this.panelExportActions.MinimumSize = new System.Drawing.Size(0, 40);
 
-		this.panelExportActions.Controls.Add(this.btnCancelOperation);
 
-		this.panelExportActions.Controls.Add(this.btnExportSelected);
-
-		this.panelExportActions.Controls.Add(this.btnExportAll);
-
-		this.panelExportActions.Location = new System.Drawing.Point(8, 467);
 
 		this.panelExportActions.Name = "panelExportActions";
 
@@ -4180,7 +4098,7 @@ public class MainForm : Form
 
 		this.btnExportSelected.TabIndex = 1;
 
-		this.btnExportSelected.Text = "Export Selected Tables";
+		this.btnExportSelected.Text = "Export Selected";
 
 		this.btnExportSelected.UseVisualStyleBackColor = true;
 
@@ -4196,11 +4114,23 @@ public class MainForm : Form
 
 		this.btnExportAll.TabIndex = 0;
 
-		this.btnExportAll.Text = "Export All Tables";
+		this.btnExportAll.Text = "Export All";
 
 		this.btnExportAll.UseVisualStyleBackColor = true;
 
 		this.btnExportAll.Click += new System.EventHandler(BtnExportAll_Click);
+
+		this.btnExportPowerBi.Name = "btnExportPowerBi";
+
+		this.btnExportPowerBi.Size = new System.Drawing.Size(150, 40);
+
+		this.btnExportPowerBi.TabIndex = 2;
+
+		this.btnExportPowerBi.Text = "Export Power BI";
+
+		this.btnExportPowerBi.UseVisualStyleBackColor = true;
+
+		this.btnExportPowerBi.Click += new System.EventHandler(BtnExportPowerBi_Click);
 
 		this.grpPowerBI.Anchor = System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
 

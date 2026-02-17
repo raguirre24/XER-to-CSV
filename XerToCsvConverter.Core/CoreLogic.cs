@@ -132,7 +132,7 @@ namespace XerToCsvConverter;
 
         public const string ParentWbsId = "parent_wbs_id";
 
-        public const string ActvCodeTypeId = "actv_code_type_id"; public const string ActvCodeId = "actv_code_id"; public const string FileName = "FileName"; public const string Start = "Start"; public const string Finish = "Finish"; public const string IdName = "ID_Name"; public const string RemainingWorkingDays = "Remaining Working Days"; public const string OriginalDuration = "Original Duration"; public const string TotalFloat = "total_float"; public const string FreeFloat = "Free Float"; public const string PercentComplete = "%"; public const string DataDate = "Data Date"; public const string WbsIdKey = "wbs_id_key"; public const string TaskIdKey = "task_id_key"; public const string ParentWbsIdKey = "parent_wbs_id_key"; public const string CalendarIdKey = "calendar_id_key"; public const string ProjIdKey = "proj_id_key"; public const string ActvCodeIdKey = "actv_code_id_key"; public const string ActvCodeTypeIdKey = "actv_code_type_id_key"; public const string ClndrIdKey = "clndr_id_key"; public const string PredTaskId = "pred_task_id"; public const string PredTaskIdKey = "pred_task_id_key"; public const string CalendarName = "clndr_name"; public const string CalendarData = "clndr_data"; public const string CalendarType = "clndr_type";
+        public const string ActvCodeTypeId = "actv_code_type_id"; public const string ActvCodeId = "actv_code_id"; public const string FileName = "FileName"; public const string Start = "Start"; public const string Finish = "Finish"; public const string IdName = "ID_Name"; public const string RemainingDuration = "Remaining Duration"; public const string OriginalDuration = "Original Duration"; public const string TotalFloat = "total_float"; public const string FreeFloat = "Free Float"; public const string PercentComplete = "%"; public const string DataDate = "Data Date"; public const string WbsIdKey = "wbs_id_key"; public const string TaskIdKey = "task_id_key"; public const string ParentWbsIdKey = "parent_wbs_id_key"; public const string CalendarIdKey = "calendar_id_key"; public const string ProjIdKey = "proj_id_key"; public const string ActvCodeIdKey = "actv_code_id_key"; public const string ActvCodeTypeIdKey = "actv_code_type_id_key"; public const string ClndrIdKey = "clndr_id_key"; public const string PredTaskId = "pred_task_id"; public const string PredTaskIdKey = "pred_task_id_key"; public const string CalendarName = "clndr_name"; public const string CalendarData = "clndr_data"; public const string CalendarType = "clndr_type";
 
         public const string Date = "date"; public const string DayOfWeek = "day_of_week"; public const string WorkingDay = "working_day"; public const string WorkHours = "work_hours"; public const string ExceptionType = "exception_type"; public const string RsrcIdKey = "rsrc_id_key";
 
@@ -1913,7 +1913,7 @@ namespace XerToCsvConverter;
         // .NET 8: FrozenSet for O(1) lookups on static field sets (faster than HashSet for reads)
         private static readonly FrozenSet<string> HandledTaskFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             FieldNames.StatusCode, FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
-            FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
+            FieldNames.RemainingDuration, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
             FieldNames.PercentComplete, FieldNames.DataDate,
             FieldNames.ActStartDate, FieldNames.ActEndDate,
             FieldNames.EarlyStartDate, FieldNames.EarlyEndDate,
@@ -2151,7 +2151,7 @@ namespace XerToCsvConverter;
 
                 FieldNames.Start, FieldNames.Finish, FieldNames.IdName,
 
-                FieldNames.RemainingWorkingDays, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
+                FieldNames.RemainingDuration, FieldNames.OriginalDuration, FieldNames.TotalFloat, FieldNames.FreeFloat,
 
                 FieldNames.PercentComplete, FieldNames.DataDate,
 
@@ -2279,7 +2279,7 @@ namespace XerToCsvConverter;
 
                     {
 
-                        SetTransformedField(transformed, finalIndexes, FieldNames.RemainingWorkingDays,
+                        SetTransformedField(transformed, finalIndexes, FieldNames.RemainingDuration,
 
                             CalculateDaysFromHours(row, taskIndexes, FieldNames.RemainDurationHrCnt, dayHrCnt));
 
@@ -2323,7 +2323,7 @@ namespace XerToCsvConverter;
 
                         // Handle missing calendar or zero hours/day
 
-                        SetTransformedField(transformed, finalIndexes, FieldNames.RemainingWorkingDays, "");
+                        SetTransformedField(transformed, finalIndexes, FieldNames.RemainingDuration, "");
 
                         SetTransformedField(transformed, finalIndexes, FieldNames.OriginalDuration, "");
 
