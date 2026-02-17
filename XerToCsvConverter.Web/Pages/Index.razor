@@ -18,11 +18,15 @@
             <h2><span class="step-number">1</span> Add XER Files</h2>
             @if (_uploadedFiles.Count > 0)
             {
-                <button class="btn btn-sm btn-secondary" @onclick="ClearFiles" disabled="@_isProcessing">Clear All</button>
+                <button class="btn btn-sm btn-secondary" @onclick="ClearFiles" disabled="@_isProcessing"
+                        aria-label="Clear all uploaded files">Clear All</button>
             }
         </div>
         <div class="panel-body">
             <div class="drop-zone @(_isDragOver ? "drag-over" : "")"
+                 role="button"
+                 tabindex="0"
+                 aria-label="File upload area. Drag and drop XER files or click to browse."
                  @ondragenter="HandleDragEnter"
                  @ondragleave="HandleDragLeave"
                  @ondragover:preventDefault
@@ -30,20 +34,23 @@
                 <InputFile OnChange="HandleFileSelected" multiple accept=".xer"
                            @ondragenter="HandleDragEnter"
                            @ondragleave="HandleDragLeave"
+                           aria-label="Select XER files to upload"
                            style="position:absolute;width:100%;height:100%;opacity:0;cursor:pointer;top:0;left:0;" />
+                <span class="drop-zone-icon" aria-hidden="true">&#8682;</span>
                 <p>Drag and drop XER files here or click to browse</p>
-                <span class="hint">Accepts .xer files (multiple)</span>
+                <span class="hint">Accepts .xer files (multiple supported)</span>
             </div>
 
             @if (_uploadedFiles.Count > 0)
             {
-                <ul class="file-list">
+                <ul class="file-list" role="list" aria-label="Uploaded files">
                     @foreach (var file in _uploadedFiles)
                     {
-                        <li class="file-item">
-                            <span class="file-name">@file.Name</span>
-                            <span class="file-status @file.Status.ToLowerInvariant()">@file.Status</span>
-                            <button class="btn-remove" @onclick="() => RemoveFile(file)" disabled="@_isProcessing" title="Remove">&times;</button>
+                        <li class="file-item" role="listitem">
+                            <span class="file-name" title="@file.Name">@file.Name</span>
+                            <span class="file-status @file.Status.ToLowerInvariant()" role="status">@file.Status</span>
+                            <button class="btn-remove" @onclick="() => RemoveFile(file)" disabled="@_isProcessing"
+                                    title="Remove @file.Name" aria-label="Remove @file.Name">&times;</button>
                         </li>
                     }
                 </ul>
@@ -51,14 +58,14 @@
 
             @if (_fileSizeWarning)
             {
-                <div class="warning-banner">
+                <div class="warning-banner" role="alert">
                     One or more files are larger than 10 MB. Parsing may be slow in the browser.
                 </div>
             }
         </div>
     </div>
 
-    @* === Enhanced Tables Toggle === *@
+    @* === Step 2: Options === *@
     <div class="panel">
         <div class="panel-header">
             <h2><span class="step-number">2</span> Options</h2>
@@ -71,16 +78,17 @@
         </div>
     </div>
 
-    @* === Parse Button === *@
+    @* === Step 3: Parse Button === *@
     <div class="parse-area">
         @if (_isProcessing)
         {
-            <button class="btn btn-danger btn-lg" @onclick="CancelOperation">Cancel</button>
+            <button class="btn btn-danger btn-lg" @onclick="CancelOperation" aria-label="Cancel current operation">Cancel</button>
         }
         else
         {
-            <button class="btn btn-primary btn-lg" @onclick="ParseFiles" disabled="@(_uploadedFiles.Count == 0)">
-                3. Parse and Load Tables
+            <button class="btn btn-primary btn-lg" @onclick="ParseFiles" disabled="@(_uploadedFiles.Count == 0)"
+                    aria-label="Parse and load tables from uploaded XER files">
+                <span class="step-number" aria-hidden="true">3</span> Parse and Load Tables
             </button>
         }
     </div>
@@ -88,10 +96,13 @@
     @* === Progress === *@
     @if (_isProcessing || _progressPercent > 0)
     {
-        <div class="progress-bar-container">
-            <div class="progress-bar-fill" style="width: @(_progressPercent)%"></div>
+        <div class="progress-section" role="progressbar" aria-valuenow="@_progressPercent" aria-valuemin="0" aria-valuemax="100"
+             aria-label="@_progressMessage">
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill" style="width: @(_progressPercent)%"></div>
+            </div>
+            <p class="progress-label">@_progressMessage</p>
         </div>
-        <p class="progress-label">@_progressMessage</p>
     }
 
     @* === Step 4: Table Selection & Export === *@
@@ -100,21 +111,23 @@
         <div class="two-col">
             <div class="panel">
                 <div class="panel-header">
-                    <h2>Tables to Export</h2>
-                    <span class="table-count">@_filteredTableNames.Count tables</span>
+                    <h2><span class="step-number">4</span> Tables to Export</h2>
+                    <span class="table-count" aria-live="polite">@_filteredTableNames.Count tables</span>
                 </div>
                 <div class="panel-body">
                     <input type="text" class="table-filter" placeholder="Type to filter tables..."
+                           aria-label="Filter table list"
                            @bind="_tableFilter" @bind:event="oninput" @bind:after="FilterTables" />
                     <div class="table-actions">
-                        <button class="btn btn-sm btn-secondary" @onclick="SelectAllTables">Select All</button>
-                        <button class="btn btn-sm btn-secondary" @onclick="DeselectAllTables">Deselect All</button>
+                        <button class="btn btn-sm btn-secondary" @onclick="SelectAllTables" aria-label="Select all visible tables">Select All</button>
+                        <button class="btn btn-sm btn-secondary" @onclick="DeselectAllTables" aria-label="Deselect all visible tables">Deselect All</button>
                     </div>
-                    <ul class="table-checklist">
+                    <ul class="table-checklist" role="list" aria-label="Available tables for export">
                         @foreach (var table in _filteredTableNames)
                         {
-                            <li>
+                            <li role="listitem">
                                 <input type="checkbox" checked="@_selectedTables.Contains(table)"
+                                       aria-label="@(IsEnhancedTable(table) ? $"Enhanced table: {table}" : table)"
                                        @onchange="e => ToggleTable(table, (bool)(e.Value ?? false))" />
                                 <span class="@(IsEnhancedTable(table) ? "enhanced" : "")">@table</span>
                             </li>
@@ -128,20 +141,23 @@
                     <h2>Activity Log</h2>
                 </div>
                 <div class="panel-body">
-                    <div class="activity-log" @ref="_logElement">@_activityLog</div>
+                    <div class="activity-log" @ref="_logElement" aria-label="Activity log" role="log" aria-live="polite">@_activityLog</div>
                 </div>
             </div>
         </div>
 
         @* === Export === *@
-        <div class="export-area">
-            <button class="btn btn-primary" @onclick="ExportAll" disabled="@(_isProcessing || _allTableNames.Count == 0)">
+        <div class="export-area" role="group" aria-label="Export actions">
+            <button class="btn btn-primary" @onclick="ExportAll" disabled="@(_isProcessing || _allTableNames.Count == 0)"
+                    aria-label="Export all tables as a ZIP file">
                 Export All as ZIP
             </button>
-            <button class="btn btn-secondary" @onclick="ExportSelected" disabled="@(_isProcessing || _selectedTables.Count == 0)">
+            <button class="btn btn-secondary" @onclick="ExportSelected" disabled="@(_isProcessing || _selectedTables.Count == 0)"
+                    aria-label="Export selected tables as a ZIP file">
                 Export Selected as ZIP
             </button>
-            <button class="btn btn-info" @onclick="ExportPowerBi" disabled="@(_isProcessing || !_allTableNames.Any(IsEnhancedTable))">
+            <button class="btn btn-info" @onclick="ExportPowerBi" disabled="@(_isProcessing || !_allTableNames.Any(IsEnhancedTable))"
+                    aria-label="Export Power BI enhanced tables as a ZIP file">
                 Export Power BI as ZIP
             </button>
         </div>
@@ -269,7 +285,11 @@
                     if (file != null)
                         file.Status = p.FileStatus;
                 }
-                InvokeAsync(StateHasChanged);
+                InvokeAsync(async () =>
+                {
+                    StateHasChanged();
+                    await ScrollLogToBottom();
+                });
             });
 
             var files = _uploadedFiles.Select(f =>
@@ -386,7 +406,7 @@
             LogActivity("No Power BI enhanced tables available.");
             return;
         }
-        
+
         await ExportTables(pbiTables);
     }
 
@@ -405,7 +425,11 @@
             {
                 _progressPercent = p.percent;
                 _progressMessage = p.message;
-                InvokeAsync(StateHasChanged);
+                InvokeAsync(async () =>
+                {
+                    StateHasChanged();
+                    await ScrollLogToBottom();
+                });
             });
 
             await Task.Yield(); // Allow UI to render before heavy work
@@ -505,6 +529,19 @@
     {
         var timestamp = DateTime.Now.ToString("HH:mm:ss");
         _activityLog += $"[{timestamp}] {message}\n";
+    }
+
+    // --- Auto-scroll log ---
+    private async Task ScrollLogToBottom()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("scrollToBottom", _logElement);
+        }
+        catch
+        {
+            // Ignore JS interop errors during disposal
+        }
     }
 
     // --- Model ---
