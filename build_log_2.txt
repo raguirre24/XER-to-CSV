@@ -1,0 +1,12 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  XerToCsvConverter.Core -> C:\Users\ricar\OneDrive\Documentos\Visual Studio 2022\XER to CSV\XerToCsvConverter.Core\bin\Debug\net8.0\XerToCsvConverter.Core.dll
+  XerToCsvConverter.Web -> C:\Users\ricar\OneDrive\Documentos\Visual Studio 2022\XER to CSV\XerToCsvConverter.Web\bin\Debug\net8.0\XerToCsvConverter.Web.dll
+  XerToCsvConverter.Web (Blazor output) -> C:\Users\ricar\OneDrive\Documentos\Visual Studio 2022\XER to CSV\XerToCsvConverter.Web\bin\Debug\net8.0\wwwroot
+  XER to CSV -> C:\Users\ricar\OneDrive\Documentos\Visual Studio 2022\XER to CSV\bin\Debug\net8.0-windows\XER to CSV.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.59

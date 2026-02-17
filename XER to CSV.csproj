@@ -22,4 +22,12 @@
   <ItemGroup>
     <ProjectReference Include="XerToCsvConverter.Core\XerToCsvConverter.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="XerToCsvConverter.Core\**" />
+    <Compile Remove="XerToCsvConverter.Web\**" />
+    <EmbeddedResource Remove="XerToCsvConverter.Core\**" />
+    <EmbeddedResource Remove="XerToCsvConverter.Web\**" />
+    <None Remove="XerToCsvConverter.Core\**" />
+    <None Remove="XerToCsvConverter.Web\**" />
+  </ItemGroup>
 </Project>
