@@ -60,6 +60,8 @@ public class MainForm : Form
 
 
 
+	private ToolStripMenuItem addFilesToolStripMenuItem = null!;
+
 	private ToolStripMenuItem exitToolStripMenuItem = null!;
 
 
@@ -427,6 +429,44 @@ public class MainForm : Form
 
 		lstTables.Sorted = false;
 
+		// --- Accessibility Names ---
+		lvwXerFiles.AccessibleName = "XER file list";
+		lvwXerFiles.AccessibleDescription = "List of XER files to parse. Drag and drop files here or use Add Files.";
+		txtOutputPath.AccessibleName = "Output directory path";
+		txtOutputPath.AccessibleDescription = "Directory where exported CSV files will be saved.";
+		txtTableFilter.AccessibleName = "Table filter";
+		txtTableFilter.AccessibleDescription = "Type to filter the table list below.";
+		lstTables.AccessibleName = "Tables to export";
+		lstTables.AccessibleDescription = "Check the tables you want to include in the export.";
+		txtActivityLog.AccessibleName = "Activity log";
+		txtActivityLog.AccessibleDescription = "Shows parsing and export activity messages.";
+		btnParseXer.AccessibleName = "Parse XER files";
+		btnExportAll.AccessibleName = "Export all tables";
+		btnExportSelected.AccessibleName = "Export selected tables";
+		btnExportPowerBi.AccessibleName = "Export Power BI tables";
+		btnCancelOperation.AccessibleName = "Cancel current operation";
+		btnSelectOutput.AccessibleName = "Browse for output folder";
+		chkCreatePowerBiTables.AccessibleName = "Include enhanced Power BI tables";
+
+		// --- Tooltips ---
+		toolTip.SetToolTip(btnParseXer, "Parse the loaded XER files and extract tables");
+		toolTip.SetToolTip(btnExportAll, "Export all available tables to CSV files");
+		toolTip.SetToolTip(btnExportSelected, "Export only the checked tables to CSV files");
+		toolTip.SetToolTip(btnExportPowerBi, "Export Power BI enhanced tables to CSV files");
+		toolTip.SetToolTip(btnCancelOperation, "Cancel the current operation");
+		toolTip.SetToolTip(btnSelectOutput, "Select the folder where CSV files will be saved");
+		toolTip.SetToolTip(txtOutputPath, "Drag and drop a folder here or click Browse to set the output directory");
+		toolTip.SetToolTip(txtTableFilter, "Type to filter the table list");
+		toolTip.SetToolTip(chkCreatePowerBiTables, "Generate enhanced tables optimized for Power BI dashboards");
+
+		// --- Keyboard Shortcut: Ctrl+O for Add Files ---
+		base.KeyPreview = true;
+		base.KeyDown += MainForm_KeyDown;
+
+		// --- Dark Terminal-Style Activity Log ---
+		txtActivityLog.BackColor = Color.FromArgb(30, 30, 46);
+		txtActivityLog.ForeColor = Color.FromArgb(205, 214, 244);
+
 		UpdateStatus("Ready");
 
 		LogActivity("Application started.");
@@ -439,6 +479,15 @@ public class MainForm : Form
 
 		ResizeListViewColumns();
 
+	}
+
+	private void MainForm_KeyDown(object? sender, KeyEventArgs e)
+	{
+		if (e.Control && e.KeyCode == Keys.O)
+		{
+			e.SuppressKeyPress = true;
+			BtnAddFile_Click(sender, e);
+		}
 	}
 
 
@@ -1330,7 +1379,7 @@ public class MainForm : Form
 
 	{
 
-		ShowInfo("Primavera P6 XER to CSV Converter\nVersion: 2.4\n\nSOFTWARE COPYRIGHT NOTICE\r\nCopyright © 2025 Ricardo Aguirre. All Rights Reserved.\r\nUnauthorized use, copying, or sharing of this software is strictly prohibited. Written permission required for any use.\r\nTHE SOFTWARE IS PROVIDED \"AS IS\" WITHOUT WARRANTY OF ANY KIND. RICARDO AGUIRRE SHALL NOT BE LIABLE FOR ANY DAMAGES ARISING FROM USE OF THIS SOFTWARE.\r\nBy using this software, you agree to these terms.", "About");
+		ShowInfo("Primavera P6 XER to CSV Converter\nVersion: 2.5\n\nSOFTWARE COPYRIGHT NOTICE\r\nCopyright © 2025-2026 Ricardo Aguirre. All Rights Reserved.\r\nUnauthorized use, copying, or sharing of this software is strictly prohibited. Written permission required for any use.\r\nTHE SOFTWARE IS PROVIDED \"AS IS\" WITHOUT WARRANTY OF ANY KIND. RICARDO AGUIRRE SHALL NOT BE LIABLE FOR ANY DAMAGES ARISING FROM USE OF THIS SOFTWARE.\r\nBy using this software, you agree to these terms.", "About");
 
 	}
 
@@ -3551,6 +3600,8 @@ public class MainForm : Form
 
 		this.fileToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 
+		this.addFilesToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+
 		this.exitToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 
 		this.helpToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -3695,7 +3746,7 @@ public class MainForm : Form
 
 		this.menuStrip.Text = "menuStrip1";
 
-		this.fileToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[1] { this.exitToolStripMenuItem });
+		this.fileToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[3] { this.addFilesToolStripMenuItem, new System.Windows.Forms.ToolStripSeparator(), this.exitToolStripMenuItem });
 
 		this.fileToolStripMenuItem.Name = "fileToolStripMenuItem";
 
@@ -3703,9 +3754,19 @@ public class MainForm : Form
 
 		this.fileToolStripMenuItem.Text = "&File";
 
+		this.addFilesToolStripMenuItem.Name = "addFilesToolStripMenuItem";
+
+		this.addFilesToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
+
+		this.addFilesToolStripMenuItem.Text = "&Add Files...";
+
+		this.addFilesToolStripMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.O;
+
+		this.addFilesToolStripMenuItem.Click += new System.EventHandler(BtnAddFile_Click);
+
 		this.exitToolStripMenuItem.Name = "exitToolStripMenuItem";
 
-		this.exitToolStripMenuItem.Size = new System.Drawing.Size(93, 22);
+		this.exitToolStripMenuItem.Size = new System.Drawing.Size(180, 22);
 
 		this.exitToolStripMenuItem.Text = "E&xit";
 
@@ -3913,7 +3974,7 @@ public class MainForm : Form
 
 		this.btnAddFile.Text = "Add Files";
 
-		this.btnAddFile.ToolTipText = "Add XER files";
+		this.btnAddFile.ToolTipText = "Add XER files (Ctrl+O)";
 
 		this.btnAddFile.Click += new System.EventHandler(BtnAddFile_Click);
 

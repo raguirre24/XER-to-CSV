@@ -14,18 +14,25 @@
     --accent-hover: #2376ba;
     --accent-down: #12548b;
     --success: #1c8754;
+    --success-hover: #1a9d62;
     --danger: #a63636;
     --danger-hover: #b34444;
     --warning: #d4a017;
+    --info: #0d7c8c;
+    --info-hover: #0f9aad;
     --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     --mono-font: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
     --radius: 6px;
     --radius-lg: 10px;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
     --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.1);
+    --transition-fast: 0.15s ease;
+    --transition: 0.2s ease;
 }
 
-* {
+*,
+*::before,
+*::after {
     box-sizing: border-box;
     margin: 0;
     padding: 0;
@@ -37,6 +44,14 @@ html, body {
     color: var(--text);
     background: var(--surface);
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Focus styles for keyboard accessibility */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 /* Loading screen */
@@ -46,8 +61,14 @@ html, body {
     align-items: center;
     justify-content: center;
     height: 100vh;
-    gap: 1rem;
+    gap: 1.25rem;
     color: var(--text-muted);
+    background: linear-gradient(180deg, var(--surface) 0%, var(--surface-alt) 100%);
+}
+
+.loading-screen p {
+    font-size: 0.95rem;
+    font-weight: 500;
 }
 
 .spinner {
@@ -114,6 +135,11 @@ html, body {
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow);
     margin-bottom: 1rem;
+    transition: box-shadow var(--transition);
+}
+
+.panel:hover {
+    box-shadow: var(--shadow-lg);
 }
 
 .panel-header {
@@ -130,6 +156,8 @@ html, body {
     font-size: 0.9rem;
     font-weight: 600;
     color: var(--text);
+    display: flex;
+    align-items: center;
 }
 
 .panel-body {
@@ -158,7 +186,7 @@ html, body {
     border-radius: var(--radius);
     padding: 2rem;
     text-align: center;
-    transition: all 0.2s;
+    transition: all var(--transition);
     cursor: pointer;
     background: var(--surface);
     position: relative;
@@ -170,14 +198,29 @@ html, body {
     background: var(--accent-soft);
 }
 
+.drop-zone.drag-over {
+    transform: scale(1.01);
+}
+
+.drop-zone-icon {
+    display: block;
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+    color: var(--accent);
+    opacity: 0.7;
+    line-height: 1;
+}
+
 .drop-zone p {
     color: var(--text-muted);
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.25rem;
+    font-weight: 500;
 }
 
 .drop-zone .hint {
     font-size: 0.8rem;
     color: var(--text-muted);
+    opacity: 0.8;
 }
 
 /* File List */
@@ -186,19 +229,26 @@ html, body {
     max-height: 180px;
     overflow-y: auto;
     margin-top: 0.75rem;
+    border: 1px solid var(--surface-alt);
+    border-radius: var(--radius);
 }
 
 .file-item {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.4rem 0.6rem;
+    padding: 0.5rem 0.75rem;
     border-bottom: 1px solid var(--surface-alt);
     font-size: 0.85rem;
+    transition: background var(--transition-fast);
 }
 
 .file-item:last-child {
     border-bottom: none;
+}
+
+.file-item:hover {
+    background: var(--surface);
 }
 
 .file-item .file-name {
@@ -212,11 +262,15 @@ html, body {
 .file-item .file-status {
     padding: 0.15rem 0.5rem;
     border-radius: 3px;
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     font-weight: 600;
     margin: 0 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
 }
 
+.file-status.ready { background: var(--surface-alt); color: var(--text-muted); }
+.file-status.pending { background: var(--accent-soft); color: var(--accent); }
 .file-status.processing { background: #e3f2fd; color: #1565c0; }
 .file-status.success { background: #e8f5e9; color: #2e7d32; }
 .file-status.error { background: #ffebee; color: #c62828; }
@@ -225,16 +279,18 @@ html, body {
 .file-item .btn-remove {
     background: none;
     border: none;
-    color: var(--danger);
+    color: var(--text-muted);
     cursor: pointer;
-    font-size: 1rem;
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
+    font-size: 1.1rem;
+    padding: 0.2rem 0.4rem;
+    border-radius: var(--radius);
     line-height: 1;
+    transition: all var(--transition-fast);
 }
 
 .file-item .btn-remove:hover {
     background: #ffebee;
+    color: var(--danger);
 }
 
 /* Buttons */
@@ -248,14 +304,17 @@ html, body {
     font-size: 0.85rem;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all var(--transition-fast);
     gap: 0.4rem;
     white-space: nowrap;
+    text-decoration: none;
+    line-height: 1.4;
 }
 
 .btn:disabled {
-    opacity: 0.5;
+    opacity: 0.45;
     cursor: not-allowed;
+    pointer-events: none;
 }
 
 .btn-primary {
@@ -266,10 +325,14 @@ html, body {
 
 .btn-primary:hover:not(:disabled) {
     background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    box-shadow: 0 2px 8px rgba(22, 102, 170, 0.25);
 }
 
 .btn-primary:active:not(:disabled) {
     background: var(--accent-down);
+    box-shadow: none;
+    transform: translateY(1px);
 }
 
 .btn-secondary {
@@ -280,6 +343,8 @@ html, body {
 
 .btn-secondary:hover:not(:disabled) {
     background: var(--surface-alt);
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 .btn-danger {
@@ -290,6 +355,32 @@ html, body {
 
 .btn-danger:hover:not(:disabled) {
     background: var(--danger-hover);
+    border-color: var(--danger-hover);
+    box-shadow: 0 2px 8px rgba(166, 54, 54, 0.25);
+}
+
+.btn-success {
+    background: var(--success);
+    color: white;
+    border-color: var(--success);
+}
+
+.btn-success:hover:not(:disabled) {
+    background: var(--success-hover);
+    border-color: var(--success-hover);
+    box-shadow: 0 2px 8px rgba(28, 135, 84, 0.25);
+}
+
+.btn-info {
+    background: var(--info);
+    color: white;
+    border-color: var(--info);
+}
+
+.btn-info:hover:not(:disabled) {
+    background: var(--info-hover);
+    border-color: var(--info-hover);
+    box-shadow: 0 2px 8px rgba(13, 124, 140, 0.25);
 }
 
 .btn-sm {
@@ -319,12 +410,7 @@ html, body {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1rem;
-}
-
-@media (max-width: 768px) {
-    .two-col {
-        grid-template-columns: 1fr;
-    }
+    align-items: start;
 }
 
 /* Checkbox & Toggle */
@@ -335,10 +421,16 @@ html, body {
     padding: 0.5rem 0;
 }
 
+.toggle-row label {
+    cursor: pointer;
+    user-select: none;
+}
+
 .toggle-row input[type="checkbox"] {
     width: 16px;
     height: 16px;
     accent-color: var(--accent);
+    cursor: pointer;
 }
 
 /* Table Selection */
@@ -348,15 +440,22 @@ html, body {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     font-size: 0.85rem;
+    font-family: var(--font-family);
     background: var(--panel);
     color: var(--text);
     margin-bottom: 0.5rem;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .table-filter:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.table-filter::placeholder {
+    color: var(--text-muted);
+    opacity: 0.6;
 }
 
 .table-actions {
@@ -381,6 +480,8 @@ html, body {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    transition: background var(--transition-fast);
+    cursor: pointer;
 }
 
 .table-checklist li:last-child {
@@ -393,6 +494,7 @@ html, body {
 
 .table-checklist input[type="checkbox"] {
     accent-color: var(--accent);
+    cursor: pointer;
 }
 
 .table-checklist .enhanced {
@@ -413,14 +515,27 @@ html, body {
     color: #cdd6f4;
     border-radius: var(--radius);
     padding: 0.75rem;
-    max-height: 200px;
+    min-height: 120px;
+    max-height: 280px;
     overflow-y: auto;
-    line-height: 1.5;
+    line-height: 1.6;
     white-space: pre-wrap;
-    word-break: break-all;
+    overflow-wrap: break-word;
+    word-break: normal;
+    scroll-behavior: smooth;
+}
+
+.activity-log:empty::before {
+    content: "Activity log will appear here...";
+    color: #585b70;
+    font-style: italic;
 }
 
 /* Progress Bar */
+.progress-section {
+    margin: 0.5rem 0;
+}
+
 .progress-bar-container {
     width: 100%;
     height: 6px;
@@ -432,7 +547,7 @@ html, body {
 
 .progress-bar-fill {
     height: 100%;
-    background: var(--accent);
+    background: linear-gradient(90deg, var(--accent), var(--accent-hover));
     border-radius: 3px;
     transition: width 0.3s ease;
 }
@@ -449,7 +564,8 @@ html, body {
     gap: 0.75rem;
     align-items: center;
     justify-content: center;
-    padding: 0.75rem 0;
+    padding: 1rem 0;
+    flex-wrap: wrap;
 }
 
 /* Blazor Error UI */
@@ -472,7 +588,7 @@ html, body {
     top: 0.5rem;
 }
 
-/* Warning */
+/* Warning / Info Banners */
 .warning-banner {
     background: #fff3e0;
     border: 1px solid #ffcc80;
@@ -480,5 +596,85 @@ html, body {
     padding: 0.5rem 0.75rem;
     font-size: 0.85rem;
     color: #e65100;
-    margin-bottom: 0.75rem;
+    margin-top: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Scrollbar styling for dark log and table list */
+.activity-log::-webkit-scrollbar,
+.table-checklist::-webkit-scrollbar,
+.file-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.activity-log::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.activity-log::-webkit-scrollbar-thumb {
+    background: #45475a;
+    border-radius: 3px;
+}
+
+.table-checklist::-webkit-scrollbar-track,
+.file-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.table-checklist::-webkit-scrollbar-thumb,
+.file-list::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .two-col {
+        grid-template-columns: 1fr;
+    }
+
+    .page-container {
+        padding: 1rem;
+    }
+
+    .page-header h1 {
+        font-size: 1.25rem;
+    }
+
+    .export-area {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .export-area .btn {
+        justify-content: center;
+    }
+
+    .drop-zone {
+        padding: 1.5rem 1rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .page-container {
+        padding: 0.75rem;
+    }
+
+    .panel-header {
+        flex-direction: column;
+        gap: 0.5rem;
+        align-items: flex-start;
+    }
+
+    .btn-lg {
+        padding: 0.6rem 1.25rem;
+        font-size: 0.9rem;
+        width: 100%;
+    }
+
+    .table-actions {
+        flex-wrap: wrap;
+    }
 }
