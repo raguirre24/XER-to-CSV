@@ -2145,7 +2145,7 @@ namespace XerToCsvConverter;
 
                 FieldNames.CstrType, FieldNames.CstrDate, FieldNames.PriorityType, FieldNames.FloatPath,
 
-                FieldNames.FloatPathOrder, FieldNames.DrivingPathFlag,
+                FieldNames.FloatPathOrder, FieldNames.DrivingPathFlag, FieldNames.RemainDurationHrCnt,
 
                 // Calculated Fields
 
@@ -2281,11 +2281,11 @@ namespace XerToCsvConverter;
 
                         SetTransformedField(transformed, finalIndexes, FieldNames.RemainingDuration,
 
-                            CalculateDaysFromHours(row, taskIndexes, FieldNames.RemainDurationHrCnt, dayHrCnt));
+                            CalculateDaysFromHours(row, taskIndexes, FieldNames.RemainDurationHrCnt, dayHrCnt, 2));
 
                         SetTransformedField(transformed, finalIndexes, FieldNames.OriginalDuration,
 
-                            CalculateDaysFromHours(row, taskIndexes, FieldNames.TargetDurationHrCnt, dayHrCnt));
+                            CalculateDaysFromHours(row, taskIndexes, FieldNames.TargetDurationHrCnt, dayHrCnt, 2));
 
 
 
@@ -2295,11 +2295,11 @@ namespace XerToCsvConverter;
 
                             SetTransformedField(transformed, finalIndexes, FieldNames.TotalFloat,
 
-                                CalculateDaysFromHours(row, taskIndexes, FieldNames.TotalFloatHrCnt, dayHrCnt));
+                                CalculateDaysFromHours(row, taskIndexes, FieldNames.TotalFloatHrCnt, dayHrCnt, 2));
 
                             SetTransformedField(transformed, finalIndexes, FieldNames.FreeFloat,
 
-                                CalculateDaysFromHours(row, taskIndexes, FieldNames.FreeFloatHrCnt, dayHrCnt));
+                                CalculateDaysFromHours(row, taskIndexes, FieldNames.FreeFloatHrCnt, dayHrCnt, 2));
 
                         }
 
@@ -2709,7 +2709,7 @@ namespace XerToCsvConverter;
 
 
 
-        private string CalculateDaysFromHours(string[] row, IReadOnlyDictionary<string, int> indexes, string hourFieldName, decimal hoursPerDay)
+        private string CalculateDaysFromHours(string[] row, IReadOnlyDictionary<string, int> indexes, string hourFieldName, decimal hoursPerDay, int decimalPlaces = 1)
 
         {
 
@@ -2725,7 +2725,7 @@ namespace XerToCsvConverter;
 
                 decimal days = hours / hoursPerDay;
 
-                return days.ToString("F1", CultureInfo.InvariantCulture); // Format to 1 decimal place
+                return days.ToString($"F{decimalPlaces}", CultureInfo.InvariantCulture);
 
             }
 
