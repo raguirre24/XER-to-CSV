@@ -2145,11 +2145,8 @@ namespace XerToCsvConverter;
 
                 FieldNames.CstrType, FieldNames.CstrDate, FieldNames.PriorityType, FieldNames.FloatPath,
 
-<<<<<<< HEAD
-                FieldNames.FloatPathOrder, FieldNames.DrivingPathFlag, FieldNames.PhysCompletePct,
-=======
-                FieldNames.FloatPathOrder, FieldNames.DrivingPathFlag, FieldNames.RemainDurationHrCnt,
->>>>>>> b5d13daf453a7a8b25ca1d94203c659fd4568afc
+                FieldNames.FloatPathOrder, FieldNames.DrivingPathFlag,
+                FieldNames.RemainDurationHrCnt, FieldNames.PhysCompletePct,
 
                 // Calculated Fields
 
