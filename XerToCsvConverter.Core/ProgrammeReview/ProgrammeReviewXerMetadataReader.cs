@@ -22,30 +22,73 @@ public static class ProgrammeReviewXerMetadataReader
         ArgumentNullException.ThrowIfNull(xerContent);
         if (xerContent.Length == 0) return null;
 
+        using var stream = new MemoryStream(xerContent, writable: false);
+        return await ReadSingleProjectDataDateAsync(stream, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads the data date directly from an XER file without loading the complete history into memory.
+    /// The file is reopened for the Windows-1252 fallback so very large desktop histories remain
+    /// bounded to the stream reader buffer.
+    /// </summary>
+    public static async ValueTask<DateOnly?> ReadSingleProjectDataDateAsync(
+        string xerFilePath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(xerFilePath);
+
         try
         {
-            return await ReadWithEncodingAsync(xerContent, StrictUtf8, cancellationToken)
+            await using FileStream stream = OpenXerFile(xerFilePath);
+            return await ReadWithEncodingAsync(stream, StrictUtf8, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (DecoderFallbackException)
         {
-            return await ReadWithEncodingAsync(xerContent, Windows1252, cancellationToken)
+            await using FileStream stream = OpenXerFile(xerFilePath);
+            return await ReadWithEncodingAsync(stream, Windows1252, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Reads an XER metadata date from a readable, seekable stream without taking ownership.</summary>
+    public static async ValueTask<DateOnly?> ReadSingleProjectDataDateAsync(
+        Stream xerStream,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(xerStream);
+        if (!xerStream.CanRead)
+            throw new ArgumentException("The XER stream must be readable.", nameof(xerStream));
+        if (!xerStream.CanSeek)
+            throw new ArgumentException("The XER stream must be seekable for encoding fallback.", nameof(xerStream));
+        if (xerStream.Position >= xerStream.Length) return null;
+
+        long initialPosition = xerStream.Position;
+
+        try
+        {
+            return await ReadWithEncodingAsync(xerStream, StrictUtf8, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (DecoderFallbackException)
+        {
+            xerStream.Position = initialPosition;
+            return await ReadWithEncodingAsync(xerStream, Windows1252, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
 
     private static async ValueTask<DateOnly?> ReadWithEncodingAsync(
-        byte[] xerContent,
+        Stream xerStream,
         Encoding encoding,
         CancellationToken cancellationToken)
     {
-        using var stream = new MemoryStream(xerContent, writable: false);
         using var reader = new StreamReader(
-            stream,
+            xerStream,
             encoding,
             detectEncodingFromByteOrderMarks: true,
             bufferSize: 4096,
-            leaveOpen: false);
+            leaveOpen: true);
 
         bool inProjectTable = false;
         int dataDateIndex = -1;
@@ -101,6 +144,14 @@ public static class ProgrammeReviewXerMetadataReader
 
         return projectRowCount == 1 ? dataDate : null;
     }
+
+    private static FileStream OpenXerFile(string xerFilePath) => new(
+        xerFilePath,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.Read,
+        bufferSize: 4096,
+        FileOptions.Asynchronous | FileOptions.SequentialScan);
 
     private static Encoding CreateWindows1252Encoding()
     {

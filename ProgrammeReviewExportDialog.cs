@@ -54,6 +54,14 @@ internal sealed class ProgrammeReviewExportDialog : Form
 
     internal ProgrammeReviewBundleRequest? BundleRequest { get; private set; }
 
+    internal bool HasSuggestedDataDate(string originalFilename, DateOnly dataDate)
+    {
+        string expected = dataDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return _snapshots.Rows.Cast<DataGridViewRow>().Any(row =>
+            string.Equals(CellText(row, "OriginalFilename"), originalFilename, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(CellText(row, "DataDate"), expected, StringComparison.Ordinal));
+    }
+
     private void BuildLayout()
     {
         var root = new TableLayoutPanel
@@ -64,6 +72,7 @@ internal sealed class ProgrammeReviewExportDialog : Form
             RowCount = 4,
             Padding = new Padding(14)
         };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
@@ -77,7 +86,8 @@ internal sealed class ProgrammeReviewExportDialog : Form
             Margin = new Padding(0, 0, 0, 12),
             Text = "Create one full-history bundle for one governed project and programme type. " +
                    "Include at least one real baseline candidate and every applicable post-baseline update. " +
-                   "Project identity is explicit; it is not inferred from legacy filenames."
+                   "Project identity is explicit; it is not inferred from legacy filenames. " +
+                   "XER data dates are filled from PROJECT.last_recalc_date when available and remain editable."
         };
 
         var metadata = new TableLayoutPanel

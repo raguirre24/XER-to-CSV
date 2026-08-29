@@ -37,13 +37,19 @@ Thank you for using this software.
             }
         }
 
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
         if (args.Any(arg => string.Equals(arg, "--ui-smoke-test", StringComparison.OrdinalIgnoreCase)))
         {
             using var smokeForm = new MainForm(suppressPersistence: true);
+            smokeForm.ShowInTaskbar = false;
+            smokeForm.Opacity = 0;
+            smokeForm.Show();
+            Application.DoEvents();
             smokeForm.VerifyProgrammeReviewUiIntegration();
+            smokeForm.Close();
             return;
         }
 

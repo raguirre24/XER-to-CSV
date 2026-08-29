@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Drawing;
-using System.Globalization;
 using System.Windows.Forms;
 using XerToCsvConverter.ProgrammeReview;
 
@@ -17,10 +16,10 @@ public partial class MainForm
         btnExportProgrammeReview = new Button
         {
             Name = "btnExportProgrammeReview",
-            Text = "Programme Review Bundle",
+            Text = "Create Programme Review bundle",
             AutoSize = true,
             MinimumSize = Size.Empty,
-            Margin = new Padding(5, 0, 0, 0),
+            Margin = new Padding(4),
             AccessibleName = "Export Programme Review CSV bundle",
             AccessibleDescription = "Configure metadata and create a validated full-history Programme Review bundle."
         };
@@ -43,27 +42,148 @@ public partial class MainForm
 
     private void AttachProgrammeReviewButtonToActionPanel()
     {
-        FlowLayoutPanel? actions = panelExportActions.Controls
-            .OfType<FlowLayoutPanel>()
-            .FirstOrDefault();
-        if (actions is not null && !actions.Controls.Contains(btnExportProgrammeReview))
-            actions.Controls.Add(btnExportProgrammeReview);
+        ConfigureExportActionButton(btnExportProgrammeReview, "Create Programme &Review bundle");
+        btnExportProgrammeReview.TabIndex = 0;
+        if (!exportActionsLayout.Controls.Contains(btnExportProgrammeReview))
+            exportActionsLayout.Controls.Add(btnExportProgrammeReview, 0, 2);
     }
 
     internal void VerifyProgrammeReviewUiIntegration()
     {
-        FlowLayoutPanel? actions = panelExportActions.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
-        if (actions is null || !actions.Controls.Contains(btnExportProgrammeReview))
+        CreateControl();
+        PerformLayout();
+        exportActionsLayout.PerformLayout();
+
+        if (!panelExportActions.Controls.Contains(exportActionsLayout)
+            || !exportActionsLayout.Controls.Contains(btnExportProgrammeReview))
             throw new InvalidOperationException("The Programme Review action is not attached to the Windows export UI.");
+        TableLayoutPanelCellPosition position = exportActionsLayout.GetPositionFromControl(btnExportProgrammeReview);
+        if (position.Column != 0 || position.Row != 2)
+            throw new InvalidOperationException("The Programme Review action is not in the primary export position.");
         if (string.IsNullOrWhiteSpace(btnExportProgrammeReview.AccessibleName)
             || string.IsNullOrWhiteSpace(btnExportProgrammeReview.AccessibleDescription))
             throw new InvalidOperationException("The Programme Review action is missing accessible metadata.");
+
+        Control[] visibleControls =
+        [
+            grpInputFiles,
+            grpOutput,
+            btnParseXer,
+            splitContainerResults,
+            btnSelectOutput,
+            btnPbiDetails,
+            btnExportProgrammeReview,
+            btnExportPowerBi,
+            btnExportAll,
+            btnExportSelected,
+            btnCancelOperation
+        ];
+
+        Size originalSize = Size;
+        try
+        {
+            VerifyControlsAreContained(visibleControls, "startup");
+            Size = MinimumSize;
+            PerformLayout();
+            exportActionsLayout.PerformLayout();
+            VerifyControlsAreContained(visibleControls, "minimum-size");
+
+            int[] actionHeights =
+            [
+                btnExportProgrammeReview.Height,
+                btnExportPowerBi.Height,
+                btnExportAll.Height,
+                btnExportSelected.Height
+            ];
+            if (actionHeights.Distinct().Count() != 1)
+                throw new InvalidOperationException("Export actions do not have consistent heights.");
+        }
+        finally
+        {
+            Size = originalSize;
+            PerformLayout();
+        }
 
         using var dialog = new ProgrammeReviewExportDialog(
             Array.Empty<string>(),
             new Dictionary<string, DateOnly>(StringComparer.OrdinalIgnoreCase));
         if (string.IsNullOrWhiteSpace(dialog.AccessibleName))
             throw new InvalidOperationException("The Programme Review metadata dialog is missing an accessible name.");
+
+        VerifyProgrammeReviewIsAvailableWithoutLegacyParse();
+    }
+
+    private static void VerifyControlsAreContained(IEnumerable<Control> controls, string layoutName)
+    {
+        foreach (Control control in controls)
+        {
+            string label = string.IsNullOrWhiteSpace(control.Text) ? control.Name : control.Text;
+            if (!control.Visible || control.Width <= 0 || control.Height <= 0)
+                throw new InvalidOperationException($"'{label}' is not visible in the {layoutName} layout.");
+            Control current = control;
+            while (current.Parent is { } parent)
+            {
+                if (!parent.ClientRectangle.Contains(current.Bounds))
+                    throw new InvalidOperationException(
+                        $"'{label}' is clipped by '{parent.Name}' in the {layoutName} layout " +
+                        $"(ancestor '{current.Name}', child {current.Bounds}, parent client {parent.ClientRectangle}).");
+                current = parent;
+                if (current is Form) break;
+            }
+        }
+    }
+
+    private void VerifyProgrammeReviewIsAvailableWithoutLegacyParse()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), $"xer-ui-smoke-{Guid.NewGuid():N}");
+        string xerPath = Path.Combine(tempDirectory, "2608-SMOKE-C-2608.xer");
+        Directory.CreateDirectory(tempDirectory);
+        try
+        {
+            File.WriteAllText(
+                xerPath,
+                "%T\tPROJECT\r\n" +
+                "%F\tproj_id\tlast_recalc_date\r\n" +
+                "%R\t1\t2026-08-25 17:00\r\n" +
+                "%T\tTASK\r\n");
+            _outputDirectory = tempDirectory;
+            txtOutputPath.Text = tempDirectory;
+            AddXerFiles([xerPath]);
+            UpdateInputButtonsState();
+
+            if (!btnExportProgrammeReview.Enabled)
+                throw new InvalidOperationException(
+                    "Programme Review is not available before the optional legacy parse.");
+            if (_dataStore.TableNames.Any())
+                throw new InvalidOperationException("The UI smoke test unexpectedly populated legacy parsed tables.");
+
+            DateOnly? detected = ProgrammeReviewXerMetadataReader
+                .ReadSingleProjectDataDateAsync(xerPath)
+                .AsTask()
+                .GetAwaiter()
+                .GetResult();
+            if (detected != new DateOnly(2026, 8, 25))
+                throw new InvalidOperationException("Windows did not detect PROJECT.last_recalc_date directly from XER.");
+
+            using var dialog = new ProgrammeReviewExportDialog(
+                [xerPath],
+                new Dictionary<string, DateOnly>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [Path.GetFileName(xerPath)] = detected.Value
+                });
+            if (!dialog.HasSuggestedDataDate(Path.GetFileName(xerPath), detected.Value))
+                throw new InvalidOperationException("The Windows Programme Review dialog did not prefill the detected date.");
+        }
+        finally
+        {
+            _xerFilePaths.Clear();
+            lvwXerFiles.Items.Clear();
+            _outputDirectory = string.Empty;
+            txtOutputPath.Clear();
+            UpdateInputButtonsState();
+            if (Directory.Exists(tempDirectory))
+                Directory.Delete(tempDirectory, recursive: true);
+        }
     }
 
     private async void BtnExportProgrammeReview_Click(object? sender, EventArgs e)
@@ -79,13 +199,6 @@ public partial class MainForm
             ShowError("Please select a valid output directory first.");
             return;
         }
-        if (!HasParsedProgrammeReviewInputs())
-        {
-            btnExportProgrammeReview.Enabled = false;
-            ShowWarning("Parse all currently selected XER files successfully before creating a Programme Review bundle.");
-            return;
-        }
-
         string[] missingFiles = _xerFilePaths.Where(path => !File.Exists(path)).ToArray();
         if (missingFiles.Length > 0)
         {
@@ -93,9 +206,69 @@ public partial class MainForm
             return;
         }
 
+        IReadOnlyDictionary<string, DateOnly> suggestedDataDates;
+        IReadOnlyList<string> unresolvedDataDates;
+        bool closeRequested = false;
+        _programmeReviewOperationActive = true;
+        SetUIEnabled(enabled: false);
+        UpdateStatus("Reading Programme Review data dates from XER files...");
+        LogActivity($"Reading PROJECT.last_recalc_date from {_xerFilePaths.Count} selected XER file(s)...");
+        toolStripProgressBar.Visible = true;
+        toolStripProgressBar.Value = 0;
+        _cancellationTokenSource = new CancellationTokenSource();
+
+        try
+        {
+            (suggestedDataDates, unresolvedDataDates) = await ReadProgrammeReviewDataDatesAsync(
+                _xerFilePaths,
+                _cancellationTokenSource.Token);
+            UpdateStatus($"Detected {suggestedDataDates.Count} of {_xerFilePaths.Count} XER data date(s).");
+            LogActivity($"Detected {suggestedDataDates.Count} of {_xerFilePaths.Count} XER data date(s) " +
+                        "from PROJECT.last_recalc_date.");
+        }
+        catch (OperationCanceledException)
+        {
+            UpdateStatus("Programme Review metadata scan cancelled.");
+            LogActivity("Programme Review metadata scan cancelled by user.");
+            return;
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus("Could not read Programme Review XER metadata.");
+            LogActivity("ERROR reading Programme Review XER metadata: " + ex.Message);
+            if (!_closeAfterProgrammeReviewCancellation)
+                ShowError("Could not read the selected XER file(s):\n\n" + ex.Message);
+            return;
+        }
+        finally
+        {
+            _programmeReviewOperationActive = false;
+            toolStripProgressBar.Visible = false;
+            _cancellationTokenSource?.Dispose();
+            _cancellationTokenSource = null;
+            SetUIEnabled(enabled: true);
+            closeRequested = _closeAfterProgrammeReviewCancellation;
+            if (closeRequested && !IsDisposed)
+            {
+                _closeAfterProgrammeReviewCancellation = false;
+                BeginInvoke((Action)Close);
+            }
+        }
+
+        if (closeRequested || IsDisposed) return;
+        if (unresolvedDataDates.Count > 0)
+        {
+            ShowWarning(
+                "The XER data date could not be detected unambiguously for:\n\n" +
+                string.Join("\n", unresolvedDataDates) +
+                "\n\nThose Data date cells will remain editable and blank. Enter yyyy-MM-dd manually. " +
+                "A blank can mean PROJECT.last_recalc_date is missing or invalid, or the XER contains multiple projects.",
+                "Data Date Needs Review");
+        }
+
         using var dialog = new ProgrammeReviewExportDialog(
             _xerFilePaths.ToArray(),
-            GetProgrammeReviewDataDateSuggestions());
+            suggestedDataDates);
         if (dialog.ShowDialog(this) != DialogResult.OK || dialog.BundleRequest is null) return;
 
         ProgrammeReviewBundleRequest request = dialog.BundleRequest;
@@ -157,10 +330,10 @@ public partial class MainForm
         finally
         {
             _programmeReviewOperationActive = false;
-            SetUIEnabled(enabled: true);
             toolStripProgressBar.Visible = false;
             _cancellationTokenSource?.Dispose();
             _cancellationTokenSource = null;
+            SetUIEnabled(enabled: true);
             if (_closeAfterProgrammeReviewCancellation && !IsDisposed)
             {
                 _closeAfterProgrammeReviewCancellation = false;
@@ -171,7 +344,26 @@ public partial class MainForm
 
     private void UpdateProgrammeReviewButtonState()
     {
-        btnExportProgrammeReview.Enabled = btnParseXer.Enabled && HasParsedProgrammeReviewInputs();
+        bool enabled = !IsOperationActive
+            && _xerFilePaths.Count > 0
+            && !string.IsNullOrWhiteSpace(_outputDirectory)
+            && Directory.Exists(_outputDirectory);
+        SetProgrammeReviewButtonAvailability(enabled);
+    }
+
+    private void SetProgrammeReviewButtonAvailability(bool enabled)
+    {
+        btnExportProgrammeReview.Enabled = enabled;
+        if (enabled)
+        {
+            ApplyButtonStyle(btnExportProgrammeReview, UiTheme.Success, UiTheme.Success, Color.White,
+                Color.FromArgb(26, 157, 98), Color.FromArgb(21, 112, 70));
+        }
+        else
+        {
+            ApplyButtonStyle(btnExportProgrammeReview, UiTheme.SurfaceAlt, UiTheme.Border, UiTheme.TextMuted,
+                UiTheme.SurfaceAlt, UiTheme.SurfaceAlt);
+        }
     }
 
     private void QueueProgrammeReviewButtonStateUpdate()
@@ -180,57 +372,53 @@ public partial class MainForm
         BeginInvoke((Action)UpdateProgrammeReviewButtonState);
     }
 
-    private bool HasParsedProgrammeReviewInputs()
+    private async Task<(IReadOnlyDictionary<string, DateOnly> Suggestions, IReadOnlyList<string> Unresolved)>
+        ReadProgrammeReviewDataDatesAsync(
+            IReadOnlyList<string> xerFilePaths,
+            CancellationToken cancellationToken)
     {
-        if (_xerFilePaths.Count == 0
-            || string.IsNullOrWhiteSpace(_outputDirectory)
-            || !Directory.Exists(_outputDirectory))
-            return false;
-        if (!_dataStore.ContainsTable(TableNames.Task)
-            || !_dataStore.ContainsTable(TableNames.Project)
-            || !_dataStore.ContainsTable(TableNames.ProjWbs)
-            || !_dataStore.ContainsTable(TableNames.Calendar))
-            return false;
-        return lvwXerFiles.Items.Count == _xerFilePaths.Count
-            && lvwXerFiles.Items.Cast<ListViewItem>()
-                .All(item => string.Equals(item.SubItems[2].Text, "Success", StringComparison.Ordinal));
-    }
+        var suggestions = new Dictionary<string, DateOnly>(StringComparer.OrdinalIgnoreCase);
+        var unresolved = new List<string>();
+        var readErrors = new List<string>();
 
-    private IReadOnlyDictionary<string, DateOnly> GetProgrammeReviewDataDateSuggestions()
-    {
-        var candidates = new Dictionary<string, HashSet<DateOnly>>(StringComparer.OrdinalIgnoreCase);
-        XerTable? project = _dataStore.GetTable(TableNames.Project);
-        if (project?.Headers is null || !project.FieldIndexes.TryGetValue(FieldNames.LastRecalcDate, out int dateIndex))
-            return new Dictionary<string, DateOnly>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (DataRow row in project.Rows)
+        for (int index = 0; index < xerFilePaths.Count; index++)
         {
-            string raw = XerTable.GetFieldValueSafe(row, dateIndex);
-            if (!TryReadProgrammeReviewDate(raw, out DateOnly dataDate)) continue;
-            if (!candidates.TryGetValue(row.SourceFilename, out HashSet<DateOnly>? values))
+            cancellationToken.ThrowIfCancellationRequested();
+            string path = xerFilePaths[index];
+            string filename = Path.GetFileName(path);
+            int percent = xerFilePaths.Count == 0
+                ? 0
+                : (int)Math.Round(index * 100d / xerFilePaths.Count);
+            toolStripProgressBar.Value = Math.Clamp(
+                percent,
+                toolStripProgressBar.Minimum,
+                toolStripProgressBar.Maximum);
+            UpdateStatus($"Reading XER data date {index + 1} of {xerFilePaths.Count}: {filename}");
+
+            try
             {
-                values = new HashSet<DateOnly>();
-                candidates[row.SourceFilename] = values;
+                DateOnly? dataDate = await ProgrammeReviewXerMetadataReader
+                    .ReadSingleProjectDataDateAsync(path, cancellationToken);
+                if (dataDate.HasValue)
+                    suggestions[filename] = dataDate.Value;
+                else
+                    unresolved.Add(filename);
             }
-            values.Add(dataDate);
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                readErrors.Add($"{filename}: {ex.Message}");
+            }
         }
 
-        return candidates.Where(pair => pair.Value.Count == 1)
-            .ToDictionary(pair => pair.Key, pair => pair.Value.Single(), StringComparer.OrdinalIgnoreCase);
-    }
+        toolStripProgressBar.Value = toolStripProgressBar.Maximum;
+        if (readErrors.Count > 0)
+            throw new IOException(string.Join(Environment.NewLine, readErrors));
 
-    private static bool TryReadProgrammeReviewDate(string raw, out DateOnly value)
-    {
-        string text = raw.Trim();
-        if (text.Length >= 10 && DateOnly.TryParseExact(text[..10], "yyyy-MM-dd",
-                CultureInfo.InvariantCulture, DateTimeStyles.None, out value)) return true;
-        if (DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out DateTime dateTime))
-        {
-            value = DateOnly.FromDateTime(dateTime);
-            return true;
-        }
-        value = default;
-        return false;
+        return (suggestions, unresolved);
     }
 
     private void ShowProgrammeReviewComplete(ProgrammeReviewBundleResult result)
@@ -259,6 +447,9 @@ public partial class MainForm
 
     private void InvalidateLegacyParseStateAfterProgrammeReviewStarts()
     {
+        bool hadLegacyResults = _dataStore.TableNames.Any() || _allTableNames.Count > 0;
+        if (!hadLegacyResults) return;
+
         ClearResults(forceGC: true);
         foreach (ListViewItem item in lvwXerFiles.Items)
         {
@@ -277,8 +468,8 @@ public partial class MainForm
             if (!_closeAfterProgrammeReviewCancellation)
             {
                 _closeAfterProgrammeReviewCancellation = true;
-                UpdateStatus("Cancelling Programme Review export before closing...");
-                LogActivity("Window close requested; waiting for Programme Review staging cleanup.");
+                UpdateStatus("Cancelling Programme Review operation before closing...");
+                LogActivity("Window close requested; waiting for Programme Review cancellation cleanup.");
                 _cancellationTokenSource?.Cancel();
                 btnCancelOperation.Enabled = false;
             }

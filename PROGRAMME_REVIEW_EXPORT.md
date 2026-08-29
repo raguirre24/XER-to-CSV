@@ -6,12 +6,12 @@ It creates one full-history local bundle for one project and programme type. The
 
 ## Use the Windows application
 
-1. Add the baseline and applicable update XER files, select the output folder, and choose **Parse and load tables**.
-2. The **Programme Review Bundle** action becomes available only after every current XER has parsed successfully and the required TASK, PROJECT, PROJWBS, and CALENDAR tables exist. This prevents a cancelled or stale partial parse from being exported.
+1. Add the baseline and applicable update XER files and select the output folder. **Create Programme Review bundle** becomes available immediately; the legacy **Parse and load tables** step is not required for this profile.
+2. Choose **Create Programme Review bundle**. The Windows app scans each selected file directly and prefills the editable Data date from the single unambiguous `PROJECT[last_recalc_date]` row. This streaming scan does not load the full history into memory. If the value is missing, invalid, or ambiguous, the affected cell stays blank for manual `yyyy-MM-dd` entry.
 3. Enter the governed project code/name and choose `C - Contract` or `T - Target`. The governed project name and baseline `month_update` are intentionally blank: neither is inferred from the P6 project short name or data date. Review each file's baseline/update kind, tag, explicit month update, and detected XER data date.
-4. Choose **Validate and export**. The application releases the preview data, then reparses and hashes the selected source files through the atomic bundle service; it does not trust the earlier preview data as publication input. Closing the window cancels the operation and waits for staging cleanup. Parse again before using a legacy Standard/Enhanced export.
+4. Choose **Validate and export**. The application parses and hashes the selected source files through the atomic bundle service. Closing the window cancels the operation and waits for cleanup. If legacy preview data was already loaded, it is released before bundle creation and must be parsed again before a Standard/Enhanced export.
 
-The legacy **Export Power BI** action remains separate and continues to create the existing Enhanced tables.
+The legacy **Export enhanced Power BI** action remains separate and continues to create the existing Enhanced tables. The resizable Windows layout keeps Programme Review, Power BI, Export all, Export selected, Cancel, and Browse visible at startup, including high-DPI displays.
 
 ## Use the web application
 

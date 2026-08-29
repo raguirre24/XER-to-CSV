@@ -172,6 +172,10 @@ public partial class MainForm : Form
 
 	private Panel panelExportActions = null!;
 
+	private TableLayoutPanel exportActionsLayout = null!;
+
+	private Label lblExportGuidance = null!;
+
 
 
 	private Button btnExportAll = null!;
@@ -211,6 +215,8 @@ public partial class MainForm : Form
 	private UserSettings _settings = new UserSettings();
 
 	private readonly bool _suppressPersistence;
+
+	private bool _startupLayoutApplied;
 
 	private bool IsOperationActive => _cancellationTokenSource is not null || _programmeReviewOperationActive;
 
@@ -444,6 +450,10 @@ public partial class MainForm : Form
 
 		txtOutputPath.DragDrop += TxtOutputPath_DragDrop;
 
+		txtOutputPath.TextChanged += TxtOutputPath_TextChanged;
+
+		txtOutputPath.Validated += TxtOutputPath_Validated;
+
 		base.Resize += MainForm_Resize;
 
 		lstTables.ItemCheck += LstTables_ItemCheck;
@@ -470,6 +480,11 @@ public partial class MainForm : Form
 		btnCancelOperation.AccessibleName = "Cancel current operation";
 		btnSelectOutput.AccessibleName = "Browse for output folder";
 		chkCreatePowerBiTables.AccessibleName = "Include enhanced Power BI tables";
+
+		btnParseXer.EnabledChanged += (_, _) => UpdateActionButtonAppearance(btnParseXer, isPrimary: true);
+		btnExportAll.EnabledChanged += (_, _) => UpdateActionButtonAppearance(btnExportAll, isPrimary: true);
+		btnExportPowerBi.EnabledChanged += (_, _) => UpdateActionButtonAppearance(btnExportPowerBi, isPrimary: true);
+		btnExportSelected.EnabledChanged += (_, _) => UpdateActionButtonAppearance(btnExportSelected, isPrimary: false);
 
 		// --- Tooltips ---
 		toolTip.SetToolTip(btnParseXer, "Parse the loaded XER files and extract tables");
@@ -709,7 +724,9 @@ public partial class MainForm : Form
 
 		SuspendLayout();
 
-		MinimumSize = new Size(1100, 720);
+		ClientSize = new Size(1240, 760);
+
+		MinimumSize = new Size(900, 640);
 
 		AcceptButton = btnParseXer;
 
@@ -765,16 +782,26 @@ public partial class MainForm : Form
 
 		splitContainerMain.SplitterWidth = 6;
 
+		splitContainerMain.Panel1MinSize = 240;
+
+		splitContainerMain.Panel2MinSize = 300;
+
+		splitContainerMain.FixedPanel = FixedPanel.Panel1;
+
+		splitContainerMain.SplitterDistance = 390;
+
 		splitContainerResults.SplitterWidth = 6;
 
-		splitContainerResults.Panel1MinSize = 240;
+		splitContainerResults.Panel1MinSize = 80;
 
-		splitContainerResults.Panel2MinSize = 160;
+		splitContainerResults.Panel2MinSize = 55;
 
 
 		var leftLayout = new TableLayoutPanel
 
 		{
+
+			Name = "leftLayout",
 
 			ColumnCount = 1,
 
@@ -787,6 +814,8 @@ public partial class MainForm : Form
 			BackColor = Color.Transparent
 
 		};
+
+		leftLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
 		leftLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
@@ -821,6 +850,8 @@ public partial class MainForm : Form
 
 		{
 
+			Name = "inputLayout",
+
 			ColumnCount = 1,
 
 			RowCount = 3,
@@ -832,6 +863,8 @@ public partial class MainForm : Form
 			BackColor = UiTheme.Panel
 
 		};
+
+		inputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
 		inputLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -867,6 +900,8 @@ public partial class MainForm : Form
 
 		{
 
+			Name = "outputLayout",
+
 			ColumnCount = 2,
 
 			RowCount = 1,
@@ -881,14 +916,22 @@ public partial class MainForm : Form
 
 		outputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
-		outputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+		outputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104f));
 
 
-		txtOutputPath.Dock = DockStyle.Fill;
+		txtOutputPath.Dock = DockStyle.None;
+
+		txtOutputPath.Anchor = AnchorStyles.Left | AnchorStyles.Right;
 
 		txtOutputPath.Margin = new Padding(0, 0, 8, 0);
 
-		btnSelectOutput.AutoSize = true;
+		btnSelectOutput.AutoSize = false;
+
+		btnSelectOutput.Dock = DockStyle.None;
+
+		btnSelectOutput.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+
+		btnSelectOutput.MinimumSize = new Size(96, 30);
 
 		btnSelectOutput.Margin = new Padding(0);
 
@@ -906,6 +949,8 @@ public partial class MainForm : Form
 		var tablesInnerLayout = new TableLayoutPanel
 
 		{
+
+			Name = "tablesInnerLayout",
 
 			ColumnCount = 2,
 
@@ -957,6 +1002,8 @@ public partial class MainForm : Form
 
 		{
 
+			Name = "pbiLayout",
+
 			ColumnCount = 2,
 
 			RowCount = 2,
@@ -1004,10 +1051,14 @@ public partial class MainForm : Form
 
 		grpPowerBI.Controls.Add(pbiLayout);
 
+		chkCreatePowerBiTables.Text = "Include enhanced tables in all/selected exports";
+
 
 		var tablesHost = new TableLayoutPanel
 
 		{
+
+			Name = "tablesHost",
 
 			ColumnCount = 1,
 
@@ -1021,11 +1072,15 @@ public partial class MainForm : Form
 
 		};
 
-		tablesHost.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+		tablesHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+
+		tablesHost.RowStyles.Add(new RowStyle(SizeType.Absolute, 110f));
 
 		tablesHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
-		grpPowerBI.Dock = DockStyle.Top;
+		grpPowerBI.AutoSize = false;
+
+		grpPowerBI.Dock = DockStyle.Fill;
 
 		grpPowerBI.Margin = new Padding(0, 0, 0, 10);
 
@@ -1061,69 +1116,95 @@ public partial class MainForm : Form
 		splitContainerResults.Panel2.Controls.Add(grpActivityLog);
 
 
-		// Button Layout Redesign
-		
-		// 1. Cancel Button (Left)
-		btnCancelOperation.AutoSize = true;
-		btnCancelOperation.MinimumSize = new Size(100, 40);
-		btnCancelOperation.Dock = DockStyle.Left;
-		btnCancelOperation.Margin = new Padding(0);
-
-		// 2. Action Buttons Container (Right)
-		var flowActions = new FlowLayoutPanel
+		var exportHeading = new Label
 		{
-			Dock = DockStyle.Fill, 
-			WrapContents = true, 
-            AutoSize = true,
-			AutoSizeMode = AutoSizeMode.GrowAndShrink, 
-			BackColor = Color.Transparent,
-			Padding = new Padding(0)
+			Text = "4. Export options",
+			AutoSize = true,
+			Anchor = AnchorStyles.Left,
+			Font = _uiFontTitle,
+			ForeColor = UiTheme.Text,
+			Margin = new Padding(4, 4, 4, 2)
 		};
 
-		// 3. Configure Action Buttons
-		// Reduce MinimumSize completely. Let size be content-based.
-		btnExportAll.AutoSize = true;
-		btnExportAll.MinimumSize = Size.Empty; 
-		btnExportAll.Margin = new Padding(5, 0, 0, 0); 
-		btnExportAll.Text = "Export All"; // Shorter text
-        btnExportAll.Dock = DockStyle.None;
-        btnExportAll.Anchor = AnchorStyles.None;
+		lblExportGuidance = new Label
+		{
+			Text = "Programme Review works directly from XER files. Standard exports unlock after Parse.",
+			AutoSize = false,
+			AutoEllipsis = true,
+			Dock = DockStyle.Fill,
+			TextAlign = ContentAlignment.MiddleLeft,
+			Font = _uiFont,
+			ForeColor = UiTheme.TextMuted,
+			Margin = new Padding(4, 0, 4, 4),
+			AccessibleName = "Export availability guidance"
+		};
+		toolTip.SetToolTip(lblExportGuidance, lblExportGuidance.Text);
 
-		btnExportSelected.AutoSize = true;
-		btnExportSelected.MinimumSize = Size.Empty; 
-		btnExportSelected.Margin = new Padding(5, 0, 0, 0);
-		btnExportSelected.Text = "Export Selected"; // Shorter text
-        btnExportSelected.Dock = DockStyle.None;
-        btnExportSelected.Anchor = AnchorStyles.None;
+		btnCancelOperation.AutoSize = true;
+		btnCancelOperation.MinimumSize = new Size(120, 32);
+		btnCancelOperation.Dock = DockStyle.None;
+		btnCancelOperation.Margin = new Padding(4, 0, 4, 4);
+		btnCancelOperation.Text = "&Cancel operation";
 
-		btnExportPowerBi.AutoSize = true;
-		btnExportPowerBi.MinimumSize = Size.Empty; 
-		btnExportPowerBi.Margin = new Padding(5, 0, 0, 0);
-		btnExportPowerBi.Text = "Export Power BI"; // Shorter text
-        btnExportPowerBi.Dock = DockStyle.None;
-        btnExportPowerBi.Anchor = AnchorStyles.None;
+		var cancelHost = new FlowLayoutPanel
+		{
+			Dock = DockStyle.Fill,
+			AutoSize = true,
+			AutoSizeMode = AutoSizeMode.GrowAndShrink,
+			FlowDirection = FlowDirection.RightToLeft,
+			WrapContents = false,
+			Margin = Padding.Empty,
+			BackColor = Color.Transparent,
+			TabIndex = 4
+		};
+		cancelHost.Controls.Add(btnCancelOperation);
 
-		// 4. Add to Flow (Order matters for RightToLeft: First added is Right-most)
-		flowActions.Controls.Add(btnExportAll);       // Far Right
-		flowActions.Controls.Add(btnExportSelected);  // Middle
-		flowActions.Controls.Add(btnExportPowerBi);   // Left
+		ConfigureExportActionButton(btnExportPowerBi, "Export enhanced &Power BI");
+		ConfigureExportActionButton(btnExportAll, "Export &all tables");
+		ConfigureExportActionButton(btnExportSelected, "Export &selected tables");
+		btnExportPowerBi.TabIndex = 1;
+		btnExportAll.TabIndex = 2;
+		btnExportSelected.TabIndex = 3;
+		btnCancelOperation.TabIndex = 0;
 
-		// 5. Container Configuration
+		exportActionsLayout = new TableLayoutPanel
+		{
+			Name = "exportActionsLayout",
+			ColumnCount = 2,
+			RowCount = 4,
+			Dock = DockStyle.Fill,
+			AutoSize = false,
+			BackColor = Color.Transparent,
+			Padding = Padding.Empty,
+			Margin = Padding.Empty
+		};
+		exportActionsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+		exportActionsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+		exportActionsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+		exportActionsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));
+		exportActionsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+		exportActionsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+		exportActionsLayout.Controls.Add(exportHeading, 0, 0);
+		exportActionsLayout.Controls.Add(cancelHost, 1, 0);
+		exportActionsLayout.Controls.Add(lblExportGuidance, 0, 1);
+		exportActionsLayout.SetColumnSpan(lblExportGuidance, 2);
+		exportActionsLayout.Controls.Add(btnExportPowerBi, 1, 2);
+		exportActionsLayout.Controls.Add(btnExportAll, 0, 3);
+		exportActionsLayout.Controls.Add(btnExportSelected, 1, 3);
+
 		panelExportActions.Controls.Clear();
-		panelExportActions.Padding = new Padding(12, 10, 12, 10);
-		panelExportActions.AutoSize = true;
-        panelExportActions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        panelExportActions.Dock = DockStyle.Bottom; // Dock to bottom so it pushes content up
-		
-		// Add Controls (Dock order: Filled control added last in Z-order)
-        // Actually, just add them. Left dock takes left. Fill takes rest.
-		panelExportActions.Controls.Add(flowActions);       // Docks Fill
-		panelExportActions.Controls.Add(btnCancelOperation); // Docks Left
+		panelExportActions.Padding = new Padding(6);
+		panelExportActions.AutoSize = false;
+		panelExportActions.Height = 174;
+		panelExportActions.Dock = DockStyle.Fill;
+		panelExportActions.Controls.Add(exportActionsLayout);
 
 
 		var rightLayout = new TableLayoutPanel
 
 		{
+
+			Name = "rightLayout",
 
 			ColumnCount = 1,
 
@@ -1137,9 +1218,11 @@ public partial class MainForm : Form
 
 		};
 
+		rightLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+
 		rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
-		rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 88f));
+		rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 174f));
 
 
 		splitContainerResults.Dock = DockStyle.Fill;
@@ -1197,6 +1280,37 @@ public partial class MainForm : Form
 
 		}
 
+	}
+
+	private static void ConfigureExportActionButton(Button button, string text)
+	{
+		button.Text = text;
+		button.AutoSize = false;
+		button.MinimumSize = new Size(0, 40);
+		button.Margin = new Padding(3);
+		button.AutoEllipsis = true;
+		button.Dock = DockStyle.Fill;
+	}
+
+	private static void UpdateActionButtonAppearance(Button button, bool isPrimary)
+	{
+		if (!button.Enabled)
+		{
+			ApplyButtonStyle(button, UiTheme.SurfaceAlt, UiTheme.Border, UiTheme.TextMuted,
+				UiTheme.SurfaceAlt, UiTheme.SurfaceAlt);
+			return;
+		}
+
+		if (isPrimary)
+		{
+			ApplyButtonStyle(button, UiTheme.Accent, UiTheme.Accent, Color.White,
+				UiTheme.AccentHover, UiTheme.AccentDown);
+		}
+		else
+		{
+			ApplyButtonStyle(button, UiTheme.Panel, UiTheme.Border, UiTheme.Text,
+				UiTheme.SurfaceAlt, UiTheme.Border);
+		}
 	}
 
 
@@ -1653,13 +1767,13 @@ public partial class MainForm : Form
 
 		{
 
-			SetUIEnabled(enabled: true);
-
 			toolStripProgressBar.Visible = false;
 
 			_cancellationTokenSource?.Dispose();
 
 			_cancellationTokenSource = null;
+
+			SetUIEnabled(enabled: true);
 
 		}
 
@@ -1986,6 +2100,54 @@ public partial class MainForm : Form
 
 		ResizeListViewColumns();
 
+	}
+
+	private void TxtOutputPath_TextChanged(object? sender, EventArgs e)
+	{
+		if (IsOperationActive) return;
+		_outputDirectory = txtOutputPath.Text.Trim();
+		UpdateInputButtonsState();
+		UpdateExportButtonState();
+	}
+
+	private void TxtOutputPath_Validated(object? sender, EventArgs e)
+	{
+		if (_suppressPersistence || !Directory.Exists(_outputDirectory)) return;
+		SaveSettings();
+	}
+
+	protected override void OnShown(EventArgs e)
+	{
+		base.OnShown(e);
+		if (_startupLayoutApplied) return;
+		_startupLayoutApplied = true;
+
+		Rectangle workingArea = Screen.FromControl(this).WorkingArea;
+		int targetWidth = Math.Min(1240, Math.Max(1, workingArea.Width - 32));
+		int targetHeight = Math.Min(780, Math.Max(1, workingArea.Height - 32));
+		MinimumSize = new Size(
+			Math.Min(900, targetWidth),
+			Math.Min(640, targetHeight));
+		Size = new Size(
+			Math.Max(MinimumSize.Width, targetWidth),
+			Math.Max(MinimumSize.Height, targetHeight));
+		Location = new Point(
+			workingArea.Left + Math.Max(0, (workingArea.Width - Width) / 2),
+			workingArea.Top + Math.Max(0, (workingArea.Height - Height) / 2));
+
+		int maximumSplitterDistance = splitContainerMain.Width
+			- splitContainerMain.Panel2MinSize
+			- splitContainerMain.SplitterWidth;
+		if (maximumSplitterDistance >= splitContainerMain.Panel1MinSize)
+		{
+			splitContainerMain.SplitterDistance = Math.Clamp(
+			(int)Math.Round(splitContainerMain.Width * 0.36),
+			 splitContainerMain.Panel1MinSize,
+			 maximumSplitterDistance);
+		}
+
+		PerformLayout();
+		ResizeListViewColumns();
 	}
 
 
@@ -2319,13 +2481,13 @@ public partial class MainForm : Form
 
 		{
 
-			SetUIEnabled(enabled: true);
-
 			toolStripProgressBar.Visible = false;
 
 			_cancellationTokenSource?.Dispose();
 
 			_cancellationTokenSource = null;
+
+			SetUIEnabled(enabled: true);
 
 		}
 
@@ -3238,6 +3400,8 @@ public partial class MainForm : Form
 
 		btnRemoveFile.Enabled = enabled;
 
+		UpdateProgrammeReviewButtonState();
+
 	}
 
 
@@ -3388,7 +3552,7 @@ public partial class MainForm : Form
 
 			btnExportPowerBi.Enabled = false;
 
-			btnExportProgrammeReview.Enabled = false;
+			SetProgrammeReviewButtonAvailability(enabled: false);
 
 			btnAddFile.Enabled = false;
 
