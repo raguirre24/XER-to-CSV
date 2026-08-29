@@ -232,6 +232,7 @@ _pkginfo.txt
 
 # Others
 ClientBin/
+/XER Sample/
 ~$*
 *~
 *.dbmdl

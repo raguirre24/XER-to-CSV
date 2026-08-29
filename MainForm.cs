@@ -28,7 +28,7 @@ namespace XerToCsvConverter;
 
 
 
-public class MainForm : Form
+public partial class MainForm : Form
 
 {
 
@@ -210,6 +210,10 @@ public class MainForm : Form
 
 	private UserSettings _settings = new UserSettings();
 
+	private readonly bool _suppressPersistence;
+
+	private bool IsOperationActive => _cancellationTokenSource is not null || _programmeReviewOperationActive;
+
 	private readonly Font _uiFont;
 
 	private readonly Font _uiFontBold;
@@ -321,9 +325,17 @@ public class MainForm : Form
 	private IContainer? components;
 
 
-	public MainForm()
+	public MainForm() : this(suppressPersistence: false)
 
 	{
+
+	}
+
+	internal MainForm(bool suppressPersistence)
+
+	{
+
+		_suppressPersistence = suppressPersistence;
 
 		_processingService = new ProcessingService();
 
@@ -339,13 +351,24 @@ public class MainForm : Form
 
 		InitializeComponent();
 
+		InitializeProgrammeReviewUi();
+
 		ApplyTheme();
 
 		ApplyModernLayout();
 
+		AttachProgrammeReviewButtonToActionPanel();
+
 		InitializeUIState();
 
-		LoadSettings();
+
+		if (!_suppressPersistence)
+
+		{
+
+			LoadSettings();
+
+		}
 
 	}
 
@@ -486,7 +509,10 @@ public class MainForm : Form
 		if (e.Control && e.KeyCode == Keys.O)
 		{
 			e.SuppressKeyPress = true;
-			BtnAddFile_Click(sender, e);
+			if (!IsOperationActive && btnAddFile.Enabled)
+			{
+				BtnAddFile_Click(sender, e);
+			}
 		}
 	}
 
@@ -1389,6 +1415,8 @@ public class MainForm : Form
 
 	{
 
+		if (IsOperationActive) return;
+
 		using OpenFileDialog openFileDialog = new OpenFileDialog
 
 		{
@@ -1485,7 +1513,13 @@ public class MainForm : Form
 
 			LogActivity("Output directory set: " + _outputDirectory);
 
-			SaveSettings();
+			if (!_suppressPersistence)
+
+			{
+
+				SaveSettings();
+
+			}
 
 		}
 
@@ -1496,6 +1530,8 @@ public class MainForm : Form
 	private async void BtnParseXer_Click(object? sender, EventArgs e)
 
 	{
+
+		if (IsOperationActive) return;
 
 		if (!ValidateInputs())
 
@@ -2144,6 +2180,8 @@ public class MainForm : Form
 	private async Task ExportTablesAsync(List<string> tablesToExport)
 
 	{
+
+		if (IsOperationActive) return;
 
 		if (tablesToExport.Count == 0)
 
@@ -2888,6 +2926,8 @@ public class MainForm : Form
 
 		_canCreateUmeasure14 = false;
 
+		_canCreateResourceDist15 = false;
+
 		UpdatePbiCheckboxState();
 
 		UpdateExportButtonState();
@@ -3346,6 +3386,10 @@ public class MainForm : Form
 
 			btnExportSelected.Enabled = false;
 
+			btnExportPowerBi.Enabled = false;
+
+			btnExportProgrammeReview.Enabled = false;
+
 			btnAddFile.Enabled = false;
 
 			btnRemoveFile.Enabled = false;
@@ -3548,7 +3592,13 @@ public class MainForm : Form
 
 		{
 
-			SaveSettings();
+			if (!_suppressPersistence)
+
+			{
+
+				SaveSettings();
+
+			}
 
 			_uiFont.Dispose();
 
@@ -4279,7 +4329,7 @@ public class MainForm : Form
 
 		base.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
 
-		this.Text = "Primavera P6 XER to CSV Converter v2.4";
+		this.Text = "Primavera P6 XER to CSV Converter v2.5";
 
 		this.statusStrip.ResumeLayout(false);
 

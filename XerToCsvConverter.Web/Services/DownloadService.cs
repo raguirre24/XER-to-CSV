@@ -6,9 +6,20 @@ public class DownloadService(IJSRuntime jsRuntime)
 {
     private readonly IJSRuntime _jsRuntime = jsRuntime;
 
-    public async Task DownloadFileAsync(string filename, byte[] content, string contentType = "application/octet-stream")
+    public async Task DownloadFileAsync(
+        string filename,
+        Stream content,
+        string contentType = "application/octet-stream",
+        CancellationToken cancellationToken = default)
     {
-        var base64 = Convert.ToBase64String(content);
-        await _jsRuntime.InvokeVoidAsync("downloadFile", filename, contentType, base64);
+        ArgumentNullException.ThrowIfNull(content);
+        if (!content.CanRead) throw new ArgumentException("The download stream must be readable.", nameof(content));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (content.CanSeek) content.Position = 0;
+
+        using var streamReference = new DotNetStreamReference(content, leaveOpen: true);
+        await _jsRuntime.InvokeVoidAsync(
+            "downloadFileFromStream", cancellationToken, filename, contentType, streamReference);
+        cancellationToken.ThrowIfCancellationRequested();
     }
 }

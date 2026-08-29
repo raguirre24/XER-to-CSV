@@ -1,6 +1,8 @@
 @page "/"
+@using System.Globalization
 @using System.IO.Compression
 @using XerToCsvConverter
+@using XerToCsvConverter.ProgrammeReview
 @using XerToCsvConverter.Web.Services
 @inject IJSRuntime JS
 
@@ -9,10 +11,9 @@
 <div class="page-container">
     <div class="page-header">
         <h1>XER to CSV Converter</h1>
-        <p>Convert Primavera P6 XER schedule files to CSV format</p>
+        <p>Convert Primavera P6 XER schedules using the standard Enhanced or Programme Review profile</p>
     </div>
 
-    @* === Step 1: File Upload === *@
     <div class="panel">
         <div class="panel-header">
             <h2><span class="step-number">1</span> Add XER Files</h2>
@@ -24,27 +25,23 @@
         </div>
         <div class="panel-body">
             <div class="drop-zone @(_isDragOver ? "drag-over" : "")"
-                 role="button"
-                 tabindex="0"
+                 role="button" tabindex="0"
                  aria-label="File upload area. Drag and drop XER files or click to browse."
-                 @ondragenter="HandleDragEnter"
-                 @ondragleave="HandleDragLeave"
-                 @ondragover:preventDefault
-                 @ondrop:preventDefault>
+                 @ondragenter="HandleDragEnter" @ondragleave="HandleDragLeave"
+                 @ondragover:preventDefault @ondrop:preventDefault>
                 <InputFile OnChange="HandleFileSelected" multiple accept=".xer"
-                           @ondragenter="HandleDragEnter"
-                           @ondragleave="HandleDragLeave"
+                           @ondragenter="HandleDragEnter" @ondragleave="HandleDragLeave"
                            aria-label="Select XER files to upload"
                            style="position:absolute;width:100%;height:100%;opacity:0;cursor:pointer;top:0;left:0;" />
                 <span class="drop-zone-icon" aria-hidden="true">&#8682;</span>
                 <p>Drag and drop XER files here or click to browse</p>
-                <span class="hint">Accepts .xer files (multiple supported)</span>
+                <span class="hint">Add one or more XER files. Programme Review requires a baseline and its applicable updates.</span>
             </div>
 
             @if (_uploadedFiles.Count > 0)
             {
                 <ul class="file-list" role="list" aria-label="Uploaded files">
-                    @foreach (var file in _uploadedFiles)
+                    @foreach (UploadedFile file in _uploadedFiles)
                     {
                         <li class="file-item" role="listitem">
                             <span class="file-name" title="@file.Name">@file.Name</span>
@@ -59,30 +56,135 @@
             @if (_fileSizeWarning)
             {
                 <div class="warning-banner" role="alert">
-                    One or more files are larger than 10 MB. Parsing may be slow in the browser.
+                    One or more files are larger than 10 MB. Browser processing can take several minutes and may briefly
+                    pause during report transformations. Cancellation is applied at safe checkpoints; the Windows app is
+                    recommended for large Programme Review histories.
                 </div>
             }
         </div>
     </div>
 
-    @* === Step 2: Options === *@
     <div class="panel">
         <div class="panel-header">
-            <h2><span class="step-number">2</span> Options</h2>
+            <h2><span class="step-number">2</span> Export Profile</h2>
         </div>
         <div class="panel-body">
-            <div class="toggle-row">
-                <input type="checkbox" id="chkPowerBi" @bind="_generatePowerBiTables" disabled="@_isProcessing" />
-                <label for="chkPowerBi">Include enhanced Power BI tables</label>
-            </div>
+            <InputRadioGroup TValue="ExportProfile" @bind-Value="_exportProfile" Name="exportProfile">
+                <div class="profile-options">
+                    <label class="profile-option @(_exportProfile == ExportProfile.Standard ? "selected" : "")">
+                        <InputRadio TValue="ExportProfile" Value="@ExportProfile.Standard" disabled="@_isProcessing" />
+                        <span><strong>Standard / Enhanced</strong><small>Existing raw tables and optional Enhanced Power BI tables.</small></span>
+                    </label>
+                    <label class="profile-option @(_exportProfile == ExportProfile.ProgrammeReview ? "selected" : "")">
+                        <InputRadio TValue="ExportProfile" Value="@ExportProfile.ProgrammeReview" disabled="@_isProcessing" />
+                        <span><strong>Programme Review</strong><small>Validated full-history, ten-table report bundle with manifest.</small></span>
+                    </label>
+                </div>
+            </InputRadioGroup>
+
+            @if (_exportProfile == ExportProfile.Standard)
+            {
+                <div class="toggle-row">
+                    <input type="checkbox" id="chkPowerBi" @bind="_generatePowerBiTables" disabled="@_isProcessing" />
+                    <label for="chkPowerBi">Include legacy Enhanced Power BI tables</label>
+                </div>
+            }
+            else
+            {
+                <div class="programme-review-editor">
+                    <div class="form-grid">
+                        <label>
+                            <span>Project code</span>
+                            <input class="form-control" @bind="_projectCode" disabled="@_isProcessing"
+                                   placeholder="Example: J123" autocomplete="off" />
+                            <small>Uppercase letters, numbers, and underscores.</small>
+                        </label>
+                        <label>
+                            <span>Project name</span>
+                            <input class="form-control" @bind="_projectName" disabled="@_isProcessing"
+                                   placeholder="Governed project name" autocomplete="off" />
+                        </label>
+                        <label>
+                            <span>Programme type</span>
+                            <select class="form-control" @bind="_programmeType" disabled="@_isProcessing">
+                                <option value="">Select C or T</option>
+                                <option value="C">C - Contract</option>
+                                <option value="T">T - Target</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    @if (_uploadedFiles.Count == 0)
+                    {
+                        <p class="empty-hint">Add the baseline and update XER files to configure their history metadata.</p>
+                    }
+                    else
+                    {
+                        <div class="snapshot-table-wrap">
+                            <table class="snapshot-table">
+                                <caption>Snapshot metadata. Dates must use yyyy-MM-dd.</caption>
+                                <thead>
+                                    <tr>
+                                        <th scope="col">XER file</th>
+                                        <th scope="col">Kind</th>
+                                        <th scope="col">Tag</th>
+                                        <th scope="col">Month update</th>
+                                        <th scope="col">Data date</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (UploadedFile file in _uploadedFiles)
+                                    {
+                                        <tr>
+                                            <th scope="row" title="@file.Name">@file.Name</th>
+                                            <td>
+                                                <select class="form-control" @bind="file.SnapshotKind" disabled="@_isProcessing"
+                                                        aria-label="Snapshot kind for @file.Name">
+                                                    <option value="">Select kind</option>
+                                                    <option value="Baseline">Baseline</option>
+                                                    <option value="Update">Update</option>
+                                                </select>
+                                            </td>
+                                            <td>
+                                                <input class="form-control tag-input" @bind="file.SnapshotTag" disabled="@_isProcessing"
+                                                       aria-label="Snapshot tag for @file.Name" placeholder="BL01 or YYMM" />
+                                            </td>
+                                            <td>
+                                                <input class="form-control" type="text" inputmode="numeric" placeholder="yyyy-MM-dd"
+                                                       @bind="file.MonthUpdate" disabled="@_isProcessing"
+                                                       aria-label="Month update for @file.Name" />
+                                            </td>
+                                            <td>
+                                                <input class="form-control" type="text" inputmode="numeric" placeholder="yyyy-MM-dd"
+                                                       @bind="file.DataDate" disabled="@_isProcessing"
+                                                       aria-label="Data date for @file.Name" />
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="info-banner">
+                            Existing filenames are preserved. The manifest generates the canonical report identity and update month-end.
+                            Programme Review web limit: 12 files, 32 MB each, 64 MB total; use the Windows app above it.
+                        </div>
+                    }
+                </div>
+            }
         </div>
     </div>
 
-    @* === Step 3: Parse Button === *@
     <div class="parse-area">
         @if (_isProcessing)
         {
             <button class="btn btn-danger btn-lg" @onclick="CancelOperation" aria-label="Cancel current operation">Cancel</button>
+        }
+        else if (_exportProfile == ExportProfile.ProgrammeReview)
+        {
+            <button class="btn btn-success btn-lg" @onclick="CreateProgrammeReviewBundle"
+                    disabled="@(_uploadedFiles.Count == 0)" aria-label="Validate and download Programme Review bundle">
+                <span class="step-number" aria-hidden="true">3</span> Create Programme Review Bundle
+            </button>
         }
         else
         {
@@ -93,20 +195,21 @@
         }
     </div>
 
-    @* === Progress === *@
+    @if (!string.IsNullOrWhiteSpace(_validationMessage))
+    {
+        <div class="validation-banner" role="alert">@_validationMessage</div>
+    }
+
     @if (_isProcessing || _progressPercent > 0)
     {
         <div class="progress-section" role="progressbar" aria-valuenow="@_progressPercent" aria-valuemin="0" aria-valuemax="100"
              aria-label="@_progressMessage">
-            <div class="progress-bar-container">
-                <div class="progress-bar-fill" style="width: @(_progressPercent)%"></div>
-            </div>
+            <div class="progress-bar-container"><div class="progress-bar-fill" style="width: @(_progressPercent)%"></div></div>
             <p class="progress-label">@_progressMessage</p>
         </div>
     }
 
-    @* === Step 4: Table Selection & Export === *@
-    @if (_allTableNames.Count > 0)
+    @if (_exportProfile == ExportProfile.Standard && _allTableNames.Count > 0)
     {
         <div class="two-col">
             <div class="panel">
@@ -116,14 +219,13 @@
                 </div>
                 <div class="panel-body">
                     <input type="text" class="table-filter" placeholder="Type to filter tables..."
-                           aria-label="Filter table list"
-                           @bind="_tableFilter" @bind:event="oninput" @bind:after="FilterTables" />
+                           aria-label="Filter table list" @bind="_tableFilter" @bind:event="oninput" @bind:after="FilterTables" />
                     <div class="table-actions">
-                        <button class="btn btn-sm btn-secondary" @onclick="SelectAllTables" aria-label="Select all visible tables">Select All</button>
-                        <button class="btn btn-sm btn-secondary" @onclick="DeselectAllTables" aria-label="Deselect all visible tables">Deselect All</button>
+                        <button class="btn btn-sm btn-secondary" @onclick="SelectAllTables">Select All</button>
+                        <button class="btn btn-sm btn-secondary" @onclick="DeselectAllTables">Deselect All</button>
                     </div>
                     <ul class="table-checklist" role="list" aria-label="Available tables for export">
-                        @foreach (var table in _filteredTableNames)
+                        @foreach (string table in _filteredTableNames)
                         {
                             <li role="listitem">
                                 <input type="checkbox" checked="@_selectedTables.Contains(table)"
@@ -137,40 +239,46 @@
             </div>
 
             <div class="panel">
-                <div class="panel-header">
-                    <h2>Activity Log</h2>
-                </div>
+                <div class="panel-header"><h2>Activity Log</h2></div>
                 <div class="panel-body">
                     <div class="activity-log" @ref="_logElement" aria-label="Activity log" role="log" aria-live="polite">@_activityLog</div>
                 </div>
             </div>
         </div>
 
-        @* === Export === *@
-        <div class="export-area" role="group" aria-label="Export actions">
-            <button class="btn btn-primary" @onclick="ExportAll" disabled="@(_isProcessing || _allTableNames.Count == 0)"
-                    aria-label="Export all tables as a ZIP file">
-                Export All as ZIP
-            </button>
-            <button class="btn btn-secondary" @onclick="ExportSelected" disabled="@(_isProcessing || _selectedTables.Count == 0)"
-                    aria-label="Export selected tables as a ZIP file">
-                Export Selected as ZIP
-            </button>
-            <button class="btn btn-info" @onclick="ExportPowerBi" disabled="@(_isProcessing || !_allTableNames.Any(IsEnhancedTable))"
-                    aria-label="Export Power BI enhanced tables as a ZIP file">
-                Export Power BI as ZIP
-            </button>
+        <div class="export-area" role="group" aria-label="Standard export actions">
+            <button class="btn btn-primary" @onclick="ExportAll" disabled="@(_isProcessing || _allTableNames.Count == 0)">Export All as ZIP</button>
+            <button class="btn btn-secondary" @onclick="ExportSelected" disabled="@(_isProcessing || _selectedTables.Count == 0)">Export Selected as ZIP</button>
+            <button class="btn btn-info" @onclick="ExportPowerBi" disabled="@(_isProcessing || !_allTableNames.Any(IsEnhancedTable))">Export Power BI as ZIP</button>
+        </div>
+    }
+
+    @if (_exportProfile == ExportProfile.ProgrammeReview && !string.IsNullOrWhiteSpace(_activityLog))
+    {
+        <div class="panel">
+            <div class="panel-header"><h2>Programme Review Activity</h2></div>
+            <div class="panel-body">
+                <div class="activity-log" @ref="_logElement" aria-label="Programme Review activity log" role="log" aria-live="polite">@_activityLog</div>
+            </div>
         </div>
     }
 </div>
 
 @code {
-    // --- State ---
+    private const int MaxBrowserFiles = 12;
+    private const long MaxBrowserFileBytes = 32L * 1024 * 1024;
+    private const long MaxBrowserTotalBytes = 64L * 1024 * 1024;
+    private const int MaxStandardFiles = 20;
+    private const long MaxStandardFileBytes = 100L * 1024 * 1024;
+    private const long BrowserWarningBytes = 10L * 1024 * 1024;
+
+    private enum ExportProfile { Standard, ProgrammeReview }
+
     private readonly List<UploadedFile> _uploadedFiles = new();
     private readonly HashSet<string> _selectedTables = new(StringComparer.OrdinalIgnoreCase);
     private List<string> _allTableNames = new();
     private List<string> _filteredTableNames = new();
-
+    private ExportProfile _exportProfile;
     private bool _generatePowerBiTables;
     private bool _isProcessing;
     private bool _isDragOver;
@@ -179,376 +287,463 @@
     private string _progressMessage = string.Empty;
     private string _tableFilter = string.Empty;
     private string _activityLog = string.Empty;
-
+    private string _validationMessage = string.Empty;
+    private string _projectCode = string.Empty;
+    private string _projectName = string.Empty;
+    private string _programmeType = string.Empty;
     private XerDataStore? _dataStore;
-    private ProcessingService _processingService = new();
+    private readonly ProcessingService _processingService = new();
     private CancellationTokenSource? _cts;
-
     private ElementReference _logElement;
     private DownloadService? _downloadService;
 
-    protected override void OnInitialized()
-    {
-        _downloadService = new DownloadService(JS);
-    }
+    protected override void OnInitialized() => _downloadService = new DownloadService(JS);
 
-    // --- File Handling ---
     private async Task HandleFileSelected(InputFileChangeEventArgs e)
     {
-        _fileSizeWarning = false;
-        const long maxAllowedSize = 100 * 1024 * 1024; // 100MB limit
-
-        foreach (var file in e.GetMultipleFiles(20))
-        {
-            if (!file.Name.EndsWith(".xer", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (_uploadedFiles.Any(f => f.Name.Equals(file.Name, StringComparison.OrdinalIgnoreCase)))
-                continue;
-
-            if (file.Size > 10 * 1024 * 1024)
-                _fileSizeWarning = true;
-
-            using var ms = new MemoryStream();
-            await file.OpenReadStream(maxAllowedSize).CopyToAsync(ms);
-
-            _uploadedFiles.Add(new UploadedFile
-            {
-                Name = file.Name,
-                Data = ms.ToArray(),
-                Status = "Ready"
-            });
-        }
         _isDragOver = false;
+        try
+        {
+            bool programmeReview = _exportProfile == ExportProfile.ProgrammeReview;
+            int maximumFiles = programmeReview ? MaxBrowserFiles : MaxStandardFiles;
+            long maximumFileBytes = programmeReview ? MaxBrowserFileBytes : MaxStandardFileBytes;
+            IReadOnlyList<IBrowserFile> selectedFiles = e.GetMultipleFiles(maximumFiles);
+
+            long totalBytes = _uploadedFiles.Sum(file => file.Data.LongLength);
+            var pending = new List<UploadedFile>(selectedFiles.Count);
+            var skippedNames = new List<string>();
+            foreach (IBrowserFile browserFile in selectedFiles)
+            {
+                if (!browserFile.Name.EndsWith(".xer", StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedNames.Add(browserFile.Name);
+                    continue;
+                }
+                if (_uploadedFiles.Concat(pending).Any(file =>
+                        file.Name.Equals(browserFile.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    skippedNames.Add(browserFile.Name);
+                    continue;
+                }
+                if (_uploadedFiles.Count + pending.Count >= maximumFiles)
+                    throw new InvalidOperationException($"This profile accepts at most {maximumFiles} XER files.");
+                if (browserFile.Size > maximumFileBytes)
+                    throw new InvalidOperationException(
+                        $"{browserFile.Name} is larger than this profile's {maximumFileBytes / (1024 * 1024)} MB per-file limit.");
+                if (programmeReview && totalBytes + browserFile.Size > MaxBrowserTotalBytes)
+                    throw new InvalidOperationException(
+                        "The selected history exceeds the 64 MB browser limit. Use the Windows app for larger histories.");
+
+                using var stream = new MemoryStream(capacity: checked((int)browserFile.Size));
+                await browserFile.OpenReadStream(maximumFileBytes).CopyToAsync(stream);
+                string? baselineTag = TryInferBaselineTag(browserFile.Name);
+                string? updateTag = TryInferUpdateTag(browserFile.Name);
+                pending.Add(new UploadedFile
+                {
+                    Name = browserFile.Name,
+                    Data = stream.ToArray(),
+                    Status = "Ready",
+                    SnapshotKind = baselineTag is not null ? "Baseline" : updateTag is not null ? "Update" : string.Empty,
+                    SnapshotTag = baselineTag ?? updateTag ?? string.Empty,
+                    MonthUpdate = updateTag is null ? string.Empty : MonthStartFromTag(updateTag)
+                });
+                totalBytes += browserFile.Size;
+            }
+
+            if (pending.Count > 0)
+            {
+                _uploadedFiles.AddRange(pending);
+                ClearResults(keepLog: false);
+            }
+            if (skippedNames.Count > 0)
+                _validationMessage = "Skipped unsupported or duplicate file name(s): " + string.Join(", ", skippedNames);
+        }
+        catch (Exception ex)
+        {
+            _validationMessage = "Files were not added: " + ex.Message;
+        }
+        finally
+        {
+            _fileSizeWarning = _uploadedFiles.Any(file => file.Data.LongLength > BrowserWarningBytes);
+            StateHasChanged();
+        }
     }
 
     private void RemoveFile(UploadedFile file)
     {
         _uploadedFiles.Remove(file);
-        if (_uploadedFiles.Count == 0)
-        {
-            _fileSizeWarning = false;
-            ClearResults();
-        }
+        _fileSizeWarning = _uploadedFiles.Any(f => f.Data.LongLength > 10 * 1024 * 1024);
+        ClearResults(keepLog: false);
     }
 
     private void ClearFiles()
     {
         _uploadedFiles.Clear();
         _fileSizeWarning = false;
-        ClearResults();
+        ClearResults(keepLog: false);
     }
 
-    private void ClearResults()
+    private void ClearResults(bool keepLog)
     {
         _dataStore = null;
+        foreach (UploadedFile file in _uploadedFiles) file.Status = "Ready";
         _allTableNames.Clear();
         _filteredTableNames.Clear();
         _selectedTables.Clear();
         _progressPercent = 0;
         _progressMessage = string.Empty;
-        _activityLog = string.Empty;
+        _validationMessage = string.Empty;
+        if (!keepLog) _activityLog = string.Empty;
     }
 
-    // --- Drag & Drop visual ---
     private void HandleDragEnter() => _isDragOver = true;
     private void HandleDragLeave() => _isDragOver = false;
 
-    // --- Parse ---
     private async Task ParseFiles()
     {
         if (_uploadedFiles.Count == 0) return;
-
-        _isProcessing = true;
-        _cts = new CancellationTokenSource();
-        _activityLog = string.Empty;
-        _progressPercent = 0;
+        BeginOperation("Starting standard XER parse...");
         _allTableNames.Clear();
         _filteredTableNames.Clear();
         _selectedTables.Clear();
-
-        LogActivity("Starting parse...");
-
-        foreach (var f in _uploadedFiles) f.Status = "Pending";
-        StateHasChanged();
-
         try
         {
-            var progress = new Progress<ProcessingService.DetailedProgress>(p =>
+            var progress = CreateParseProgress();
+            var streams = _uploadedFiles.Select(file => ((Stream)new MemoryStream(file.Data, writable: false), file.Name)).ToList();
+            try
             {
-                _progressPercent = p.Percent;
-                _progressMessage = p.Message ?? string.Empty;
-
-                if (!string.IsNullOrEmpty(p.FilePath) && !string.IsNullOrEmpty(p.FileStatus))
-                {
-                    var file = _uploadedFiles.FirstOrDefault(f => f.Name == p.FilePath);
-                    if (file != null)
-                        file.Status = p.FileStatus;
-                }
-                InvokeAsync(async () =>
-                {
-                    StateHasChanged();
-                    await ScrollLogToBottom();
-                });
-            });
-
-            var files = _uploadedFiles.Select(f =>
+                await Task.Yield();
+                _dataStore = await _processingService.ParseXerStreamsAsync(streams, progress, _cts!.Token);
+            }
+            finally
             {
-                var stream = new MemoryStream(f.Data);
-                return ((Stream)stream, f.Name);
-            });
-
-            await Task.Yield(); // Allow UI to render before heavy work
-            _dataStore = await _processingService.ParseXerStreamsAsync(files, progress, _cts.Token);
+                foreach ((Stream stream, _) in streams) stream.Dispose();
+            }
 
             if (_dataStore.TableCount == 0)
             {
                 LogActivity("No tables found in the uploaded files.");
+                return;
             }
-            else
-            {
-                LogActivity($"Parsed {_dataStore.TableCount} tables successfully.");
 
-                // Populate table list
-                _allTableNames = _dataStore.TableNames.OrderBy(n => n).ToList();
-
-                // Add enhanced table names if enabled
-                if (_generatePowerBiTables)
-                {
-                    AddEnhancedTableNames();
-                }
-
-                _filteredTableNames = new List<string>(_allTableNames);
-                foreach (var t in _allTableNames)
-                    _selectedTables.Add(t);
-
-                LogActivity($"{_allTableNames.Count} tables available for export.");
-            }
+            LogActivity($"Parsed {_dataStore.TableCount} tables successfully.");
+            _allTableNames = _dataStore.TableNames.OrderBy(name => name).ToList();
+            if (_generatePowerBiTables) AddEnhancedTableNames();
+            _filteredTableNames = new List<string>(_allTableNames);
+            foreach (string table in _allTableNames) _selectedTables.Add(table);
+            LogActivity($"{_allTableNames.Count} tables available for export.");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) { LogActivity("Parsing was cancelled."); }
+        catch (Exception ex) { SetOperationError($"Parse failed: {ex.Message}"); }
+        finally { EndOperation(); }
+    }
+
+    private async Task CreateProgrammeReviewBundle()
+    {
+        if (!TryCreateProgrammeReviewRequest(out ProgrammeReviewBundleRequest? request, out string error))
         {
-            LogActivity("Parsing was canceled.");
+            _validationMessage = error;
+            return;
         }
-        catch (Exception ex)
+
+        BeginOperation("Validating Programme Review history...");
+        try
         {
-            LogActivity($"Error: {ex.Message}");
-        }
-        finally
-        {
-            _isProcessing = false;
-            _progressPercent = 0;
-            _cts?.Dispose();
-            _cts = null;
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(1, _cts!.Token);
+            var files = _uploadedFiles.ToDictionary(file => file.Name, file => file.Data, StringComparer.Ordinal);
+            var service = new ProgrammeReviewBundleService();
+            ProgrammeReviewInMemoryBundleResult bundle = await service.BuildFromXerBytesAsync(
+                request!, files, CreateProgrammeReviewProgress(), _cts!.Token);
+
+            _progressMessage = "Packaging validated bundle...";
+            _progressPercent = 85;
             StateHasChanged();
+            using var zipStream = new MemoryStream();
+            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                KeyValuePair<string, byte[]>[] bundleFiles = bundle.Files
+                    .OrderBy(item => item.Key, StringComparer.Ordinal)
+                    .ToArray();
+                int packagedFiles = 0;
+                foreach ((string fileName, byte[] content) in bundleFiles)
+                {
+                    _cts.Token.ThrowIfCancellationRequested();
+                    ZipArchiveEntry entry = archive.CreateEntry($"{bundle.BundleId}/{fileName}", CompressionLevel.Fastest);
+                    await using Stream entryStream = entry.Open();
+                    await WriteZipContentAsync(entryStream, content, _cts.Token);
+                    packagedFiles++;
+                    _progressPercent = 85 + (packagedFiles * 10 / bundleFiles.Length);
+                    StateHasChanged();
+                }
+            }
+
+            _cts.Token.ThrowIfCancellationRequested();
+            _progressMessage = "Preparing browser download...";
+            _progressPercent = 97;
+            StateHasChanged();
+            await _downloadService!.DownloadFileAsync(
+                $"{bundle.BundleId}.zip", zipStream, "application/zip", _cts.Token);
+            _cts.Token.ThrowIfCancellationRequested();
+            _progressMessage = "Programme Review bundle complete.";
+            _progressPercent = 100;
+            HashSet<string> retainedNames = bundle.ManifestRows
+                .Select(row => row.OriginalXerFilename)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (UploadedFile file in _uploadedFiles)
+                file.Status = retainedNames.Contains(file.Name) ? "Success" : "Skipped";
+            LogActivity($"Programme Review bundle complete: {bundle.BundleId}");
+            LogActivity($"Retained {retainedNames.Count} of {_uploadedFiles.Count} supplied history snapshots; " +
+                        $"{_uploadedFiles.Count - retainedNames.Count} superseded/pre-anchor snapshot(s) were skipped.");
+            LogActivity("Downloaded 10 report CSV files plus XER_CSV_MANIFEST.csv.");
         }
+        catch (OperationCanceledException) { LogActivity("Programme Review bundle generation was cancelled; no download was created."); }
+        catch (Exception ex) { SetOperationError($"Programme Review bundle failed: {ex.Message}"); }
+        finally { EndOperation(); }
+    }
+
+    private bool TryCreateProgrammeReviewRequest(out ProgrammeReviewBundleRequest? request, out string error)
+    {
+        request = null;
+        error = string.Empty;
+        string projectCode = _projectCode.Trim().ToUpperInvariant();
+        if (projectCode.Length == 0) { error = "Project code is required."; return false; }
+        if (_projectName.Trim().Length == 0) { error = "Project name is required."; return false; }
+        if (_programmeType is not ("C" or "T")) { error = "Select programme type C or T."; return false; }
+        if (_uploadedFiles.Count == 0) { error = "Add at least one XER file."; return false; }
+        if (_uploadedFiles.Count > MaxBrowserFiles)
+        { error = $"Programme Review supports at most {MaxBrowserFiles} files in the browser. Use the Windows app for this history."; return false; }
+        UploadedFile? oversized = _uploadedFiles.FirstOrDefault(file => file.Data.LongLength > MaxBrowserFileBytes);
+        if (oversized is not null)
+        { error = $"{oversized.Name} exceeds the 32 MB Programme Review browser limit. Use the Windows app."; return false; }
+        if (_uploadedFiles.Sum(file => file.Data.LongLength) > MaxBrowserTotalBytes)
+        { error = "This history exceeds the 64 MB Programme Review browser limit. Use the Windows app."; return false; }
+
+        var snapshots = new List<ProgrammeReviewSnapshot>(_uploadedFiles.Count);
+        foreach (UploadedFile file in _uploadedFiles)
+        {
+            if (!DateOnly.TryParseExact(file.MonthUpdate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly monthUpdate))
+            { error = $"{file.Name}: Month update must use yyyy-MM-dd."; return false; }
+            if (!DateOnly.TryParseExact(file.DataDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly dataDate))
+            { error = $"{file.Name}: Data date must use yyyy-MM-dd."; return false; }
+
+            ProgrammeReviewSnapshotKind kind;
+            if (file.SnapshotKind == "Baseline") kind = ProgrammeReviewSnapshotKind.Baseline;
+            else if (file.SnapshotKind == "Update") kind = ProgrammeReviewSnapshotKind.Update;
+            else { error = $"{file.Name}: Select baseline or update."; return false; }
+            if (kind == ProgrammeReviewSnapshotKind.Update && monthUpdate.Day != 1)
+            { error = $"{file.Name}: Update Month update must use the first day of its YYMM month."; return false; }
+
+            snapshots.Add(new ProgrammeReviewSnapshot
+            {
+                OriginalXerFilename = file.Name,
+                SnapshotKind = kind,
+                SnapshotTag = file.SnapshotTag.Trim().ToUpperInvariant(),
+                MonthUpdate = monthUpdate,
+                DataDate = dataDate
+            });
+        }
+
+        request = new ProgrammeReviewBundleRequest
+        {
+            ProjectCode = projectCode,
+            ProjectName = _projectName.Trim(),
+            ProgrammeType = _programmeType,
+            ExportedAtUtc = DateTimeOffset.UtcNow,
+            Snapshots = snapshots
+        };
+        return true;
+    }
+
+    private IProgress<ProcessingService.DetailedProgress> CreateParseProgress() =>
+        new Progress<ProcessingService.DetailedProgress>(progress =>
+        {
+            _progressPercent = progress.Percent;
+            _progressMessage = progress.Message ?? string.Empty;
+            if (!string.IsNullOrEmpty(progress.FilePath) && !string.IsNullOrEmpty(progress.FileStatus))
+            {
+                UploadedFile? file = _uploadedFiles.FirstOrDefault(item => item.Name == progress.FilePath);
+                if (file is not null) file.Status = progress.FileStatus;
+            }
+            _ = InvokeAsync(async () => { StateHasChanged(); await ScrollLogToBottom(); });
+        });
+
+    private IProgress<ProcessingService.DetailedProgress> CreateProgrammeReviewProgress() =>
+        new Progress<ProcessingService.DetailedProgress>(progress =>
+        {
+            bool building = string.Equals(
+                progress.Message,
+                "Building and validating Programme Review tables...",
+                StringComparison.Ordinal);
+            _progressPercent = building ? 75 : Math.Min(70, Math.Max(0, progress.Percent) * 70 / 100);
+            _progressMessage = progress.Message ?? string.Empty;
+            if (!string.IsNullOrEmpty(progress.FilePath) && !string.IsNullOrEmpty(progress.FileStatus))
+            {
+                UploadedFile? file = _uploadedFiles.FirstOrDefault(item => item.Name == progress.FilePath);
+                if (file is not null) file.Status = progress.FileStatus;
+            }
+            _ = InvokeAsync(async () => { StateHasChanged(); await ScrollLogToBottom(); });
+        });
+
+    private void BeginOperation(string message, bool resetFileStatuses = true)
+    {
+        _isProcessing = true;
+        _cts = new CancellationTokenSource();
+        _validationMessage = string.Empty;
+        _progressPercent = 0;
+        _progressMessage = message;
+        _activityLog = string.Empty;
+        if (resetFileStatuses)
+            foreach (UploadedFile file in _uploadedFiles) file.Status = "Pending";
+        LogActivity(message);
+    }
+
+    private void EndOperation()
+    {
+        _isProcessing = false;
+        _progressPercent = 0;
+        _cts?.Dispose();
+        _cts = null;
+        StateHasChanged();
+    }
+
+    private void SetOperationError(string message)
+    {
+        _validationMessage = message;
+        LogActivity(message);
     }
 
     private void AddEnhancedTableNames()
     {
-        if (_dataStore == null) return;
-
+        if (_dataStore is null) return;
         var enhanced = new List<string>();
         if (_dataStore.ContainsTable(TableNames.Task) && _dataStore.ContainsTable(TableNames.Calendar) && _dataStore.ContainsTable(TableNames.Project))
-        {
-            enhanced.Add(EnhancedTableNames.XerTask01);
-            enhanced.Add(EnhancedTableNames.XerBaseline04);
-        }
-        if (_dataStore.ContainsTable(TableNames.Project))
-            enhanced.Add(EnhancedTableNames.XerProject02);
-        if (_dataStore.ContainsTable(TableNames.ProjWbs))
-            enhanced.Add(EnhancedTableNames.XerProjWbs03);
-        if (_dataStore.ContainsTable(TableNames.TaskPred) && _dataStore.ContainsTable(TableNames.Task))
-            enhanced.Add(EnhancedTableNames.XerPredecessor06);
-        if (_dataStore.ContainsTable(TableNames.ActvType))
-            enhanced.Add(EnhancedTableNames.XerActvType07);
-        if (_dataStore.ContainsTable(TableNames.ActvCode))
-            enhanced.Add(EnhancedTableNames.XerActvCode08);
-        if (_dataStore.ContainsTable(TableNames.TaskActv))
-            enhanced.Add(EnhancedTableNames.XerTaskActv09);
+        { enhanced.Add(EnhancedTableNames.XerTask01); enhanced.Add(EnhancedTableNames.XerBaseline04); }
+        if (_dataStore.ContainsTable(TableNames.Project)) enhanced.Add(EnhancedTableNames.XerProject02);
+        if (_dataStore.ContainsTable(TableNames.ProjWbs)) enhanced.Add(EnhancedTableNames.XerProjWbs03);
+        if (_dataStore.ContainsTable(TableNames.TaskPred) && _dataStore.ContainsTable(TableNames.Task)) enhanced.Add(EnhancedTableNames.XerPredecessor06);
+        if (_dataStore.ContainsTable(TableNames.ActvType)) enhanced.Add(EnhancedTableNames.XerActvType07);
+        if (_dataStore.ContainsTable(TableNames.ActvCode)) enhanced.Add(EnhancedTableNames.XerActvCode08);
+        if (_dataStore.ContainsTable(TableNames.TaskActv)) enhanced.Add(EnhancedTableNames.XerTaskActv09);
         if (_dataStore.ContainsTable(TableNames.Calendar))
-        {
-            enhanced.Add(EnhancedTableNames.XerCalendar10);
-            enhanced.Add(EnhancedTableNames.XerCalendarDetailed11);
-        }
-        if (_dataStore.ContainsTable(TableNames.Rsrc))
-            enhanced.Add(EnhancedTableNames.XerRsrc12);
-        if (_dataStore.ContainsTable(TableNames.TaskRsrc))
-            enhanced.Add(EnhancedTableNames.XerTaskRsrc13);
-        if (_dataStore.ContainsTable(TableNames.Umeasure))
-            enhanced.Add(EnhancedTableNames.XerUmeasure14);
+        { enhanced.Add(EnhancedTableNames.XerCalendar10); enhanced.Add(EnhancedTableNames.XerCalendarDetailed11); }
+        if (_dataStore.ContainsTable(TableNames.Rsrc)) enhanced.Add(EnhancedTableNames.XerRsrc12);
+        if (_dataStore.ContainsTable(TableNames.TaskRsrc)) enhanced.Add(EnhancedTableNames.XerTaskRsrc13);
+        if (_dataStore.ContainsTable(TableNames.Umeasure)) enhanced.Add(EnhancedTableNames.XerUmeasure14);
         if (_dataStore.ContainsTable(TableNames.TaskRsrc) && _dataStore.ContainsTable(TableNames.Calendar) && _dataStore.ContainsTable(TableNames.Task))
             enhanced.Add(EnhancedTableNames.XerResourceDist15);
-
-        foreach (var name in enhanced)
-        {
-            if (!_allTableNames.Contains(name, StringComparer.OrdinalIgnoreCase))
-                _allTableNames.Add(name);
-        }
+        foreach (string name in enhanced)
+            if (!_allTableNames.Contains(name, StringComparer.OrdinalIgnoreCase)) _allTableNames.Add(name);
         _allTableNames.Sort(StringComparer.OrdinalIgnoreCase);
     }
 
-    // --- Export ---
-    private async Task ExportAll()
-    {
-        await ExportTables(_allTableNames);
-    }
-
-    private async Task ExportSelected()
-    {
-        await ExportTables(_selectedTables.ToList());
-    }
-
-    private async Task ExportPowerBi()
-    {
-        var pbiTables = _allTableNames.Where(IsEnhancedTable).ToList();
-        if (pbiTables.Count == 0)
-        {
-            LogActivity("No Power BI enhanced tables available.");
-            return;
-        }
-
-        await ExportTables(pbiTables);
-    }
+    private Task ExportAll() => ExportTables(_allTableNames);
+    private Task ExportSelected() => ExportTables(_selectedTables.ToList());
+    private Task ExportPowerBi() => ExportTables(_allTableNames.Where(IsEnhancedTable).ToList());
 
     private async Task ExportTables(List<string> tables)
     {
-        if (_dataStore == null || tables.Count == 0) return;
-
-        _isProcessing = true;
-        _cts = new CancellationTokenSource();
-        LogActivity($"Exporting {tables.Count} tables...");
-        StateHasChanged();
-
+        if (_dataStore is null || tables.Count == 0) return;
+        BeginOperation($"Exporting {tables.Count} tables...", resetFileStatuses: false);
         try
         {
-            var progress = new Progress<(int percent, string message)>(p =>
+            var progress = new Progress<(int percent, string message)>(item =>
             {
-                _progressPercent = p.percent;
-                _progressMessage = p.message;
-                InvokeAsync(async () =>
-                {
-                    StateHasChanged();
-                    await ScrollLogToBottom();
-                });
+                _progressPercent = item.percent;
+                _progressMessage = item.message;
+                _ = InvokeAsync(StateHasChanged);
             });
+            Dictionary<string, byte[]> csvData = await _processingService.ExportTablesToMemoryAsync(
+                _dataStore, tables, progress, _cts!.Token);
+            if (csvData.Count == 0) { LogActivity("No data to export."); return; }
 
-            await Task.Yield(); // Allow UI to render before heavy work
-            var csvData = await _processingService.ExportTablesToMemoryAsync(_dataStore, tables, progress, _cts.Token);
-
-            if (csvData.Count == 0)
-            {
-                LogActivity("No data to export.");
-                return;
-            }
-
-            LogActivity($"Generated {csvData.Count} CSV files. Creating ZIP...");
-            StateHasChanged();
-
-            // Create ZIP in memory
             using var zipStream = new MemoryStream();
             using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
             {
-                foreach (var kvp in csvData.OrderBy(k => k.Key))
+                foreach ((string table, byte[] content) in csvData.OrderBy(item => item.Key))
                 {
-                    var entry = archive.CreateEntry($"{kvp.Key}.csv", CompressionLevel.Fastest);
-                    using var entryStream = entry.Open();
-                    await entryStream.WriteAsync(kvp.Value);
+                    ZipArchiveEntry entry = archive.CreateEntry($"{table}.csv", CompressionLevel.Fastest);
+                    await using Stream entryStream = entry.Open();
+                    await WriteZipContentAsync(entryStream, content, _cts.Token);
                 }
             }
-
-            var zipBytes = zipStream.ToArray();
-            await _downloadService!.DownloadFileAsync("XER_Export.zip", zipBytes, "application/zip");
-
-            LogActivity($"Export complete. Downloaded XER_Export.zip ({csvData.Count} files, {zipBytes.Length / 1024:N0} KB).");
+            _cts.Token.ThrowIfCancellationRequested();
+            await _downloadService!.DownloadFileAsync("XER_Export.zip", zipStream, "application/zip", _cts.Token);
+            _cts.Token.ThrowIfCancellationRequested();
+            LogActivity($"Export complete: {csvData.Count} CSV files.");
         }
-        catch (OperationCanceledException)
-        {
-            LogActivity("Export was canceled.");
-        }
-        catch (Exception ex)
-        {
-            LogActivity($"Export error: {ex.Message}");
-        }
-        finally
-        {
-            _isProcessing = false;
-            _progressPercent = 0;
-            _cts?.Dispose();
-            _cts = null;
-            StateHasChanged();
-        }
+        catch (OperationCanceledException) { LogActivity("Export was cancelled."); }
+        catch (Exception ex) { SetOperationError($"Export failed: {ex.Message}"); }
+        finally { EndOperation(); }
     }
 
-    // --- Cancel ---
     private void CancelOperation()
     {
         _cts?.Cancel();
         LogActivity("Cancellation requested...");
     }
 
-    // --- Table Selection ---
+    private static async Task WriteZipContentAsync(
+        Stream destination,
+        byte[] content,
+        CancellationToken cancellationToken)
+    {
+        const int chunkSize = 1024 * 1024;
+        for (int offset = 0; offset < content.Length; offset += chunkSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int count = Math.Min(chunkSize, content.Length - offset);
+            await destination.WriteAsync(content.AsMemory(offset, count), cancellationToken);
+            await Task.Delay(1, cancellationToken);
+        }
+    }
+
     private void ToggleTable(string table, bool selected)
-    {
-        if (selected)
-            _selectedTables.Add(table);
-        else
-            _selectedTables.Remove(table);
-    }
-
-    private void SelectAllTables()
-    {
-        foreach (var t in _filteredTableNames)
-            _selectedTables.Add(t);
-    }
-
-    private void DeselectAllTables()
-    {
-        foreach (var t in _filteredTableNames)
-            _selectedTables.Remove(t);
-    }
-
-    private void FilterTables()
-    {
-        if (string.IsNullOrWhiteSpace(_tableFilter))
-        {
-            _filteredTableNames = new List<string>(_allTableNames);
-        }
-        else
-        {
-            _filteredTableNames = _allTableNames
-                .Where(t => t.Contains(_tableFilter, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-        }
-    }
-
+    { if (selected) _selectedTables.Add(table); else _selectedTables.Remove(table); }
+    private void SelectAllTables() { foreach (string table in _filteredTableNames) _selectedTables.Add(table); }
+    private void DeselectAllTables() { foreach (string table in _filteredTableNames) _selectedTables.Remove(table); }
+    private void FilterTables() => _filteredTableNames = string.IsNullOrWhiteSpace(_tableFilter)
+        ? new List<string>(_allTableNames)
+        : _allTableNames.Where(table => table.Contains(_tableFilter, StringComparison.OrdinalIgnoreCase)).ToList();
     private static bool IsEnhancedTable(string name) =>
         name.Length > 3 && char.IsDigit(name[0]) && char.IsDigit(name[1]) && name[2] == '_';
 
-    // --- Logging ---
-    private void LogActivity(string message)
-    {
-        var timestamp = DateTime.Now.ToString("HH:mm:ss");
-        _activityLog += $"[{timestamp}] {message}\n";
-    }
-
-    // --- Auto-scroll log ---
+    private void LogActivity(string message) => _activityLog += $"[{DateTime.Now:HH:mm:ss}] {message}\n";
     private async Task ScrollLogToBottom()
+    { try { await JS.InvokeVoidAsync("scrollToBottom", _logElement); } catch { } }
+
+    private static string? TryInferUpdateTag(string fileName)
     {
-        try
+        foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(fileName, @"(?<!\d)(\d{4})(?!\d)"))
         {
-            await JS.InvokeVoidAsync("scrollToBottom", _logElement);
+            string tag = match.Groups[1].Value;
+            if (int.TryParse(tag.AsSpan(2, 2), NumberStyles.None, CultureInfo.InvariantCulture, out int month)
+                && month is >= 1 and <= 12) return tag;
         }
-        catch
-        {
-            // Ignore JS interop errors during disposal
-        }
+        return null;
     }
 
-    // --- Model ---
-    private class UploadedFile
+    private static string? TryInferBaselineTag(string fileName)
     {
-        public string Name { get; set; } = string.Empty;
-        public byte[] Data { get; set; } = Array.Empty<byte>();
+        System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
+            fileName,
+            @"(?:^|[-_ ])(BL[0-9]{2}(?:-[A-Z])?)(?=[-_. ]|$)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? match.Groups[1].Value.ToUpperInvariant() : null;
+    }
+
+    private static string MonthStartFromTag(string tag) =>
+        $"20{tag[..2]}-{tag[2..]}-01";
+
+    private sealed class UploadedFile
+    {
+        public string Name { get; init; } = string.Empty;
+        public byte[] Data { get; init; } = Array.Empty<byte>();
         public string Status { get; set; } = "Ready";
+        public string SnapshotKind { get; set; } = string.Empty;
+        public string SnapshotTag { get; set; } = string.Empty;
+        public string MonthUpdate { get; set; } = string.Empty;
+        public string DataDate { get; set; } = string.Empty;
     }
 }

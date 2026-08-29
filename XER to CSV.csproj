@@ -15,9 +15,10 @@
     <RootNamespace>XerToCsvConverter</RootNamespace>
     <AssemblyTitle>XER to CSV</AssemblyTitle>
     <Product>XER to CSV</Product>
-    <Copyright>Copyright ¸  2025</Copyright>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Copyright>Copyright © 2025-2026 Ricardo Aguirre</Copyright>
+    <Version>2.5.0</Version>
+    <AssemblyVersion>2.5.0.0</AssemblyVersion>
+    <FileVersion>2.5.0.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="XerToCsvConverter.Core\XerToCsvConverter.Core.csproj" />
@@ -25,9 +26,15 @@
   <ItemGroup>
     <Compile Remove="XerToCsvConverter.Core\**" />
     <Compile Remove="XerToCsvConverter.Web\**" />
+    <Compile Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />
+    <Compile Remove="XerToCsvConverter.Core.Tests\**" />
     <EmbeddedResource Remove="XerToCsvConverter.Core\**" />
     <EmbeddedResource Remove="XerToCsvConverter.Web\**" />
+    <EmbeddedResource Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />
+    <EmbeddedResource Remove="XerToCsvConverter.Core.Tests\**" />
     <None Remove="XerToCsvConverter.Core\**" />
     <None Remove="XerToCsvConverter.Web\**" />
+    <None Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />
+    <None Remove="XerToCsvConverter.Core.Tests\**" />
   </ItemGroup>
 </Project>

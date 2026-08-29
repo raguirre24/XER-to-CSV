@@ -433,6 +433,154 @@ html, body {
     cursor: pointer;
 }
 
+/* Export profiles and Programme Review metadata */
+.profile-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.profile-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.profile-option:hover,
+.profile-option.selected {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+.profile-option input {
+    margin-top: 0.2rem;
+    accent-color: var(--accent);
+}
+
+.profile-option span {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.profile-option small,
+.form-grid small,
+.empty-hint {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
+.programme-review-editor {
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.form-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.form-control {
+    width: 100%;
+    min-height: 34px;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.snapshot-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.snapshot-table {
+    width: 100%;
+    min-width: 830px;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.snapshot-table caption {
+    text-align: left;
+    padding: 0.6rem 0.75rem;
+    color: var(--text-muted);
+    background: var(--surface);
+}
+
+.snapshot-table th,
+.snapshot-table td {
+    padding: 0.5rem;
+    border-top: 1px solid var(--border);
+    text-align: left;
+    vertical-align: middle;
+}
+
+.snapshot-table thead th {
+    background: var(--surface-alt);
+    white-space: nowrap;
+}
+
+.snapshot-table tbody th {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+.tag-input {
+    min-width: 95px;
+    text-transform: uppercase;
+}
+
+.info-banner,
+.validation-banner {
+    border-radius: var(--radius);
+    padding: 0.65rem 0.8rem;
+    margin-top: 0.75rem;
+    font-size: 0.84rem;
+}
+
+.info-banner {
+    background: #e8f3fb;
+    border: 1px solid #a7cee8;
+    color: #15577f;
+}
+
+.validation-banner {
+    background: #ffebee;
+    border: 1px solid #ef9a9a;
+    color: #9b2525;
+    margin-bottom: 1rem;
+}
+
 /* Table Selection */
 .table-filter {
     width: 100%;
@@ -654,6 +802,11 @@ html, body {
 
     .drop-zone {
         padding: 1.5rem 1rem;
+    }
+
+    .profile-options,
+    .form-grid {
+        grid-template-columns: 1fr;
     }
 }
 

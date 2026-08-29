@@ -39,6 +39,14 @@ Thank you for using this software.
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+
+        if (args.Any(arg => string.Equals(arg, "--ui-smoke-test", StringComparison.OrdinalIgnoreCase)))
+        {
+            using var smokeForm = new MainForm(suppressPersistence: true);
+            smokeForm.VerifyProgrammeReviewUiIntegration();
+            return;
+        }
+
         Application.Run(new MainForm());
     }
 }

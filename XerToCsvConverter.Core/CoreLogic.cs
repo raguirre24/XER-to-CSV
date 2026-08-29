@@ -1362,10 +1362,200 @@ namespace XerToCsvConverter;
 
         private const char Delimiter = '\t';
 
+        private static readonly Encoding StrictUtf8 = new UTF8Encoding(
+            encoderShouldEmitUTF8Identifier: false,
+            throwOnInvalidBytes: true);
+
+        private static readonly Encoding Windows1252 = CreateWindows1252Encoding();
+
+        private static Encoding CreateWindows1252Encoding()
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            return Encoding.GetEncoding(
+                1252,
+                EncoderFallback.ExceptionFallback,
+                DecoderFallback.ExceptionFallback);
+        }
+
 
 
         // Parses XER content from a Stream (for in-memory / Blazor scenarios)
         public XerDataStore ParseXerStream(Stream stream, string fileName, Action<int, string>? reportProgressAction, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            if (!stream.CanRead) throw new ArgumentException("The XER stream must be readable.", nameof(stream));
+
+            Stream readableStream = stream;
+            MemoryStream? ownedCopy = null;
+            if (!stream.CanSeek)
+            {
+                ownedCopy = new MemoryStream();
+                stream.CopyTo(ownedCopy);
+                ownedCopy.Position = 0;
+                readableStream = ownedCopy;
+            }
+
+            long startPosition = readableStream.Position;
+            try
+            {
+                try
+                {
+                    return ParseXerStreamWithEncoding(
+                        readableStream, fileName, StrictUtf8, reportProgressAction, cancellationToken);
+                }
+                catch (DecoderFallbackException)
+                {
+                    readableStream.Position = startPosition;
+                    return ParseXerStreamWithEncoding(
+                        readableStream, fileName, Windows1252, reportProgressAction, cancellationToken);
+                }
+            }
+            finally
+            {
+                ownedCopy?.Dispose();
+            }
+        }
+
+        // Cooperative asynchronous stream parser for single-threaded browser runtimes. It yields at
+        // the configured progress interval so rendering, progress callbacks and cancellation events run.
+        public async Task<XerDataStore> ParseXerStreamAsync(
+            Stream stream,
+            string fileName,
+            Action<int, string>? reportProgressAction,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+            if (!stream.CanRead) throw new ArgumentException("The XER stream must be readable.", nameof(stream));
+
+            Stream readableStream = stream;
+            MemoryStream? ownedCopy = null;
+            if (!stream.CanSeek)
+            {
+                ownedCopy = new MemoryStream();
+                await stream.CopyToAsync(ownedCopy, cancellationToken);
+                ownedCopy.Position = 0;
+                readableStream = ownedCopy;
+            }
+
+            long startPosition = readableStream.Position;
+            try
+            {
+                try
+                {
+                    return await ParseXerStreamWithEncodingAsync(
+                        readableStream, fileName, StrictUtf8, reportProgressAction, cancellationToken);
+                }
+                catch (DecoderFallbackException)
+                {
+                    readableStream.Position = startPosition;
+                    return await ParseXerStreamWithEncodingAsync(
+                        readableStream, fileName, Windows1252, reportProgressAction, cancellationToken);
+                }
+            }
+            finally
+            {
+                ownedCopy?.Dispose();
+            }
+        }
+
+        private static async Task<XerDataStore> ParseXerStreamWithEncodingAsync(
+            Stream stream,
+            string fileName,
+            Encoding encoding,
+            Action<int, string>? reportProgressAction,
+            CancellationToken cancellationToken)
+        {
+            var fileStore = new XerDataStore();
+            string filename = StringInternPool.Intern(fileName);
+            int progressReportInterval = Math.Max(1, PerformanceConfig.ProgressReportIntervalLines);
+            var localTables = new Dictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
+            XerTable? currentTable = null;
+            int lineCount = 0;
+            long fileSize = stream.CanSeek ? stream.Length : 0;
+            long bytesRead = 0;
+            int lastReportedProgress = 0;
+
+            using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+            while (await reader.ReadLineAsync(cancellationToken) is { } line)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                bytesRead += line.Length + Environment.NewLine.Length;
+                lineCount++;
+
+                if (lineCount % progressReportInterval == 0)
+                {
+                    if (fileSize > 0)
+                    {
+                        int progress = Math.Min(100, (int)((double)bytesRead * 100 / fileSize));
+                        if (progress > lastReportedProgress)
+                        {
+                            reportProgressAction?.Invoke(progress, $"Parsing {filename}: {progress}%");
+                            lastReportedProgress = progress;
+                        }
+                    }
+
+                    // Task.Delay is deliberate: Task.Yield alone can repeatedly queue microtasks and starve
+                    // browser input events on WebAssembly.
+                    await Task.Delay(1, cancellationToken);
+                }
+
+                ParseXerContentLine(line, filename, localTables, ref currentTable);
+            }
+
+            foreach ((string _, XerTable table) in localTables)
+                if (!table.IsEmpty) fileStore.AddTable(table);
+
+            reportProgressAction?.Invoke(100, $"Finished parsing {filename}");
+            return fileStore;
+        }
+
+        private static void ParseXerContentLine(
+            string line,
+            string filename,
+            Dictionary<string, XerTable> localTables,
+            ref XerTable? currentTable)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return;
+            ReadOnlySpan<char> lineSpan = line.AsSpan();
+            if (lineSpan.Length < 2 || lineSpan[0] != '%') return;
+
+            switch (lineSpan[1])
+            {
+                case 'T':
+                    ReadOnlySpan<char> tableNameSpan = lineSpan[2..].Trim();
+                    if (!tableNameSpan.IsEmpty)
+                    {
+                        string currentTableName = StringInternPool.Intern(tableNameSpan);
+                        currentTable = new XerTable(currentTableName);
+                        localTables[currentTable.Name] = currentTable;
+                    }
+                    break;
+                case 'F':
+                    if (currentTable != null)
+                    {
+                        ReadOnlySpan<char> fieldsLine = lineSpan[2..];
+                        if (!fieldsLine.IsEmpty && fieldsLine[0] == Delimiter) fieldsLine = fieldsLine[1..];
+                        currentTable.SetHeaders(FastSplitAndIntern(fieldsLine, Delimiter, trim: true));
+                    }
+                    break;
+                case 'R':
+                    if (currentTable?.Headers is not null)
+                    {
+                        ReadOnlySpan<char> dataLine = lineSpan[2..];
+                        if (!dataLine.IsEmpty && dataLine[0] == Delimiter) dataLine = dataLine[1..];
+                        currentTable.AddRow(new DataRow(
+                            FastSplitAndIntern(dataLine, Delimiter, trim: false), filename));
+                    }
+                    break;
+            }
+        }
+
+        private XerDataStore ParseXerStreamWithEncoding(
+            Stream stream,
+            string fileName,
+            Encoding encoding,
+            Action<int, string>? reportProgressAction,
+            CancellationToken cancellationToken)
         {
             var fileStore = new XerDataStore();
             string filename = StringInternPool.Intern(fileName);
@@ -1379,7 +1569,7 @@ namespace XerToCsvConverter;
             long bytesRead = 0;
             int lastReportedProgress = 0;
 
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+            using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
             string? line;
 
             while ((line = reader.ReadLine()) != null)
@@ -1470,10 +1660,10 @@ namespace XerToCsvConverter;
 
 
 
-            // Default to UTF8, generally safer and more common than Encoding.Default (ANSI)
+            // Use strict UTF-8 first; legacy P6 exports are retried explicitly as Windows-1252.
 
-            Encoding encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-            bool retryWithDefaultEncoding = false;
+            Encoding encoding = StrictUtf8;
+            bool retryWithWindows1252 = false;
 
             while (true)
             {
@@ -1663,10 +1853,10 @@ namespace XerToCsvConverter;
 
             catch (DecoderFallbackException)
             {
-                if (!retryWithDefaultEncoding)
+                if (!retryWithWindows1252)
                 {
-                    encoding = Encoding.Default;
-                    retryWithDefaultEncoding = true;
+                    encoding = Windows1252;
+                    retryWithWindows1252 = true;
                     continue;
                 }
 
@@ -6603,6 +6793,7 @@ namespace XerToCsvConverter;
             for (int i = 0; i < fileCount; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                await Task.Delay(1, cancellationToken);
                 var (stream, fileName) = fileList[i];
 
                 progress?.Report(new DetailedProgress
@@ -6616,7 +6807,21 @@ namespace XerToCsvConverter;
 
                 try
                 {
-                    var singleStore = _parser.ParseXerStream(stream, fileName, null, cancellationToken);
+                    int fileIndex = i;
+                    Action<int, string> parserProgress = (percent, message) =>
+                    {
+                        int overall = (fileIndex * 100 + Math.Clamp(percent, 0, 100)) / fileCount;
+                        progress?.Report(new DetailedProgress
+                        {
+                            Percent = overall,
+                            Message = message,
+                            FilePath = fileName,
+                            FileStatus = "Processing",
+                            StatusColor = "Blue"
+                        });
+                    };
+                    var singleStore = await _parser.ParseXerStreamAsync(
+                        stream, fileName, parserProgress, cancellationToken);
                     masterStore.MergeStore(singleStore);
 
                     progress?.Report(new DetailedProgress

@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Convert Primavera P6 XER schedule files to CSV format with optional Power BI enhanced tables. Free browser-based tool." />
+    <meta name="description" content="Convert Primavera P6 XER schedules to standard, Enhanced Power BI, or validated Programme Review CSV bundles." />
     <meta name="theme-color" content="#1666aa" />
     <title>XER to CSV Converter</title>
     <base href="/" />
@@ -25,13 +25,17 @@
 
     <script src="_framework/blazor.webassembly.js"></script>
     <script>
-        window.downloadFile = (filename, contentType, base64Content) => {
+        window.downloadFileFromStream = async (filename, contentType, contentStreamReference) => {
+            const arrayBuffer = await contentStreamReference.arrayBuffer();
+            const blob = new Blob([arrayBuffer], { type: contentType });
+            const objectUrl = URL.createObjectURL(blob);
             const link = document.createElement('a');
-            link.href = `data:${contentType};base64,${base64Content}`;
+            link.href = objectUrl;
             link.download = filename;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
         };
 
         window.scrollToBottom = (element) => {
