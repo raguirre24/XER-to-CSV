@@ -31,7 +31,9 @@ jobs:
         run: dotnet publish XerToCsvConverter.Web/XerToCsvConverter.Web.csproj -c Release -o release
 
       - name: Adjust base path for GitHub Pages
-        run: sed -i 's|<base href="/" />|<base href="/XER-to-CSV/" />|g' release/wwwroot/index.html
+        run: |
+          sed -i 's|<base href="/" />|<base href="/XER-to-CSV/" />|g' release/wwwroot/index.html
+          sed -i "s|__APP_VERSION__|${GITHUB_SHA}|g" release/wwwroot/index.html
 
       - name: Add .nojekyll
         run: touch release/wwwroot/.nojekyll

@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Convert Primavera P6 XER schedules to standard, Enhanced Power BI, or validated Programme Review CSV bundles." />
     <meta name="theme-color" content="#1666aa" />
+    <meta name="application-version" content="__APP_VERSION__" />
     <title>XER to CSV Converter</title>
     <base href="/" />
-    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/app.css?v=__APP_VERSION__" />
 </head>
 <body>
     <div id="app">
@@ -23,7 +24,7 @@
         <a class="dismiss" aria-label="Dismiss error">Dismiss</a>
     </div>
 
-    <script src="_framework/blazor.webassembly.js"></script>
+    <script src="_framework/blazor.webassembly.js?v=__APP_VERSION__"></script>
     <script>
         window.downloadFileFromStream = async (filename, contentType, contentStreamReference) => {
             const arrayBuffer = await contentStreamReference.arrayBuffer();
