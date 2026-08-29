@@ -116,6 +116,37 @@ public sealed class ProgrammeReviewBundleServiceTests
     }
 
     [Fact]
+    public async Task Browser_byte_entrypoint_detects_input_mutation_without_cloning_history()
+    {
+        ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
+            "browser baseline.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-30") with
+        {
+            SourceSha256 = null
+        };
+        byte[] xer = MinimalXerBytes(baseline.DataDate, "2026-02-02", "2026-02-06");
+        var uploads = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            [baseline.OriginalXerFilename] = xer
+        };
+        bool mutated = false;
+        var progress = new InlineProgress<ProcessingService.DetailedProgress>(value =>
+        {
+            if (mutated || value.Message?.StartsWith("Finished parsing", StringComparison.Ordinal) != true)
+                return;
+
+            xer[^1] ^= 1;
+            mutated = true;
+        });
+
+        ProgrammeReviewValidationException error = await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
+            new ProgrammeReviewBundleService().BuildFromXerBytesAsync(
+                ProgrammeReviewNamingTests.Request(new[] { baseline }), uploads, progress));
+
+        Assert.True(mutated);
+        Assert.Contains("changed while it was being parsed", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Browser_byte_entrypoint_rejects_duplicate_source_content()
     {
         ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
@@ -535,5 +566,10 @@ public sealed class ProgrammeReviewBundleServiceTests
         string path = Path.Combine(Path.GetTempPath(), "XerToCsvConverter.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 }

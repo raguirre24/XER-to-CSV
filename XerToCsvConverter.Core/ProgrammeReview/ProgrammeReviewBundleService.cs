@@ -140,7 +140,7 @@ public sealed class ProgrammeReviewBundleService
                 "Uploaded XER files must exactly match the configured snapshot filenames.");
 
         var snapshots = new List<ProgrammeReviewSnapshot>(request.Snapshots.Count);
-        var ownedXerFiles = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var validatedXerFiles = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (ProgrammeReviewSnapshot snapshot in request.Snapshots)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -148,13 +148,15 @@ public sealed class ProgrammeReviewBundleService
                 throw new ProgrammeReviewValidationException(
                     $"Uploaded XER content is missing for '{snapshot.OriginalXerFilename}'.");
 
-            byte[] ownedContent = content.ToArray();
-            string computedHash = ProgrammeReviewCsv.ComputeSha256(ownedContent);
+            string computedHash = ProgrammeReviewCsv.ComputeSha256(content);
             if (!string.IsNullOrWhiteSpace(snapshot.SourceSha256)
                 && !string.Equals(snapshot.SourceSha256.Trim(), computedHash, StringComparison.OrdinalIgnoreCase))
                 throw new ProgrammeReviewValidationException(
                     $"Configured source_sha256 does not match '{snapshot.OriginalXerFilename}'.");
-            ownedXerFiles.Add(snapshot.OriginalXerFilename, ownedContent);
+            // Keep the caller-owned array by reference. Copying every browser upload here doubled the
+            // complete XER history in the WebAssembly heap before parsing even began. The retained
+            // inputs are hashed again after parsing to detect unexpected mutation.
+            validatedXerFiles.Add(snapshot.OriginalXerFilename, content);
             snapshots.Add(snapshot with { XerFilePath = null, SourceSha256 = computedHash });
             await Task.Delay(1, cancellationToken);
         }
@@ -172,7 +174,7 @@ public sealed class ProgrammeReviewBundleService
             var inputs = new List<(Stream stream, string fileName)>(resolved.Snapshots.Count);
             foreach (ResolvedProgrammeReviewSnapshot snapshot in resolved.Snapshots)
             {
-                var stream = new MemoryStream(ownedXerFiles[snapshot.OriginalXerFilename], writable: false);
+                var stream = new MemoryStream(validatedXerFiles[snapshot.OriginalXerFilename], writable: false);
                 ownedStreams.Add(stream);
                 inputs.Add((stream, snapshot.OriginalXerFilename));
             }
@@ -180,6 +182,15 @@ public sealed class ProgrammeReviewBundleService
             var parser = new ProcessingService();
             XerDataStore dataStore = await parser.ParseXerStreamsAsync(inputs, parseProgress, cancellationToken)
                 .ConfigureAwait(false);
+            foreach (ResolvedProgrammeReviewSnapshot snapshot in resolved.Snapshots)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string afterParseHash = ProgrammeReviewCsv.ComputeSha256(
+                    validatedXerFiles[snapshot.OriginalXerFilename]);
+                if (!string.Equals(afterParseHash, snapshot.SourceSha256, StringComparison.Ordinal))
+                    throw new ProgrammeReviewValidationException(
+                        $"Uploaded XER '{snapshot.OriginalXerFilename}' changed while it was being parsed. No bundle was created.");
+            }
             parseProgress?.Report(new ProcessingService.DetailedProgress
             {
                 Percent = 100,

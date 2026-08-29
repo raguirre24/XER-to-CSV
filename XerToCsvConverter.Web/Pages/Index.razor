@@ -56,9 +56,9 @@
             @if (_fileSizeWarning)
             {
                 <div class="warning-banner" role="alert">
-                    One or more files are larger than 10 MB. Browser processing can take several minutes and may briefly
-                    pause during report transformations. Cancellation is applied at safe checkpoints; the Windows app is
-                    recommended for large Programme Review histories.
+                    This is a high-memory browser history. Processing can take several minutes and may briefly pause during
+                    report transformations. Keep this tab open and close other memory-heavy tabs. Cancellation is applied at
+                    safe checkpoints; the Windows app remains more reliable for very large schedules.
                 </div>
             }
         </div>
@@ -166,7 +166,8 @@
                         </div>
                         <div class="info-banner">
                             Existing filenames are preserved. The manifest generates the canonical report identity and update month-end.
-                            Programme Review web limit: 12 files, 32 MB each, 64 MB total; use the Windows app above it.
+                            Programme Review web limit: @MaxBrowserFiles files, @MaxBrowserFileMegabytes MB each,
+                            @MaxBrowserTotalMegabytes MB total. Large histories require a 64-bit desktop browser with sufficient memory.
                         </div>
                     }
                 </div>
@@ -265,12 +266,14 @@
 </div>
 
 @code {
-    private const int MaxBrowserFiles = 12;
-    private const long MaxBrowserFileBytes = 32L * 1024 * 1024;
-    private const long MaxBrowserTotalBytes = 64L * 1024 * 1024;
+    private const int MaxBrowserFiles = 24;
+    private const int MaxBrowserFileMegabytes = 128;
+    private const int MaxBrowserTotalMegabytes = 256;
+    private const long MaxBrowserFileBytes = MaxBrowserFileMegabytes * 1024L * 1024L;
+    private const long MaxBrowserTotalBytes = MaxBrowserTotalMegabytes * 1024L * 1024L;
     private const int MaxStandardFiles = 20;
     private const long MaxStandardFileBytes = 100L * 1024 * 1024;
-    private const long BrowserWarningBytes = 10L * 1024 * 1024;
+    private const long BrowserWarningBytes = 64L * 1024 * 1024;
 
     private enum ExportProfile { Standard, ProgrammeReview }
 
@@ -332,16 +335,18 @@
                         $"{browserFile.Name} is larger than this profile's {maximumFileBytes / (1024 * 1024)} MB per-file limit.");
                 if (programmeReview && totalBytes + browserFile.Size > MaxBrowserTotalBytes)
                     throw new InvalidOperationException(
-                        "The selected history exceeds the 64 MB browser limit. Use the Windows app for larger histories.");
+                        $"The selected history exceeds the {MaxBrowserTotalMegabytes} MB browser limit. " +
+                        "Use the Windows app for larger histories.");
 
-                using var stream = new MemoryStream(capacity: checked((int)browserFile.Size));
-                await browserFile.OpenReadStream(maximumFileBytes).CopyToAsync(stream);
+                byte[] data = GC.AllocateUninitializedArray<byte>(checked((int)browserFile.Size));
+                await using (Stream stream = browserFile.OpenReadStream(maximumFileBytes))
+                    await stream.ReadExactlyAsync(data);
                 string? baselineTag = TryInferBaselineTag(browserFile.Name);
                 string? updateTag = TryInferUpdateTag(browserFile.Name);
                 pending.Add(new UploadedFile
                 {
                     Name = browserFile.Name,
-                    Data = stream.ToArray(),
+                    Data = data,
                     Status = "Ready",
                     SnapshotKind = baselineTag is not null ? "Baseline" : updateTag is not null ? "Update" : string.Empty,
                     SnapshotTag = baselineTag ?? updateTag ?? string.Empty,
@@ -364,7 +369,7 @@
         }
         finally
         {
-            _fileSizeWarning = _uploadedFiles.Any(file => file.Data.LongLength > BrowserWarningBytes);
+            _fileSizeWarning = IsHighMemoryHistory();
             StateHasChanged();
         }
     }
@@ -372,7 +377,7 @@
     private void RemoveFile(UploadedFile file)
     {
         _uploadedFiles.Remove(file);
-        _fileSizeWarning = _uploadedFiles.Any(f => f.Data.LongLength > 10 * 1024 * 1024);
+        _fileSizeWarning = IsHighMemoryHistory();
         ClearResults(keepLog: false);
     }
 
@@ -515,9 +520,9 @@
         { error = $"Programme Review supports at most {MaxBrowserFiles} files in the browser. Use the Windows app for this history."; return false; }
         UploadedFile? oversized = _uploadedFiles.FirstOrDefault(file => file.Data.LongLength > MaxBrowserFileBytes);
         if (oversized is not null)
-        { error = $"{oversized.Name} exceeds the 32 MB Programme Review browser limit. Use the Windows app."; return false; }
+        { error = $"{oversized.Name} exceeds the {MaxBrowserFileMegabytes} MB Programme Review browser limit. Use the Windows app."; return false; }
         if (_uploadedFiles.Sum(file => file.Data.LongLength) > MaxBrowserTotalBytes)
-        { error = "This history exceeds the 64 MB Programme Review browser limit. Use the Windows app."; return false; }
+        { error = $"This history exceeds the {MaxBrowserTotalMegabytes} MB Programme Review browser limit. Use the Windows app."; return false; }
 
         var snapshots = new List<ProgrammeReviewSnapshot>(_uploadedFiles.Count);
         foreach (UploadedFile file in _uploadedFiles)
@@ -735,6 +740,9 @@
 
     private static string MonthStartFromTag(string tag) =>
         $"20{tag[..2]}-{tag[2..]}-01";
+
+    private bool IsHighMemoryHistory() =>
+        _uploadedFiles.Sum(file => file.Data.LongLength) > BrowserWarningBytes;
 
     private sealed class UploadedFile
     {
