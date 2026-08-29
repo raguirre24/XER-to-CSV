@@ -122,7 +122,10 @@
                     {
                         <div class="snapshot-table-wrap">
                             <table class="snapshot-table">
-                                <caption>Snapshot metadata. Dates must use yyyy-MM-dd.</caption>
+                                <caption>
+                                    Snapshot metadata. Data date is detected from PROJECT/last_recalc_date when unambiguous
+                                    and remains editable. Dates must use yyyy-MM-dd.
+                                </caption>
                                 <thead>
                                     <tr>
                                         <th scope="col">XER file</th>
@@ -315,6 +318,7 @@
             long totalBytes = _uploadedFiles.Sum(file => file.Data.LongLength);
             var pending = new List<UploadedFile>(selectedFiles.Count);
             var skippedNames = new List<string>();
+            var undetectedDataDateNames = new List<string>();
             foreach (IBrowserFile browserFile in selectedFiles)
             {
                 if (!browserFile.Name.EndsWith(".xer", StringComparison.OrdinalIgnoreCase))
@@ -341,6 +345,10 @@
                 byte[] data = GC.AllocateUninitializedArray<byte>(checked((int)browserFile.Size));
                 await using (Stream stream = browserFile.OpenReadStream(maximumFileBytes))
                     await stream.ReadExactlyAsync(data);
+                DateOnly? detectedDataDate = await ProgrammeReviewXerMetadataReader
+                    .ReadSingleProjectDataDateAsync(data);
+                if (programmeReview && detectedDataDate is null)
+                    undetectedDataDateNames.Add(browserFile.Name);
                 string? baselineTag = TryInferBaselineTag(browserFile.Name);
                 string? updateTag = TryInferUpdateTag(browserFile.Name);
                 pending.Add(new UploadedFile
@@ -350,7 +358,8 @@
                     Status = "Ready",
                     SnapshotKind = baselineTag is not null ? "Baseline" : updateTag is not null ? "Update" : string.Empty,
                     SnapshotTag = baselineTag ?? updateTag ?? string.Empty,
-                    MonthUpdate = updateTag is null ? string.Empty : MonthStartFromTag(updateTag)
+                    MonthUpdate = updateTag is null ? string.Empty : MonthStartFromTag(updateTag),
+                    DataDate = detectedDataDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty
                 });
                 totalBytes += browserFile.Size;
             }
@@ -360,8 +369,14 @@
                 _uploadedFiles.AddRange(pending);
                 ClearResults(keepLog: false);
             }
+            var notices = new List<string>();
             if (skippedNames.Count > 0)
-                _validationMessage = "Skipped unsupported or duplicate file name(s): " + string.Join(", ", skippedNames);
+                notices.Add("Skipped unsupported or duplicate file name(s): " + string.Join(", ", skippedNames));
+            if (undetectedDataDateNames.Count > 0)
+                notices.Add(
+                    "Data date could not be detected from one unambiguous PROJECT row; enter it manually for: " +
+                    string.Join(", ", undetectedDataDateNames));
+            _validationMessage = string.Join(" ", notices);
         }
         catch (Exception ex)
         {
@@ -529,6 +544,8 @@
         {
             if (!DateOnly.TryParseExact(file.MonthUpdate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly monthUpdate))
             { error = $"{file.Name}: Month update must use yyyy-MM-dd."; return false; }
+            if (string.IsNullOrWhiteSpace(file.DataDate))
+            { error = $"{file.Name}: Data date could not be detected from PROJECT/last_recalc_date. Enter it manually as yyyy-MM-dd."; return false; }
             if (!DateOnly.TryParseExact(file.DataDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly dataDate))
             { error = $"{file.Name}: Data date must use yyyy-MM-dd."; return false; }
 

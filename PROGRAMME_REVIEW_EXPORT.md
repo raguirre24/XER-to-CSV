@@ -16,7 +16,7 @@ The legacy **Export Power BI** action remains separate and continues to create t
 ## Use the web application
 
 1. Add all history XER files and select **Programme Review** under **Export Profile**.
-2. Enter the governed project identity and each file's snapshot metadata. Recognised `BLnn`/`BLnn-A` and `YYMM` tags are suggested from filenames, but an update is never silently relabelled as a baseline.
+2. Enter the governed project identity and review each file's snapshot metadata. The editable data date is prefilled from the single `PROJECT[last_recalc_date]` row when it is present and unambiguous. Recognised `BLnn`/`BLnn-A` and `YYMM` tags are suggested from filenames, but an update is never silently relabelled as a baseline.
 3. Choose **Create Programme Review Bundle**. The browser hashes and parses only the retained history, validates the same contract as the Windows/CLI paths, and downloads `<bundle_id>.zip` containing one `<bundle_id>/` folder and exactly eleven files.
 
 The browser path does not write temporary bundles to the client file system. Large downloads use a streamed browser Blob rather than a base64 data URL. It accepts at most 24 files, 128 MB per file, and 256 MB in total. Uploads are read directly into their retained byte arrays and the core browser entrypoint does not clone the full input history. Histories above 64 MB display a high-memory warning; use a 64-bit desktop browser, keep the tab open, and close other memory-heavy tabs. The Windows app remains the reliable option above the browser ceiling or when browser memory is constrained. Parsing yields cooperatively for progress and cancellation. Some report transformations remain CPU-bound and can briefly pause the tab; cancellation is applied at the next safe checkpoint.
