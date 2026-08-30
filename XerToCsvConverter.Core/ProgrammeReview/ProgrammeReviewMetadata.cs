@@ -94,6 +94,8 @@ internal sealed record ResolvedProgrammeReviewRequest(
 
 public static partial class ProgrammeReviewNaming
 {
+    internal const string NamespaceDelimiter = "::";
+
     [GeneratedRegex("^[A-Z0-9_]+$", RegexOptions.CultureInvariant)]
     private static partial Regex ProjectCodeRegex();
 
@@ -147,7 +149,23 @@ public static partial class ProgrammeReviewNaming
         }
 
         if (string.IsNullOrWhiteSpace(nativeId)) return string.Empty;
-        return $"CSV|{bundleId}|{canonicalXerFilename}.{nativeId.Trim()}";
+
+        string key = NamespacePrefix(bundleId, canonicalXerFilename) + nativeId.Trim();
+        if (key.Contains('|', StringComparison.Ordinal))
+            throw new ProgrammeReviewValidationException(
+                "Programme Review relationship keys cannot contain the DAX PATH separator '|'.");
+
+        return key;
+    }
+
+    internal static string NamespacePrefix(string bundleId, string canonicalXerFilename)
+    {
+        string prefix = $"CSV{NamespaceDelimiter}{bundleId}{NamespaceDelimiter}{canonicalXerFilename}{NamespaceDelimiter}";
+        if (prefix.Contains('|', StringComparison.Ordinal))
+            throw new ProgrammeReviewValidationException(
+                "Programme Review namespace components cannot contain the DAX PATH separator '|'.");
+
+        return prefix;
     }
 
     internal static ResolvedProgrammeReviewRequest Resolve(

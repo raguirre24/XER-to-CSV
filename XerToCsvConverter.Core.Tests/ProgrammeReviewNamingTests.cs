@@ -12,10 +12,33 @@ public sealed class ProgrammeReviewNamingTests
             "j_123", "c", "2607", new DateOnly(2026, 7, 31));
         Assert.Equal("J_123-C-2607_20260731.xer", canonical);
         Assert.Equal(
-            "CSV|J_123_C_20260829T010203Z_deadbeef|J_123-C-2607_20260731.xer.42",
+            "CSV::J_123_C_20260829T010203Z_deadbeef::J_123-C-2607_20260731.xer::42",
             ProgrammeReviewNaming.NamespaceKey(
                 "2607 legacy source.xer.42", "2607 legacy source.xer",
                 "J_123_C_20260829T010203Z_deadbeef", canonical));
+    }
+
+    [Fact]
+    public void Namespace_is_safe_for_Dax_path()
+    {
+        string key = ProgrammeReviewNaming.NamespaceKey(
+            "source.xer.42",
+            "source.xer",
+            "J123_C_20260829T010203Z_deadbeef",
+            "J123-C-2607_20260731.xer");
+
+        Assert.DoesNotContain('|', key);
+    }
+
+    [Fact]
+    public void Namespace_rejects_the_Dax_path_separator_in_source_values()
+    {
+        Assert.Throws<ProgrammeReviewValidationException>(() =>
+            ProgrammeReviewNaming.NamespaceKey(
+                "source.xer.4|2",
+                "source.xer",
+                "J123_C_20260829T010203Z_deadbeef",
+                "J123-C-2607_20260731.xer"));
     }
 
     [Fact]

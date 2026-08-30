@@ -37,6 +37,7 @@ public sealed class ProgrammeReviewBundleServiceTests
             Assert.Equal(11, Directory.EnumerateFiles(result.BundlePath).Count());
             Assert.Equal(30, result.ManifestRows.Count);
             Assert.All(result.ManifestRows, row => Assert.Equal("complete", row.BundleStatus));
+            Assert.All(result.ManifestRows, row => Assert.Equal("2.0", row.SchemaVersion));
             Assert.Equal(1, result.ManifestRows.Single(r => r.TableName == "01_XER_TASK" && r.OriginalXerFilename == baseline.OriginalXerFilename).RowCount);
             Assert.Equal(0, result.ManifestRows.Single(r => r.TableName == "07_XER_ACTVTYPE" && r.OriginalXerFilename == baseline.OriginalXerFilename).RowCount);
 
@@ -49,7 +50,8 @@ public sealed class ProgrammeReviewBundleServiceTests
             var row = headers.Zip(updateValues).ToDictionary(pair => pair.First, pair => pair.Second);
             Assert.Equal("2026-02-06", row["Baseline Finish"]);
             Assert.Equal("2026-02-06", row["Previous Month Finish"]);
-            Assert.StartsWith($"CSV|{result.BundleId}|J123-C-2602_20260227.xer.", row["task_id_key"], StringComparison.Ordinal);
+            Assert.StartsWith($"CSV::{result.BundleId}::J123-C-2602_20260227.xer::", row["task_id_key"], StringComparison.Ordinal);
+            Assert.DoesNotContain('|', row["task_id_key"]);
             string[] update2Values = lines.Single(line => line.Contains("J123-C-2603_20260327.xer", StringComparison.Ordinal)).Split(',');
             var row2 = headers.Zip(update2Values).ToDictionary(pair => pair.First, pair => pair.Second);
             Assert.Equal("2026-02-10", row2["Previous Month Finish"]);

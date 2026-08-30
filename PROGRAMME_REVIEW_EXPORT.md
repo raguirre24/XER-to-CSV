@@ -30,7 +30,7 @@ Create a JSON configuration such as:
   "project_code": "J1234",
   "project_name": "Example Project",
   "programme_type": "C",
-  "parser_version": "2.5.0",
+  "parser_version": "2.6.0",
   "snapshots": [
     {
       "original_xer_filename": "Original approved baseline.xer",
@@ -95,9 +95,9 @@ Each bundle contains exactly:
 XER_CSV_MANIFEST.csv
 ```
 
-CSV files are UTF-8 without a BOM, comma-delimited, RFC-style quoted, and use CRLF records. Dates are `yyyy-MM-dd`; numeric and integer tokens use invariant culture; booleans are lowercase `true`/`false`. Optional source tables are emitted header-only. The exact ordered schemas are exposed by `ProgrammeReviewContract.Tables` as schema version `1.0`.
+CSV files are UTF-8 without a BOM, comma-delimited, RFC-style quoted, and use CRLF records. Dates are `yyyy-MM-dd`; numeric and integer tokens use invariant culture; booleans are lowercase `true`/`false`. Optional source tables are emitted header-only. The exact ordered schemas are exposed by `ProgrammeReviewContract.Tables` as schema version `2.0`.
 
-All relationship keys use `CSV|<bundle_id>|<canonical_xer_filename>.<native_id>`. The report can therefore combine multiple snapshots without colliding with Athena or another CSV bundle. Historical task matching uses `project + task_code`, never P6 `task_id`.
+All relationship keys use `CSV::<bundle_id>::<canonical_xer_filename>::<native_id>`. The `::` delimiter is valid in DAX hierarchy identifiers and avoids the vertical pipe reserved by `PATH`. The report can therefore combine multiple snapshots without colliding with Athena or another CSV bundle. Historical task matching uses `project + task_code`, never P6 `task_id`.
 
 ## SharePoint publication
 

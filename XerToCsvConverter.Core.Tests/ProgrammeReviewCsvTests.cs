@@ -21,8 +21,8 @@ public sealed class ProgrammeReviewCsvTests
             ProgrammeReviewTableContract contract = ProgrammeReviewContract.GetTable("15_XER_RESOURCE_DISTRIBUTION");
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["task_id_key"] = "CSV|bundle|file.xer.1",
-                ["rsrc_id_key"] = "CSV|bundle|file.xer.2",
+                ["task_id_key"] = "CSV::bundle::file.xer::1",
+                ["rsrc_id_key"] = "CSV::bundle::file.xer::2",
                 ["is_actual"] = ProgrammeReviewCsv.Normalize("1", contract.Columns[2], "test"),
                 ["distribution_month"] = ProgrammeReviewCsv.Normalize("2026-02-01 00:00:00", contract.Columns[3], "test"),
                 ["monthly_quantity"] = ProgrammeReviewCsv.Normalize("8.5000", contract.Columns[4], "test"),
@@ -63,8 +63,8 @@ public sealed class ProgrammeReviewCsvTests
         ProgrammeReviewOutputRow Row(string quantity) => new(snapshot,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["task_id_key"] = "CSV|bundle|base.xer.1",
-                ["rsrc_id_key"] = "CSV|bundle|base.xer.2",
+                ["task_id_key"] = "CSV::bundle::base.xer::1",
+                ["rsrc_id_key"] = "CSV::bundle::base.xer::2",
                 ["is_actual"] = "false",
                 ["distribution_month"] = "2026-01-01",
                 ["monthly_quantity"] = quantity,

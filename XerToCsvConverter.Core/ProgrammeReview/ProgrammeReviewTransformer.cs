@@ -382,7 +382,7 @@ internal sealed class ProgrammeReviewTransformer
         EnsureUnique(rows.Select(r => $"{r["filename"]}\u001f{r["task_code"]}"), "01_XER_TASK.(filename,task_code)");
     }
 
-    private static void ValidateKeysAndRelationships(IReadOnlyList<ProgrammeReviewOutputTable> tables)
+    private void ValidateKeysAndRelationships(IReadOnlyList<ProgrammeReviewOutputTable> tables)
     {
         var byName = tables.ToDictionary(t => t.Contract.TableName, StringComparer.OrdinalIgnoreCase);
         foreach (ProgrammeReviewOutputTable table in tables)
@@ -393,17 +393,16 @@ internal sealed class ProgrammeReviewTransformer
 
             foreach (ProgrammeReviewOutputRow row in table.Rows)
             {
-                const string prefix = "CSV|";
+                string expectedPrefix = ProgrammeReviewNaming.NamespacePrefix(
+                    _request.BundleId,
+                    row.Snapshot.CanonicalXerFilename);
                 foreach (string keyColumn in table.Contract.Columns.Select(c => c.Name).Where(NamespacedKeyColumns.Contains))
                 {
                     string value = row.Values[keyColumn];
                     if (value.Length == 0) continue;
-                    if (!value.StartsWith(prefix, StringComparison.Ordinal))
-                        throw new ProgrammeReviewValidationException($"{table.Contract.TableName}: '{keyColumn}' is not CSV namespaced.");
-                    string canonicalMarker = $"|{row.Snapshot.CanonicalXerFilename}.";
-                    if (!value.Contains(canonicalMarker, StringComparison.Ordinal))
+                    if (!value.StartsWith(expectedPrefix, StringComparison.Ordinal))
                         throw new ProgrammeReviewValidationException(
-                            $"{table.Contract.TableName}: '{keyColumn}' does not use the row's canonical XER namespace.");
+                            $"{table.Contract.TableName}: '{keyColumn}' does not use the bundle and row canonical XER namespace.");
                 }
             }
         }

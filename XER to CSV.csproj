@@ -16,9 +16,9 @@
     <AssemblyTitle>XER to CSV</AssemblyTitle>
     <Product>XER to CSV</Product>
     <Copyright>Copyright © 2025-2026 Ricardo Aguirre</Copyright>
-    <Version>2.5.0</Version>
-    <AssemblyVersion>2.5.0.0</AssemblyVersion>
-    <FileVersion>2.5.0.0</FileVersion>
+    <Version>2.6.0</Version>
+    <AssemblyVersion>2.6.0.0</AssemblyVersion>
+    <FileVersion>2.6.0.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="XerToCsvConverter.Core\XerToCsvConverter.Core.csproj" />
