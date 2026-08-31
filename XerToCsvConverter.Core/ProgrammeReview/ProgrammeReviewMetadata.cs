@@ -125,10 +125,13 @@ public static partial class ProgrammeReviewNaming
     public static string NamespaceKey(
         string nativeOrLegacyKey,
         string originalXerFilename,
-        string bundleId,
-        string canonicalXerFilename)
+        string projectCode,
+        string programmeType,
+        string snapshotTag)
     {
         if (string.IsNullOrWhiteSpace(nativeOrLegacyKey)) return string.Empty;
+
+        string namespacePrefix = NamespacePrefix(projectCode, programmeType, snapshotTag);
 
         string value = nativeOrLegacyKey.Trim();
         string prefix = originalXerFilename + ".";
@@ -148,24 +151,28 @@ public static partial class ProgrammeReviewNaming
                 $"Key '{value}' does not belong to source XER '{originalXerFilename}'.");
         }
 
-        if (string.IsNullOrWhiteSpace(nativeId)) return string.Empty;
-
-        string key = NamespacePrefix(bundleId, canonicalXerFilename) + nativeId.Trim();
-        if (key.Contains('|', StringComparison.Ordinal))
+        nativeId = nativeId.Trim();
+        if (nativeId.Length == 0) return string.Empty;
+        if (nativeId.Contains(NamespaceDelimiter, StringComparison.Ordinal) || nativeId.Contains('|', StringComparison.Ordinal))
             throw new ProgrammeReviewValidationException(
-                "Programme Review relationship keys cannot contain the DAX PATH separator '|'.");
+                $"Native key identifier '{nativeId}' contains a reserved Programme Review relationship-key delimiter.");
 
-        return key;
+        return namespacePrefix + nativeId;
     }
 
-    internal static string NamespacePrefix(string bundleId, string canonicalXerFilename)
+    internal static string NamespacePrefix(
+        string projectCode,
+        string programmeType,
+        string snapshotTag)
     {
-        string prefix = $"CSV{NamespaceDelimiter}{bundleId}{NamespaceDelimiter}{canonicalXerFilename}{NamespaceDelimiter}";
-        if (prefix.Contains('|', StringComparison.Ordinal))
+        string project = NormalizeProjectCode(projectCode);
+        string programme = NormalizeProgrammeType(programmeType);
+        string snapshot = snapshotTag?.Trim().ToUpperInvariant() ?? string.Empty;
+        if (!UpdateTagRegex().IsMatch(snapshot) && !BaselineTagRegex().IsMatch(snapshot))
             throw new ProgrammeReviewValidationException(
-                "Programme Review namespace components cannot contain the DAX PATH separator '|'.");
+                "Snapshot tag used in a relationship key must use YYMM, BLnn, or BLnn-A.");
 
-        return prefix;
+        return $"CSV{NamespaceDelimiter}{project}{NamespaceDelimiter}{programme}{NamespaceDelimiter}{snapshot}{NamespaceDelimiter}";
     }
 
     internal static ResolvedProgrammeReviewRequest Resolve(

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.VisualBasic.FileIO;
 using XerToCsvConverter.ProgrammeReview;
 
 namespace XerToCsvConverter.Core.Tests;
@@ -37,7 +38,7 @@ public sealed class ProgrammeReviewBundleServiceTests
             Assert.Equal(11, Directory.EnumerateFiles(result.BundlePath).Count());
             Assert.Equal(30, result.ManifestRows.Count);
             Assert.All(result.ManifestRows, row => Assert.Equal("complete", row.BundleStatus));
-            Assert.All(result.ManifestRows, row => Assert.Equal("2.0", row.SchemaVersion));
+            Assert.All(result.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
             Assert.Equal(1, result.ManifestRows.Single(r => r.TableName == "01_XER_TASK" && r.OriginalXerFilename == baseline.OriginalXerFilename).RowCount);
             Assert.Equal(0, result.ManifestRows.Single(r => r.TableName == "07_XER_ACTVTYPE" && r.OriginalXerFilename == baseline.OriginalXerFilename).RowCount);
 
@@ -50,7 +51,7 @@ public sealed class ProgrammeReviewBundleServiceTests
             var row = headers.Zip(updateValues).ToDictionary(pair => pair.First, pair => pair.Second);
             Assert.Equal("2026-02-06", row["Baseline Finish"]);
             Assert.Equal("2026-02-06", row["Previous Month Finish"]);
-            Assert.StartsWith($"CSV::{result.BundleId}::J123-C-2602_20260227.xer::", row["task_id_key"], StringComparison.Ordinal);
+            Assert.Equal("CSV::J123::C::2602::T2", row["task_id_key"]);
             Assert.DoesNotContain('|', row["task_id_key"]);
             string[] update2Values = lines.Single(line => line.Contains("J123-C-2603_20260327.xer", StringComparison.Ordinal)).Split(',');
             var row2 = headers.Zip(update2Values).ToDictionary(pair => pair.First, pair => pair.Second);
@@ -88,6 +89,62 @@ public sealed class ProgrammeReviewBundleServiceTests
         {
             string actualHash = Convert.ToHexString(SHA256.HashData(result.Files[file])).ToLowerInvariant();
             Assert.Equal(expectedHash, actualHash);
+        }
+    }
+
+    [Fact]
+    public async Task In_memory_build_is_byte_deterministic_for_the_same_request()
+    {
+        ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
+            "baseline source.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-30");
+        ProgrammeReviewBundleRequest request = ProgrammeReviewNamingTests.Request(new[] { baseline });
+        XerDataStore store = BuildDataStore((baseline, "2026-02-02", "2026-02-06"));
+        var service = new ProgrammeReviewBundleService();
+
+        ProgrammeReviewInMemoryBundleResult first = await service.BuildFromParsedDataToMemoryAsync(store, request);
+        ProgrammeReviewInMemoryBundleResult second = await service.BuildFromParsedDataToMemoryAsync(store, request);
+
+        Assert.Equal(first.BundleId, second.BundleId);
+        Assert.Equal(first.Files.Keys.Order(StringComparer.Ordinal), second.Files.Keys.Order(StringComparer.Ordinal));
+        foreach (string file in first.Files.Keys)
+            Assert.Equal(first.Files[file], second.Files[file]);
+    }
+
+    [Fact]
+    public async Task Regenerated_bundle_keeps_every_csv_relationship_key_stable_across_export_times()
+    {
+        ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
+            "baseline source.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-30");
+        ProgrammeReviewSnapshot update = ProgrammeReviewNamingTests.Snapshot(
+            "2602 update source.xer", ProgrammeReviewSnapshotKind.Update, "2602", "2026-02-01", "2026-02-27") with
+        {
+            UpdateDate = new DateOnly(2026, 2, 28)
+        };
+        ProgrammeReviewBundleRequest firstRequest = ProgrammeReviewNamingTests.Request(new[] { baseline, update });
+        ProgrammeReviewBundleRequest secondRequest = firstRequest with
+        {
+            ExportedAtUtc = firstRequest.ExportedAtUtc!.Value.AddDays(1)
+        };
+        XerDataStore store = BuildDataStore(
+            (baseline, "2026-02-02", "2026-02-06"),
+            (update, "2026-02-04", "2026-02-10"));
+        var service = new ProgrammeReviewBundleService();
+
+        ProgrammeReviewInMemoryBundleResult first = await service.BuildFromParsedDataToMemoryAsync(store, firstRequest);
+        ProgrammeReviewInMemoryBundleResult second = await service.BuildFromParsedDataToMemoryAsync(store, secondRequest);
+
+        Assert.NotEqual(first.BundleId, second.BundleId);
+        foreach (ProgrammeReviewTableContract table in ProgrammeReviewContract.Tables)
+        {
+            byte[] firstCsv = first.Files[table.FileName];
+            byte[] secondCsv = second.Files[table.FileName];
+            Assert.Equal(firstCsv, secondCsv);
+
+            IReadOnlyDictionary<string, IReadOnlyList<string>> firstKeys = ReadRelationshipKeys(firstCsv);
+            IReadOnlyDictionary<string, IReadOnlyList<string>> secondKeys = ReadRelationshipKeys(secondCsv);
+            Assert.Equal(firstKeys.Keys.Order(StringComparer.Ordinal), secondKeys.Keys.Order(StringComparer.Ordinal));
+            foreach (string keyColumn in firstKeys.Keys)
+                Assert.Equal(firstKeys[keyColumn], secondKeys[keyColumn]);
         }
     }
 
@@ -561,6 +618,44 @@ public sealed class ProgrammeReviewBundleServiceTests
     {
         using FileStream stream = File.OpenRead(path);
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<string>> ReadRelationshipKeys(byte[] csv)
+    {
+        using var stream = new MemoryStream(csv, writable: false);
+        using var parser = new TextFieldParser(stream, Encoding.UTF8, detectEncoding: false)
+        {
+            TextFieldType = FieldType.Delimited,
+            HasFieldsEnclosedInQuotes = true,
+            TrimWhiteSpace = false
+        };
+        parser.SetDelimiters(",");
+
+        string[] headers = parser.ReadFields()
+            ?? throw new InvalidDataException("Programme Review CSV is missing its header row.");
+        int[] keyIndexes = headers
+            .Select((header, index) => (header, index))
+            .Where(item => item.header.EndsWith("_key", StringComparison.OrdinalIgnoreCase))
+            .Select(item => item.index)
+            .ToArray();
+        var values = keyIndexes.ToDictionary(
+            index => headers[index],
+            _ => new List<string>(),
+            StringComparer.Ordinal);
+
+        while (!parser.EndOfData)
+        {
+            string[] fields = parser.ReadFields()
+                ?? throw new InvalidDataException("Programme Review CSV contains an unreadable row.");
+            Assert.Equal(headers.Length, fields.Length);
+            foreach (int index in keyIndexes)
+                values[headers[index]].Add(fields[index]);
+        }
+
+        return values.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyList<string>)pair.Value,
+            StringComparer.Ordinal);
     }
 
     private static string NewTempDirectory()

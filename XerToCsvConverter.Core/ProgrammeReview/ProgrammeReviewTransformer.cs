@@ -394,15 +394,19 @@ internal sealed class ProgrammeReviewTransformer
             foreach (ProgrammeReviewOutputRow row in table.Rows)
             {
                 string expectedPrefix = ProgrammeReviewNaming.NamespacePrefix(
-                    _request.BundleId,
-                    row.Snapshot.CanonicalXerFilename);
+                    _request.ProjectCode,
+                    _request.ProgrammeType,
+                    row.Snapshot.SnapshotTag);
                 foreach (string keyColumn in table.Contract.Columns.Select(c => c.Name).Where(NamespacedKeyColumns.Contains))
                 {
                     string value = row.Values[keyColumn];
                     if (value.Length == 0) continue;
-                    if (!value.StartsWith(expectedPrefix, StringComparison.Ordinal))
+                    if (!value.StartsWith(expectedPrefix, StringComparison.Ordinal)
+                        || value.Length == expectedPrefix.Length
+                        || value.Contains('|', StringComparison.Ordinal)
+                        || value[expectedPrefix.Length..].Contains(ProgrammeReviewNaming.NamespaceDelimiter, StringComparison.Ordinal))
                         throw new ProgrammeReviewValidationException(
-                            $"{table.Contract.TableName}: '{keyColumn}' does not use the bundle and row canonical XER namespace.");
+                            $"{table.Contract.TableName}: '{keyColumn}' does not use the row's schema 3.0 relationship-key namespace.");
                 }
             }
         }
@@ -471,8 +475,12 @@ internal sealed class ProgrammeReviewTransformer
         if (raw.Length == 0) return string.Empty;
         try
         {
-            return ProgrammeReviewNaming.NamespaceKey(raw, snapshot.OriginalXerFilename, _request.BundleId,
-                snapshot.CanonicalXerFilename);
+            return ProgrammeReviewNaming.NamespaceKey(
+                raw,
+                snapshot.OriginalXerFilename,
+                _request.ProjectCode,
+                _request.ProgrammeType,
+                snapshot.SnapshotTag);
         }
         catch (ProgrammeReviewValidationException ex)
         {

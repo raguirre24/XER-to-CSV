@@ -33,7 +33,7 @@ public sealed record ProgrammeReviewTableContract(
 /// </summary>
 public static class ProgrammeReviewContract
 {
-    public const string SchemaVersion = "2.0";
+    public const string SchemaVersion = "3.0";
     public const string ManifestFileName = "XER_CSV_MANIFEST.csv";
     public const string CompleteStatus = "complete";
 

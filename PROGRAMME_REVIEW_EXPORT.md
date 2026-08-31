@@ -95,19 +95,21 @@ Each bundle contains exactly:
 XER_CSV_MANIFEST.csv
 ```
 
-CSV files are UTF-8 without a BOM, comma-delimited, RFC-style quoted, and use CRLF records. Dates are `yyyy-MM-dd`; numeric and integer tokens use invariant culture; booleans are lowercase `true`/`false`. Optional source tables are emitted header-only. The exact ordered schemas are exposed by `ProgrammeReviewContract.Tables` as schema version `2.0`.
+CSV files are UTF-8 without a BOM, comma-delimited, RFC-style quoted, and use CRLF records. Dates are `yyyy-MM-dd`; numeric and integer tokens use invariant culture; booleans are lowercase `true`/`false`. Optional source tables are emitted header-only. The exact ordered schemas are exposed by `ProgrammeReviewContract.Tables` as schema version `3.0`.
 
-All relationship keys use `CSV::<bundle_id>::<canonical_xer_filename>::<native_id>`. The `::` delimiter is valid in DAX hierarchy identifiers and avoids the vertical pipe reserved by `PATH`. The report can therefore combine multiple snapshots without colliding with Athena or another CSV bundle. Historical task matching uses `project + task_code`, never P6 `task_id`.
+All relationship keys use the compact form `CSV::<project_code>::<programme_type>::<snapshot_tag>::<native_id>`. The `::` delimiter is valid in DAX hierarchy identifiers and avoids the vertical pipe reserved by `PATH()`. Keys are stable when a project bundle is regenerated, while the project/programme/snapshot namespace prevents collisions within the whole-project replacement. Power BI resolves each project/programme to the newest completed active bundle. Historical task matching uses `project + task_code`, never P6 `task_id`.
 
 ## SharePoint publication
 
-Upload the ten table CSVs into:
+Keep each project's bundles beneath its own exact uppercase project-code folder. For a Windows export, upload the parser-generated bundle folder. For a web export, extract `<bundle_id>.zip` first and upload its inner `<bundle_id>` folder; do not upload the ZIP itself.
+
+The destination is:
 
 ```text
-Shared Documents/Programme Review/XER CSV/Active/<bundle_id>/
+<XerCsvLibrary>/P6/XER CSV/Active/<PROJECT_CODE>/<bundle_id>/
 ```
 
-Upload `XER_CSV_MANIFEST.csv` last. Do not copy the staging directory or a partially written bundle. After the report has accepted the new bundle, move superseded bundles to the `Archive` sibling. To roll back, move the latest bundle out of `Active`.
+The current report reuses its existing `SharePointSite`, whose library is `Documents`; `XerCsvLibrary` may be changed if an override site exposes a different exact library name. The `<PROJECT_CODE>` folder, `XerCsvProjectCodes` value, and manifest `project_code` must use the same uppercase code. Upload the ten table CSVs first and `XER_CSV_MANIFEST.csv` last. Do not copy the staging directory or a partially written bundle. Manifest-free staging folders are ignored. Power BI orders contract-valid manifest-bearing folders by the timestamp in `bundle_id`, opens only the newest selected manifest, and fails refresh if that selected bundle is invalid rather than silently reverting to older data. After the report has accepted the new bundle, move superseded bundles to `Archive/<PROJECT_CODE>`. To roll back, move the latest bundle to Archive and restore the required preceding completed bundle to `Active/<PROJECT_CODE>` before refreshing.
 
 Direct SharePoint authentication/upload is intentionally out of scope. Use a durable organisational/service account for the report's SharePoint connection and keep RLS authority in `dbo_project`/`dbo_userpermission`; manifest project metadata never grants access.
 

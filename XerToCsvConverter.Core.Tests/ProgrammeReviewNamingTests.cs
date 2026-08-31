@@ -12,10 +12,39 @@ public sealed class ProgrammeReviewNamingTests
             "j_123", "c", "2607", new DateOnly(2026, 7, 31));
         Assert.Equal("J_123-C-2607_20260731.xer", canonical);
         Assert.Equal(
-            "CSV::J_123_C_20260829T010203Z_deadbeef::J_123-C-2607_20260731.xer::42",
+            "CSV::J_123::C::2607::42",
             ProgrammeReviewNaming.NamespaceKey(
                 "2607 legacy source.xer.42", "2607 legacy source.xer",
-                "J_123_C_20260829T010203Z_deadbeef", canonical));
+                "j_123", "c", "2607"));
+    }
+
+    [Theory]
+    [InlineData("legacy.xer.42|7")]
+    [InlineData("legacy.xer.42::7")]
+    public void Namespace_rejects_native_ids_that_are_not_path_safe(string sourceKey)
+    {
+        ProgrammeReviewValidationException error = Assert.Throws<ProgrammeReviewValidationException>(() =>
+            ProgrammeReviewNaming.NamespaceKey(sourceKey, "legacy.xer", "J123", "C", "2607"));
+
+        Assert.Contains("reserved", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Namespace_is_deterministic_and_separates_project_programme_and_snapshot()
+    {
+        const string sourceFile = "legacy.xer";
+        const string sourceKey = "legacy.xer.42";
+
+        string canonical = ProgrammeReviewNaming.NamespaceKey(sourceKey, sourceFile, "J123", "C", "2607");
+        string normalizedEquivalent = ProgrammeReviewNaming.NamespaceKey(sourceKey, sourceFile, "j123", "c", "2607");
+        string otherSnapshot = ProgrammeReviewNaming.NamespaceKey(sourceKey, sourceFile, "J123", "C", "2608");
+        string otherProject = ProgrammeReviewNaming.NamespaceKey(sourceKey, sourceFile, "J124", "C", "2607");
+        string otherProgramme = ProgrammeReviewNaming.NamespaceKey(sourceKey, sourceFile, "J123", "T", "2607");
+
+        Assert.Equal("CSV::J123::C::2607::42", canonical);
+        Assert.Equal(canonical, normalizedEquivalent);
+        Assert.Equal(4, new[] { canonical, otherSnapshot, otherProject, otherProgramme }.Distinct(StringComparer.Ordinal).Count());
+        Assert.DoesNotContain('|', canonical);
     }
 
     [Fact]
@@ -24,8 +53,9 @@ public sealed class ProgrammeReviewNamingTests
         string key = ProgrammeReviewNaming.NamespaceKey(
             "source.xer.42",
             "source.xer",
-            "J123_C_20260829T010203Z_deadbeef",
-            "J123-C-2607_20260731.xer");
+            "J123",
+            "C",
+            "2607");
 
         Assert.DoesNotContain('|', key);
     }
@@ -37,8 +67,9 @@ public sealed class ProgrammeReviewNamingTests
             ProgrammeReviewNaming.NamespaceKey(
                 "source.xer.4|2",
                 "source.xer",
-                "J123_C_20260829T010203Z_deadbeef",
-                "J123-C-2607_20260731.xer"));
+                "J123",
+                "C",
+                "2607"));
     }
 
     [Fact]

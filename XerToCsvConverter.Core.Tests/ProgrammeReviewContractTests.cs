@@ -15,6 +15,7 @@ public sealed class ProgrammeReviewContractTests
             "15_XER_RESOURCE_DISTRIBUTION.csv"
         };
 
+        Assert.Equal("3.0", ProgrammeReviewContract.SchemaVersion);
         Assert.Equal(expectedFiles, ProgrammeReviewContract.Tables.Select(t => t.FileName));
         Assert.Equal(47, ProgrammeReviewContract.GetTable("01_XER_TASK").Columns.Count);
         Assert.Equal(
