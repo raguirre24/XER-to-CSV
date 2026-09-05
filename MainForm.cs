@@ -2436,13 +2436,15 @@ public partial class MainForm : Form
 
 			Stopwatch stopwatch = Stopwatch.StartNew();
 
-			List<string> exportedFiles = await _processingService.ExportTablesAsync(_dataStore, finalTablesToExport, _outputDirectory, progress, token);
+			StandardDiskExportResult result = await _processingService.ExportTablesWithDiagnosticsAsync(
+				_dataStore, finalTablesToExport, _outputDirectory, progress, token);
+			List<string> exportedFiles = result.Files;
 
 			stopwatch.Stop();
 
 			toolStripProgressBar.Value = 100;
 
-			string summary = $"{exportedFiles.Count} tables exported. Time elapsed: {stopwatch.Elapsed.TotalSeconds:F2}s.";
+			string summary = $"{exportedFiles.Count} CSV files exported. Time elapsed: {stopwatch.Elapsed.TotalSeconds:F2}s.";
 
 			if (token.IsCancellationRequested)
 
@@ -2460,11 +2462,15 @@ public partial class MainForm : Form
 
 			{
 
-				UpdateStatus("Export complete. " + summary);
+				string completion = result.WarningCount > 0 ? "Export completed with warnings. " : "Export complete. ";
+				string warnings = result.WarningCount > 0
+					? $" {result.WarningCount} data-quality issue(s); see XER_DATA_QUALITY.csv for unallocated actuals and original source values."
+					: string.Empty;
+				UpdateStatus(completion + summary + warnings);
 
-				LogActivity("Export complete. " + summary);
+				LogActivity(completion + summary + warnings);
 
-				ShowExportCompleteMessage(exportedFiles);
+				ShowExportCompleteMessage(exportedFiles, result.WarningCount);
 
 			}
 
@@ -3581,7 +3587,7 @@ public partial class MainForm : Form
 
 
 
-	private void ShowExportCompleteMessage(List<string> exportedFiles)
+	private void ShowExportCompleteMessage(List<string> exportedFiles, int warningCount)
 
 	{
 
@@ -3592,7 +3598,10 @@ public partial class MainForm : Form
 			.Where(IsEnhancedTableName)
 			.ToList();
 
-		string text = $"Successfully exported {exportedFiles.Count} tables to CSV files.";
+		string text = warningCount > 0
+			? $"Export completed with warnings. {exportedFiles.Count} CSV files were exported.\n\n" +
+			  $"{warningCount} data-quality issue(s). See XER_DATA_QUALITY.csv for unallocated actuals and original source values."
+			: $"Successfully exported {exportedFiles.Count} CSV files.";
 
 		if (source.Any())
 
@@ -3610,7 +3619,10 @@ public partial class MainForm : Form
 
 		}
 
-		ShowInfo(text, "Export Complete");
+		if (warningCount > 0)
+			ShowWarning(text, "Export Completed with Warnings");
+		else
+			ShowInfo(text, "Export Complete");
 
 		if (MessageBox.Show("Do you want to open the output folder?", "Open folder", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
 

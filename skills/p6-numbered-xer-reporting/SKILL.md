@@ -5,7 +5,7 @@ description: Interpret and use the numbered XER-to-CSV Power BI tables in report
 
 # Numbered XER tables for reporting
 
-Help an agent build, review, or explain reports using this parser's numbered CSVs without confusing raw P6 fields, calculated columns, or export profiles. This portable reference describes the corrected working-tree implementation on 2026-09-05; it is not an Oracle schema specification, a release identifier, or proof of native P6 scheduling parity.
+Help an agent build, review, or explain reports using this parser's numbered CSVs without confusing raw P6 fields, calculated columns, or export profiles. This portable reference describes the corrected working-tree implementation on 2026-09-06; it is not an Oracle schema specification, a release identifier, or proof of native P6 scheduling parity.
 
 ## Establish the actual contract
 
@@ -24,7 +24,7 @@ Inspect the supplied headers, manifest, parser/schema version, and source scope 
 4. Working shifts and dated exceptions determine available hours. Hours-per-day is a conversion factor, not a workweek. `11` contains rules and overrides, not one row for every calendar date.
 5. `15.monthly_quantity` is distributed assignment units, not cost, resource availability, or necessarily actual timesheets. Aggregate only compatible units and selected snapshots. Actual and remaining portions are separate.
 6. Treat all CSV keys as text, even when native IDs look numeric. Preserve null/blank separately from numeric zero. Check the profile's boolean, date, decimal, and case conventions before transformations.
-7. Require a complete current export set. Valid empty Standard tables are header-only; an explicitly requested unavailable/failed Standard table is an error. Fixed review profiles retain their own optional-table rules. Never treat an omitted or stale file as evidence of zero data.
+7. Require a complete current export set. Valid empty Standard tables are header-only; an explicitly requested unavailable/failed Standard table is an error. Invalid actual-date periods are instead reportable warnings: read `XER_DATA_QUALITY.csv` and reconcile allocated plus unallocated actuals. The companion accompanies table 15 even when empty. Fixed review profiles retain their numbered-table schemas and optional-table rules. Never treat an omitted or stale file as evidence of zero data.
 
 Explain which conclusions come from the parser contract, observed source data, and report-specific business policy. Do not silently repair upstream defects in DAX/Power Query or change the parser, visual, report, or deployment unless the user's task authorizes that change.
 

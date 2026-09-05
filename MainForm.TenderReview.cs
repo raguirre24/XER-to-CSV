@@ -27,7 +27,7 @@ public partial class MainForm
         btnExportTenderReview.Click += BtnExportTenderReview_Click;
         toolTip.SetToolTip(
             btnExportTenderReview,
-            "Create the versioned ten-table Tender Review bundle with an audit manifest");
+            "Create the versioned ten-table Tender Review bundle with a data-quality companion and audit manifest");
         ApplyButtonStyle(
             btnExportTenderReview,
             UiTheme.Accent,
@@ -161,8 +161,12 @@ public partial class MainForm
             stopwatch.Stop();
 
             toolStripProgressBar.Value = 100;
-            string summary = $"Tender Review bundle complete: {result.BundleId}. " +
-                             $"{result.ManifestRows.Count} manifest rows; {stopwatch.Elapsed.TotalSeconds:F2}s.";
+            string completion = result.WarningCount > 0 ? "completed with warnings" : "complete";
+            string summary = $"Tender Review bundle {completion}: {result.BundleId}. " +
+                             $"{result.ManifestRows.Count} manifest rows; {stopwatch.Elapsed.TotalSeconds:F2}s." +
+                             (result.WarningCount > 0
+                                 ? $" {result.WarningCount} data-quality issue(s); see XER_DATA_QUALITY.csv for unallocated actuals and original source values."
+                                 : string.Empty);
             UpdateStatus(summary);
             LogActivity(summary);
             LogActivity("Bundle path: " + result.BundlePath);
@@ -242,16 +246,21 @@ public partial class MainForm
 
     private void ShowTenderReviewComplete(TenderReviewBundleResult result)
     {
+        bool hasWarnings = result.WarningCount > 0;
+        string completion = hasWarnings
+            ? $"Tender Review bundle completed with warnings.\n\n" +
+              $"{result.WarningCount} data-quality issue(s). See XER_DATA_QUALITY.csv for unallocated actuals and original source values.\n\n"
+            : "Tender Review bundle created successfully.\n\n";
         DialogResult open = MessageBox.Show(
             this,
-            $"Tender Review bundle created successfully.\n\n" +
+            completion +
             $"Bundle: {result.BundleId}\n" +
             $"Folder: {result.BundlePath}\n" +
             $"Manifest rows: {result.ManifestRows.Count}\n\n" +
             "Open the completed bundle folder?",
-            "Tender Review Export Complete",
+            hasWarnings ? "Tender Review Export Completed with Warnings" : "Tender Review Export Complete",
             MessageBoxButtons.YesNo,
-            MessageBoxIcon.Information);
+            hasWarnings ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
         if (open != DialogResult.Yes) return;
 
         try

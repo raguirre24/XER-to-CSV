@@ -4,8 +4,20 @@ namespace XerToCsvConverter;
 
 public partial class XerTransformer
 {
+    private IReadOnlyList<DataRow> _resourceDataQualityRows = Array.Empty<DataRow>();
+
+    /// <summary>Issues from the last successful table 15 generation; never a partial failed result.</summary>
+    public XerTable CreateDataQualityTable()
+    {
+        var table = new XerTable(XerDataQuality.TableName);
+        table.SetHeaders(XerDataQuality.Columns.ToArray());
+        table.AddRows(_resourceDataQualityRows.Select(row => row.WithFields(row.Fields.ToArray())));
+        return table;
+    }
+
     // The schema is unchanged. Remaining allocations can use exported profiles or
-    // supported named curves. Actual allocations remain uniform working-time estimates.
+    // supported named curves. Actuals normally use working-time estimates; recorded
+    // off-calendar/instant actuals retain their quantities without inventing work hours.
     internal static readonly string[] ResourceDistributionColumns =
     [
         FieldNames.TaskIdKey, FieldNames.RsrcIdKey, FieldNames.ClndrIdKey, FieldNames.ProjIdKey,
@@ -21,6 +33,8 @@ public partial class XerTransformer
 
     public XerTable? Create15XerResourceDistribution()
     {
+        ClearGenerationFailure(EnhancedTableNames.XerResourceDist15);
+        _resourceDataQualityRows = Array.Empty<DataRow>();
         XerTable? assignments = _dataStore.GetTable(TableNames.TaskRsrc);
         if (!IsTableValid(assignments)) return null;
         try
@@ -35,15 +49,19 @@ public partial class XerTransformer
             ResourceCurveRepository? curves = null;
             var calendarCache = new Dictionary<(string Source, string Id), (P6CalendarDefinition Definition, WorkingDayCalculator Calculator)>();
             var assignmentKeys = new HashSet<(string Source, string Id)>();
+            var sourceRowNumbers = new Dictionary<string, int>(StringComparer.Ordinal);
+            var issues = new List<DataRow>();
             var result = new XerTable(EnhancedTableNames.XerResourceDist15);
             result.SetHeaders(ResourceDistributionColumns.ToArray());
 
             foreach (DataRow assignment in assignments.Rows)
             {
                 string source = assignment.SourceToken; // Stable input occurrence, independent of public filenames.
+                sourceRowNumbers.TryGetValue(source, out int sourceRowNumber);
+                sourceRowNumbers[source] = ++sourceRowNumber;
                 string Read(string field) => GetFieldValue(assignment.Fields, assignments.FieldIndexes, field);
                 string assignmentId = Read("taskrsrc_id").Trim();
-                string context = $"Source '{source}', TASKRSRC '{assignmentId}' (task '{Read(FieldNames.TaskId)}', resource '{Read(FieldNames.RsrcId)}')";
+                string context = $"Source '{assignment.OriginalSourceFilename}' (occurrence '{source}'), TASKRSRC '{assignmentId}' (task '{Read(FieldNames.TaskId)}', resource '{Read(FieldNames.RsrcId)}')";
                 try
                 {
                     if (assignmentId.Length > 0 && !assignmentKeys.Add((source, assignmentId)))
@@ -102,18 +120,53 @@ public partial class XerTransformer
 
                     if (actual > 0)
                     {
-                        DateTime start = RequireDate(FieldNames.ActStartDate);
-                        string rawFinish = Read(FieldNames.ActEndDate);
-                        DateTime finish;
-                        if (!string.IsNullOrWhiteSpace(rawFinish))
-                            finish = ParseDistributionDate(rawFinish, FieldNames.ActEndDate);
-                        else if (normalizedStatus == "TK_ACTIVE")
-                            finish = ParseDistributionDate(projects.Read(project, FieldNames.LastRecalcDate),
-                                "PROJECT.last_recalc_date");
+                        DateTime? start = null;
+                        DateTime? finish = null;
+                        string? issueMessage = null;
+                        string issueCode = "ACTUAL_PERIOD_INVALID";
+                        // Only source actual-period validation is recoverable. Calendar,
+                        // identity, quantity, curve and calculation failures are not caught
+                        // here. Keep the valid remaining portion independent of the actuals.
+                        try
+                        {
+                            start = RequireDate(FieldNames.ActStartDate);
+                            string rawFinish = Read(FieldNames.ActEndDate);
+                            if (!string.IsNullOrWhiteSpace(rawFinish))
+                                finish = ParseDistributionDate(rawFinish, FieldNames.ActEndDate);
+                            else if (normalizedStatus == "TK_ACTIVE")
+                                finish = ParseDistributionDate(projects.Read(project, FieldNames.LastRecalcDate),
+                                    "PROJECT.last_recalc_date");
+                            else
+                                throw new InvalidDataException("Completed actual allocation requires TASKRSRC.act_end_date.");
+                            if (finish < start)
+                            {
+                                issueCode = "ACTUAL_FINISH_BEFORE_START";
+                                string finishField = string.IsNullOrWhiteSpace(rawFinish)
+                                    ? "PROJECT.last_recalc_date" : "TASKRSRC.act_end_date";
+                                throw new InvalidDataException($"Actual allocation finish {finishField} '{DateParser.Format(finish)}' precedes TASKRSRC.act_start_date '{DateParser.Format(start)}'. Actual quantity is unallocated; original dates are preserved.");
+                            }
+                        }
+                        catch (InvalidDataException ex) { issueMessage = ex.Message; }
+
+                        if (issueMessage is null)
+                            AddResourceDistributionRows(result, metadata, calendar.Definition, calendar.Calculator,
+                                start!.Value, finish!.Value, actual, isActual: true);
                         else
-                            throw new InvalidDataException("Completed actual allocation requires TASKRSRC.act_end_date.");
-                        AddResourceDistributionRows(result, metadata, calendar.Definition, calendar.Calculator,
-                            start, finish, actual, isActual: true);
+                        {
+                            string[] values =
+                            [
+                                XerDataQuality.SchemaVersion, "Warning", issueCode,
+                                EnhancedTableNames.XerResourceDist15, assignment.SourceFilename,
+                                sourceRowNumber.ToString(CultureInfo.InvariantCulture), metadata.ProjectKey,
+                                metadata.TaskKey, metadata.ResourceKey, CreateKey(assignment.SourceFilename, assignmentId),
+                                assignmentId, metadata.TaskCode, metadata.ResourceName, metadata.ResourceType,
+                                metadata.Unit, metadata.Status, Read(FieldNames.ActStartDate), Read(FieldNames.ActEndDate),
+                                projects.Read(project, FieldNames.LastRecalcDate), Read(FieldNames.ActRegQty),
+                                Read(FieldNames.ActOtQty), decimal.Round(actual, 4, MidpointRounding.ToEven)
+                                    .ToString("F4", CultureInfo.InvariantCulture), issueMessage
+                            ];
+                            issues.Add(assignment.WithFields(values));
+                        }
                     }
                     if (remaining > 0)
                     {
@@ -143,11 +196,18 @@ public partial class XerTransformer
                                 curves ??= new ResourceCurveRepository(_dataStore);
                                 var named = curves.Get(source, curveId);
                                 // A linear curve is independent of its progress phase.
-                                // For nonlinear curves, do not guess P6's progressed tail
-                                // from activity % complete or restart the full shape.
+                                // A single monthly bucket also has an exact invariant:
+                                // every remaining unit belongs to that month regardless
+                                // of the unknown intramonth shape. The allocation loop
+                                // uses the total directly and never evaluates that shape.
+                                // Across months, do not guess P6's progressed tail from
+                                // activity % complete or restart the full named curve.
+                                bool singleMonth = finish > start
+                                    && start.Year == finish.AddTicks(-1).Year
+                                    && start.Month == finish.AddTicks(-1).Month;
                                 if (!named.IsUniform && (normalizedStatus != "TK_NOTSTART"
                                     || !string.IsNullOrWhiteSpace(Read(FieldNames.ActStartDate))
-                                    || !string.IsNullOrWhiteSpace(Read(FieldNames.ActEndDate))))
+                                    || !string.IsNullOrWhiteSpace(Read(FieldNames.ActEndDate))) && !singleMonth)
                                     throw new InvalidDataException($"Curve '{curveId}' on a progressed assignment requires an exported remain_crv profile; its remaining curve phase cannot be established from this XER.");
                                 return named;
                             }
@@ -178,12 +238,14 @@ public partial class XerTransformer
                     throw new InvalidDataException($"{context}: {ex.Message}", ex);
                 }
             }
+            _resourceDataQualityRows = issues.AsReadOnly();
             return result;
         }
         catch (InvalidDataException ex)
         {
             // Existing export-service/profile validation rejects a failed requested 15
             // before writing CSVs. Never return the partially accumulated table.
+            RecordGenerationFailure(EnhancedTableNames.XerResourceDist15, ex);
             Console.WriteLine($"Error creating {EnhancedTableNames.XerResourceDist15}: {ex.Message}");
             return null;
         }
@@ -200,32 +262,43 @@ public partial class XerTransformer
         P6CalendarDefinition definition, WorkingDayCalculator calculator, DateTime start, DateTime finish,
         decimal quantity, bool isActual, RemainingResourceProfile? profile = null)
     {
-        if (finish <= start)
-            throw new InvalidDataException("Positive quantity requires finish after start.");
-        decimal totalHours = calculator.CountWorkingHours(start, finish);
+        if (finish < start || (!isActual && finish == start))
+            throw new InvalidDataException("Positive quantity requires finish after start, except recorded actuals at a single instant.");
+        decimal totalHours = finish == start ? 0 : calculator.CountWorkingHours(start, finish);
         long totalTicks = checked((long)decimal.Round(totalHours * TimeSpan.TicksPerHour, 0));
-        if (totalTicks <= 0)
+        if (totalTicks <= 0 && !isActual)
             throw new InvalidDataException($"Calendar '{metadata.CalendarKey}' has no working time in the positive-quantity period.");
+        // Actual units are historical observations, not calendar capacity. A valid
+        // calendar can have no scheduled work in their recorded period (overtime,
+        // weekends, milestones). Preserve these actuals in their recorded month, or
+        // estimate multi-month shares by elapsed time only when ALL work hours are zero.
+        // Never apply this fallback to forecast remaining units or malformed calendars.
+        bool pointActual = isActual && finish == start;
+        bool elapsedActual = isActual && totalTicks == 0 && !pointActual;
+        string distributionType = pointActual ? "Actual Recorded Date"
+            : elapsedActual ? "Actual Elapsed Time" : profile?.DistributionType ?? "Working Hours";
         decimal target = decimal.Round(quantity, 4, MidpointRounding.ToEven);
         decimal allocated = 0;
         long cumulativeTicks = 0;
         DateTime month = new(start.Year, start.Month, 1);
-        while (month < finish)
+        while (month < finish || pointActual)
         {
             bool lastMonth = month.Year == finish.Year && month.Month == finish.Month;
             DateTime periodEnd = lastMonth ? finish : month.AddMonths(1);
             DateTime periodStart = start > month ? start : month;
-            decimal hours = calculator.CountWorkingHours(periodStart, periodEnd);
+            decimal hours = periodStart == periodEnd ? 0 : calculator.CountWorkingHours(periodStart, periodEnd);
             long ticks = checked((long)decimal.Round(hours * TimeSpan.TicksPerHour, 0));
             cumulativeTicks = checked(cumulativeTicks + ticks);
-            decimal roundedCumulative = cumulativeTicks == totalTicks ? target
-                : decimal.Round(quantity * (profile?.CumulativeShare(cumulativeTicks, totalTicks)
-                    ?? cumulativeTicks / (decimal)totalTicks), 4, MidpointRounding.ToEven);
+            decimal roundedCumulative = periodEnd == finish ? target
+                : decimal.Round(quantity * (elapsedActual
+                    ? (periodEnd - start).Ticks / (decimal)(finish - start).Ticks
+                    : profile?.CumulativeShare(cumulativeTicks, totalTicks)
+                        ?? cumulativeTicks / (decimal)totalTicks), 4, MidpointRounding.ToEven);
             decimal monthlyQuantity = roundedCumulative - allocated;
             allocated = roundedCumulative;
 
-            // Preserve zero actual slices and working remaining slices. A nonworking
-            // month cannot receive a rounding remainder from another month.
+            // Preserve zero actual slices and working remaining slices. In working-
+            // time mode, a closed month cannot receive another month's rounding residue.
             if (ticks > 0 || isActual)
             {
                 string Days(decimal workingHours) => definition.HoursPerDay is > 0
@@ -234,7 +307,7 @@ public partial class XerTransformer
                 [
                     metadata.TaskKey, metadata.ResourceKey, metadata.CalendarKey, metadata.ProjectKey,
                     month.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), DateParser.Format(periodStart),
-                    DateParser.Format(periodEnd), monthlyQuantity.ToString("F4", CultureInfo.InvariantCulture), profile?.DistributionType ?? "Working Hours",
+                    DateParser.Format(periodEnd), monthlyQuantity.ToString("F4", CultureInfo.InvariantCulture), distributionType,
                     hours.ToString("F2", CultureInfo.InvariantCulture), totalHours.ToString("F2", CultureInfo.InvariantCulture),
                     definition.HoursPerDay?.ToString("F2", CultureInfo.InvariantCulture) ?? "", Days(hours), Days(totalHours),
                     OccupiedCalendarDays(periodStart, periodEnd), OccupiedCalendarDays(start, finish),
@@ -252,7 +325,8 @@ public partial class XerTransformer
     }
 
     private static string OccupiedCalendarDays(DateTime start, DateTime exclusiveFinish) =>
-        ((exclusiveFinish.AddTicks(-1).Date - start.Date).Days + 1).ToString(CultureInfo.InvariantCulture);
+        exclusiveFinish == start ? "0"
+            : ((exclusiveFinish.AddTicks(-1).Date - start.Date).Days + 1).ToString(CultureInfo.InvariantCulture);
 
     private sealed class DistributionInputIndex
     {

@@ -6,7 +6,10 @@ namespace XerToCsvConverter.TenderReview;
 
 internal sealed record TenderReviewTransformationResult(
     ResolvedTenderReviewRequest Request,
-    IReadOnlyList<TenderReviewOutputTable> Tables);
+    IReadOnlyList<TenderReviewOutputTable> Tables)
+{
+    public required XerTable DataQualityTable { get; init; }
+}
 
 internal sealed class TenderReviewTransformer
 {
@@ -57,7 +60,7 @@ internal sealed class TenderReviewTransformer
             [EnhancedTableNames.XerResourceDist15] = transformer.Create15XerResourceDistribution()
         };
         cancellationToken.ThrowIfCancellationRequested();
-        ValidateOptionalTransformOutcomes(enhanced);
+        ValidateTransformOutcomes(enhanced, transformer);
 
         TenderReviewTableContract taskContract = TenderReviewContract.GetTable("01_XER_TASK");
         IReadOnlyList<TenderReviewOutputRow> taskRows = BuildTaskRows(
@@ -86,7 +89,29 @@ internal sealed class TenderReviewTransformer
         ValidateKeysAndRelationships(tables);
         return new TenderReviewTransformationResult(
             _request,
-            new ReadOnlyCollection<TenderReviewOutputTable>(tables));
+            new ReadOnlyCollection<TenderReviewOutputTable>(tables))
+        {
+            DataQualityTable = BuildDataQualityTable(transformer.CreateDataQualityTable(), cancellationToken)
+        };
+    }
+
+    private XerTable BuildDataQualityTable(XerTable source, CancellationToken cancellationToken)
+    {
+        var result = new XerTable(XerDataQuality.TableName, source.RowCount);
+        result.SetHeaders(source.Headers!.ToArray());
+        foreach (DataRow row in source.Rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_sourceByToken.TryGetValue(row.SourceToken, out ResolvedTenderReviewSource? tenderSource))
+                throw new TenderReviewValidationException("A data-quality row has an unresolved Tender source occurrence.");
+            string[] values = row.Fields.ToArray();
+            foreach (string key in new[] { "proj_id_key", "task_id_key", "rsrc_id_key", "taskrsrc_id_key" })
+                values[source.FieldIndexes[key]] = Namespace(values[source.FieldIndexes[key]], tenderSource, key);
+            values[source.FieldIndexes["source_namespace"]] = TenderReviewNaming.NamespacePrefix(
+                _request.ProjectCode, tenderSource.StatusDate).TrimEnd(':');
+            result.AddRow(row with { Fields = values, OriginalSourceFilename = tenderSource.OriginalXerFilename });
+        }
+        return result;
     }
 
     private ResolvedTenderReviewRequest ResolveProjectMetadata(CancellationToken cancellationToken)
@@ -830,8 +855,18 @@ internal sealed class TenderReviewTransformer
         return aggregated;
     }
 
-    private void ValidateOptionalTransformOutcomes(IReadOnlyDictionary<string, XerTable?> enhanced)
+    private void ValidateTransformOutcomes(IReadOnlyDictionary<string, XerTable?> enhanced,
+        XerTransformer transformer)
     {
+        // Null can mean a genuinely absent optional source or a rejected
+        // calculation. Preserve the latter's actionable cause in every profile.
+        foreach (var pair in enhanced)
+        {
+            if (pair.Value is null && transformer.GetGenerationFailure(pair.Key) is { } failure)
+                throw new TenderReviewValidationException(
+                    $"Enhanced transformation '{pair.Key}' failed: {failure.Message}", failure);
+        }
+
         var rawSourceByEnhanced = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [EnhancedTableNames.XerPredecessor06] = TableNames.TaskPred,

@@ -8,6 +8,7 @@ public sealed class P6CalendarRepository
     private readonly Dictionary<(string Source, string Calendar), RawCalendar> _raw = new();
     private readonly Dictionary<(string Source, string Calendar), ResolvedCalendar> _resolved = new();
     private readonly HashSet<(string Source, string Calendar)> _invalidIdentities = new();
+    private readonly Dictionary<string, string> _sourceNames = new(StringComparer.Ordinal);
     private readonly object _gate = new();
 
     public P6CalendarRepository(XerDataStore dataStore, bool isolateInvalidIdentities = false)
@@ -19,11 +20,13 @@ public sealed class P6CalendarRepository
             throw new InvalidDataException("CALENDAR.clndr_id is required to resolve working calendars.");
         foreach (var row in table.Rows)
         {
+            _sourceNames.TryAdd(row.SourceToken, string.IsNullOrWhiteSpace(row.OriginalSourceFilename)
+                ? row.SourceFilename : row.OriginalSourceFilename);
             string id = Read(table, row, "clndr_id").Trim();
             if (id.Length == 0)
             {
                 if (isolateInvalidIdentities) continue;
-                throw new InvalidDataException($"Source '{row.SourceToken}' contains a blank CALENDAR.clndr_id.");
+                throw new InvalidDataException($"{SourceContext(row.SourceToken)} contains a blank CALENDAR.clndr_id.");
             }
             var key = (row.SourceToken, id);
             if (_invalidIdentities.Contains(key)) continue;
@@ -40,7 +43,7 @@ public sealed class P6CalendarRepository
                     _invalidIdentities.Add(key);
                     continue;
                 }
-                throw new InvalidDataException($"Source '{row.SourceToken}' contains duplicate CALENDAR.clndr_id '{id}'.");
+                throw new InvalidDataException($"{SourceContext(row.SourceToken)} contains duplicate CALENDAR.clndr_id '{id}'.");
             }
         }
     }
@@ -77,12 +80,12 @@ public sealed class P6CalendarRepository
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (_invalidIdentities.Contains(key))
-            throw new InvalidDataException($"Source '{key.Source}' contains duplicate CALENDAR.clndr_id '{key.Calendar}'.");
+            throw new InvalidDataException($"{SourceContext(key.Source)} contains duplicate CALENDAR.clndr_id '{key.Calendar}'.");
         if (_resolved.TryGetValue(key, out var cached)) return cached;
         if (!_raw.TryGetValue(key, out var raw))
-            throw new InvalidDataException($"Source '{key.Source}' is missing CALENDAR '{key.Calendar}'.");
+            throw new InvalidDataException($"{SourceContext(key.Source)} is missing CALENDAR '{key.Calendar}'.");
         if (visiting.Count >= 256 || !visiting.Add(key))
-            throw new InvalidDataException($"Source '{key.Source}', CALENDAR '{key.Calendar}': cyclic or excessively deep base-calendar inheritance.");
+            throw new InvalidDataException($"{SourceContext(key.Source)}, CALENDAR '{key.Calendar}': cyclic or excessively deep base-calendar inheritance.");
         try
         {
             P6ParsedCalendar parsed = P6CalendarParser.Parse(raw.Data, cancellationToken);
@@ -101,7 +104,7 @@ public sealed class P6CalendarRepository
         }
         catch (InvalidDataException exception)
         {
-            throw new InvalidDataException($"Source '{raw.Source}', CALENDAR '{raw.Id}': {exception.Message}", exception);
+            throw new InvalidDataException($"{SourceContext(raw.Source)}, CALENDAR '{raw.Id}': {exception.Message}", exception);
         }
         finally { visiting.Remove(key); }
     }
@@ -109,6 +112,10 @@ public sealed class P6CalendarRepository
     private static string Read(XerTable table, DataRow row, string column) =>
         table.FieldIndexes.TryGetValue(column, out int index) && index < row.Fields.Length
             ? row.Fields[index] ?? string.Empty : string.Empty;
+
+    private string SourceContext(string token) =>
+        _sourceNames.TryGetValue(token, out string? name) && name != token
+            ? $"Source '{name}' (input occurrence '{token}')" : $"Source '{token}'";
 
     private sealed record RawCalendar(string Source, string Id, string Name, string Type,
         string Parent, string HoursPerDay, string Data);
@@ -239,12 +246,14 @@ internal static class P6CalendarParser
                 if (text[_position] == ')') Fail();
                 _position++;
             }
-            string header = text[headerStart.._position].Trim();
+            string header = TrimStructuralSpace(text[headerStart.._position]);
             int separator = header.IndexOf("||", StringComparison.Ordinal);
-            if (separator < 1 || !int.TryParse(header[..separator].Trim(), NumberStyles.None,
-                    CultureInfo.InvariantCulture, out _) || header[(separator + 2)..].Trim().Length == 0)
+            if (separator < 1 || !int.TryParse(TrimStructuralSpace(header[..separator]), NumberStyles.None,
+                    CultureInfo.InvariantCulture, out _))
                 throw new InvalidDataException($"Invalid calendar record header '{header}'.");
-            string name = header[(separator + 2)..].Trim();
+            // P6 structured-text names are optional, including the outer calendar
+            // container. Semantic day/shift validation still occurs after parsing.
+            string name = TrimStructuralSpace(header[(separator + 2)..]);
             Expect('(');
             int attributesStart = _position;
             while (_position < text.Length && text[_position] != ')')
@@ -252,7 +261,7 @@ internal static class P6CalendarParser
                 if (text[_position] == '(') Fail();
                 _position++;
             }
-            string attributes = text[attributesStart.._position].Trim();
+            string attributes = TrimStructuralSpace(text[attributesStart.._position]);
             Expect(')');
             Expect('(');
             var children = new List<Node>();
@@ -276,7 +285,21 @@ internal static class P6CalendarParser
 
         private void SkipSpace()
         {
-            while (_position < text.Length && char.IsWhiteSpace(text[_position])) _position++;
+            while (_position < text.Length && IsStructuralSpace(text[_position])) _position++;
+        }
+
+        // P6 also serializes ISO control separators (notably DEL/U+007F)
+        // between records. Consume them structurally, never strip the raw blob
+        // or erase characters inside semantic values such as shift clocks.
+        private static bool IsStructuralSpace(char value) => char.IsWhiteSpace(value) || char.IsControl(value);
+
+        private static string TrimStructuralSpace(string value)
+        {
+            int start = 0;
+            int end = value.Length;
+            while (start < end && IsStructuralSpace(value[start])) start++;
+            while (end > start && IsStructuralSpace(value[end - 1])) end--;
+            return value[start..end];
         }
 
         private void Fail() => throw new InvalidDataException($"Malformed calendar parentheses near character {_position}.");

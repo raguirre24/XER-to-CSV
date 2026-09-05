@@ -1123,6 +1123,20 @@ namespace XerToCsvConverter;
     public partial class XerTransformer
     {
         private readonly XerDataStore _dataStore;
+        // Public transformer methods retain their legacy null-on-failure contract.
+        // The export service must still be able to surface the original cause,
+        // rather than confusing a failed calculation with an absent schema.
+        private readonly ConcurrentDictionary<string, Exception> _generationFailures =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        internal Exception? GetGenerationFailure(string tableName) =>
+            _generationFailures.TryGetValue(tableName, out var failure) ? failure : null;
+
+        private void ClearGenerationFailure(string tableName) =>
+            _generationFailures.TryRemove(tableName, out _);
+
+        private void RecordGenerationFailure(string tableName, Exception failure) =>
+            _generationFailures[tableName] = failure;
 
         // .NET 8: FrozenSet for O(1) lookups on static field sets (faster than HashSet for reads)
         private static readonly FrozenSet<string> HandledTaskFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
@@ -1314,6 +1328,7 @@ namespace XerToCsvConverter;
 
         public XerTable? Create01XerTaskTable()
         {
+            ClearGenerationFailure(EnhancedTableNames.XerTask01);
 
             var taskTable = _dataStore.GetTable(TableNames.Task);
 
@@ -1597,6 +1612,7 @@ namespace XerToCsvConverter;
                 // Log error (consider using a formal logging framework)
 
                 Console.WriteLine($"Error creating {EnhancedTableNames.XerTask01}: {ex.Message}\n{ex.StackTrace}");
+                RecordGenerationFailure(EnhancedTableNames.XerTask01, ex);
 
                 return null;
 
@@ -1833,6 +1849,7 @@ namespace XerToCsvConverter;
 
         public XerTable? Create04XerBaselineTable(XerTable task01Table)
         {
+            ClearGenerationFailure(EnhancedTableNames.XerBaseline04);
 
             if (!IsTableValid(task01Table)) return null;
 
@@ -1930,6 +1947,7 @@ namespace XerToCsvConverter;
             {
 
                 Console.WriteLine($"Error creating {EnhancedTableNames.XerBaseline04}: {ex.Message}");
+                RecordGenerationFailure(EnhancedTableNames.XerBaseline04, ex);
 
                 return null;
 
@@ -1943,6 +1961,7 @@ namespace XerToCsvConverter;
 
         public XerTable? Create03XerProjWbsTable()
         {
+            ClearGenerationFailure(EnhancedTableNames.XerProjWbs03);
             XerTable? source = _dataStore.GetTable(TableNames.ProjWbs);
             if (!IsTableValid(source)) return null;
             try
@@ -1953,7 +1972,7 @@ namespace XerToCsvConverter;
                 {
                     string id = GetFieldValue(row.Fields, indexes, FieldNames.WbsId).Trim();
                     if (id.Length == 0 || !nodes.TryAdd((row.SourceToken, id), row))
-                        throw new InvalidDataException($"Source '{row.SourceToken}' has a blank or duplicate PROJWBS.wbs_id '{id}'.");
+                        throw new InvalidDataException($"Source '{row.OriginalSourceFilename}' (occurrence '{row.SourceToken}') has a blank or duplicate PROJWBS.wbs_id '{id}'.");
                 }
                 var parents = new Dictionary<(string Source, string Id), (string Source, string Id)>();
                 foreach (var pair in nodes)
@@ -1964,7 +1983,7 @@ namespace XerToCsvConverter;
                     string project = GetFieldValue(pair.Value.Fields, indexes, FieldNames.ProjectId).Trim();
                     string parentProject = GetFieldValue(parentRow.Fields, indexes, FieldNames.ProjectId).Trim();
                     if (project != parentProject)
-                        throw new InvalidDataException($"Source '{pair.Key.Source}' WBS '{pair.Key.Id}' has a parent in another project.");
+                        throw new InvalidDataException($"Source '{pair.Value.OriginalSourceFilename}' (occurrence '{pair.Key.Source}') WBS '{pair.Key.Id}' has a parent in another project.");
                     parents.Add(pair.Key, parentKey);
                 }
                 var complete = new HashSet<(string Source, string Id)>();
@@ -1975,7 +1994,7 @@ namespace XerToCsvConverter;
                     while (!complete.Contains(current))
                     {
                         if (!path.Add(current))
-                            throw new InvalidDataException($"Source '{current.Source}' has a PROJWBS parent cycle at '{current.Id}'.");
+                            throw new InvalidDataException($"Source '{nodes[current].OriginalSourceFilename}' (occurrence '{current.Source}') has a PROJWBS parent cycle at '{current.Id}'.");
                         if (!parents.TryGetValue(current, out current)) break;
                     }
                     complete.UnionWith(path);
@@ -2002,6 +2021,7 @@ namespace XerToCsvConverter;
             catch (InvalidDataException ex)
             {
                 Console.WriteLine($"Error creating {EnhancedTableNames.XerProjWbs03}: {ex.Message}");
+                RecordGenerationFailure(EnhancedTableNames.XerProjWbs03, ex);
                 return null;
             }
         }
@@ -2010,6 +2030,7 @@ namespace XerToCsvConverter;
 
         private XerTable? CreateSimpleKeyedTable(string sourceTableName, string newTableName, List<Tuple<string, string>> keyMappings)
         {
+            ClearGenerationFailure(newTableName);
 
             var sourceTable = _dataStore.GetTable(sourceTableName);
 
@@ -2149,6 +2170,7 @@ namespace XerToCsvConverter;
             {
 
                 Console.WriteLine($"Error creating {newTableName}: {ex.Message}");
+                RecordGenerationFailure(newTableName, ex);
 
                 return null;
 
@@ -2167,6 +2189,7 @@ namespace XerToCsvConverter;
 
         public XerTable? Create06XerPredecessor(ConcurrentDictionary<string, XerTable> cache)
         {
+            ClearGenerationFailure(EnhancedTableNames.XerPredecessor06);
 
             var taskPredTable = _dataStore.GetTable(TableNames.TaskPred);
 
@@ -2501,6 +2524,7 @@ namespace XerToCsvConverter;
             {
 
                 Console.WriteLine($"Error creating {EnhancedTableNames.XerPredecessor06}: {ex.Message}");
+                RecordGenerationFailure(EnhancedTableNames.XerPredecessor06, ex);
 
                 return null;
 
@@ -2744,11 +2768,19 @@ namespace XerToCsvConverter;
 
         public async Task<List<string>> ExportTablesAsync(XerDataStore dataStore, List<string> tablesToExport,
             string outputDirectory, IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
+            => (await ExportTablesWithDiagnosticsAsync(dataStore, tablesToExport,
+                outputDirectory, progress, cancellationToken).ConfigureAwait(false)).Files;
+
+        public async Task<StandardDiskExportResult> ExportTablesWithDiagnosticsAsync(
+            XerDataStore dataStore, List<string> tablesToExport, string outputDirectory,
+            IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
-            XerTable[] tables = await ResolveRequestedTablesAsync(dataStore, tablesToExport, progress, cancellationToken);
-            return await Task.Run(() => StandardExportPublication.Write(
-                tables, outputDirectory, _exporter, progress, cancellationToken), cancellationToken).ConfigureAwait(false);
+            ResolvedStandardExport resolved = await ResolveRequestedTablesAsync(dataStore, tablesToExport, progress, cancellationToken);
+            List<string> files = await Task.Run(() => StandardExportPublication.Write(
+                resolved.Tables, outputDirectory, _exporter, progress, cancellationToken), cancellationToken).ConfigureAwait(false);
+            ReportExportCompletion(progress, resolved.WarningCount);
+            return new StandardDiskExportResult(files, resolved.WarningCount);
         }
 
         // Parse XER from streams (for Blazor WASM / in-memory scenarios)
@@ -2839,8 +2871,15 @@ namespace XerToCsvConverter;
         public async Task<Dictionary<string, byte[]>> ExportTablesToMemoryAsync(
             XerDataStore dataStore, List<string> tablesToExport,
             IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
+            => (await ExportTablesToMemoryWithDiagnosticsAsync(dataStore, tablesToExport,
+                progress, cancellationToken).ConfigureAwait(false)).Files;
+
+        public async Task<StandardMemoryExportResult> ExportTablesToMemoryWithDiagnosticsAsync(
+            XerDataStore dataStore, List<string> tablesToExport,
+            IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
         {
-            XerTable[] tables = await ResolveRequestedTablesAsync(dataStore, tablesToExport, progress, cancellationToken);
+            ResolvedStandardExport resolved = await ResolveRequestedTablesAsync(dataStore, tablesToExport, progress, cancellationToken);
+            XerTable[] tables = resolved.Tables;
             var result = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < tables.Length; i++)
             {
@@ -2851,10 +2890,18 @@ namespace XerToCsvConverter;
                 progress?.Report((80 + (i + 1) * 20 / Math.Max(1, tables.Length), $"Exported: {tables[i].Name} ({i + 1}/{tables.Length})"));
             }
             cancellationToken.ThrowIfCancellationRequested();
-            return result;
+            ReportExportCompletion(progress, resolved.WarningCount);
+            return new StandardMemoryExportResult(result, resolved.WarningCount);
         }
 
-        private static async Task<XerTable[]> ResolveRequestedTablesAsync(
+        private sealed record ResolvedStandardExport(XerTable[] Tables, int WarningCount);
+
+        private static void ReportExportCompletion(IProgress<(int percent, string message)>? progress, int warningCount) =>
+            progress?.Report((100, warningCount > 0
+                ? $"Completed with warnings: {warningCount} actual allocation issue(s). See {XerDataQuality.FileName}."
+                : "Export complete."));
+
+        private static async Task<ResolvedStandardExport> ResolveRequestedTablesAsync(
             XerDataStore dataStore, IEnumerable<string> requested,
             IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
         {
@@ -2863,6 +2910,10 @@ namespace XerToCsvConverter;
             string[] names = requested.Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(name => name, StringComparer.Ordinal).ToArray();
             foreach (string name in names) StandardExportPublication.ValidateTableName(name);
+            bool includeDataQuality = names.Contains(EnhancedTableNames.XerResourceDist15, StringComparer.OrdinalIgnoreCase);
+            if (includeDataQuality && (dataStore.GetTable(XerDataQuality.TableName) is not null
+                || names.Contains(XerDataQuality.TableName, StringComparer.OrdinalIgnoreCase)))
+                throw new InvalidDataException($"'{XerDataQuality.TableName}' is reserved for the generated data-quality companion when exporting table 15. No CSV files have been published by this export.");
             cancellationToken.ThrowIfCancellationRequested();
             foreach (string tableName in dataStore.TableNames)
                 XerSourceSchema.ValidateHeaders(tableName, dataStore.GetTable(tableName)!.Headers);
@@ -2901,7 +2952,8 @@ namespace XerToCsvConverter;
                             XerTable? tasks = StandardExportSchema.CreateIfSourceEmpty(dataStore, EnhancedTableNames.XerTask01)
                                 ?? transformer.Create01XerTaskTable();
                             if (tasks is null)
-                                throw Missing(requestedName, "required activity-table calculation failed");
+                                throw GenerationFailed(requestedName, EnhancedTableNames.XerTask01,
+                                    "required activity-table calculation failed");
                             cache.TryAdd(EnhancedTableNames.XerTask01, tasks);
                         }
                     }
@@ -2914,7 +2966,8 @@ namespace XerToCsvConverter;
                     }
                 }
                 if (table?.Headers is not { Length: > 0 })
-                    throw Missing(requestedName, "generation failed or no valid output schema is available");
+                    throw GenerationFailed(requestedName, requestedName,
+                        "generation failed or no valid output schema is available");
                 if (table.Headers.Any(string.IsNullOrWhiteSpace)
                     || table.Headers.Distinct(StringComparer.OrdinalIgnoreCase).Count() != table.Headers.Length
                     || table.Headers.Contains(FieldNames.FileName, StringComparer.OrdinalIgnoreCase))
@@ -2923,10 +2976,20 @@ namespace XerToCsvConverter;
                 result.Add(table);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            return result.ToArray();
+            XerTable? diagnostics = includeDataQuality ? transformer.CreateDataQualityTable() : null;
+            // Always publish the header when 15 is selected: a clean rerun must
+            // replace, not leave behind, warnings from an earlier export.
+            if (diagnostics is not null) result.Add(diagnostics);
+            return new ResolvedStandardExport(result.ToArray(), diagnostics?.Rows.Count ?? 0);
 
-            static InvalidDataException Missing(string name, string detail) =>
-                new($"Cannot export '{name}': {detail}. No CSV files have been published by this export.");
+            InvalidDataException GenerationFailed(string requestedName, string generatedName, string fallback)
+            {
+                Exception? failure = transformer.GetGenerationFailure(generatedName);
+                return Missing(requestedName, failure?.Message ?? fallback, failure);
+            }
+
+            static InvalidDataException Missing(string name, string detail, Exception? failure = null) =>
+                new($"Cannot export '{name}': {detail.TrimEnd().TrimEnd('.')}. No CSV files have been published by this export.", failure);
         }
 
         private static XerTable? GenerateEnhancedTable(XerTransformer transformer, string tableName, ConcurrentDictionary<string, XerTable> cache)

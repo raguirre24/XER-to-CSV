@@ -416,12 +416,105 @@ public sealed class ResourceCurveCalculationTests
     }
 
     [Fact]
-    public void Active_assignment_without_manual_profile_does_not_restart_a_nonlinear_curve()
+    public void Active_assignment_spanning_months_without_manual_profile_does_not_restart_a_nonlinear_curve()
     {
         XerDataStore store = Store(Loaded());
         Set(store, "TASK", "status_code", "TK_Active");
 
         AssertRejected(store);
+    }
+
+    [Theory]
+    [InlineData("2026-08-26 08:00:00", "2026-08-26 17:00:00", "2026-08-01", "8.00")]
+    [InlineData("2026-08-26 08:00:00", "2026-09-01 00:00:00", "2026-08-01", "32.00")]
+    [InlineData("2026-12-31 08:00:00", "2027-01-01 00:00:00", "2026-12-01", "8.00")]
+    public void Active_nonlinear_curve_contained_in_one_half_open_month_has_phase_independent_monthly_total(
+        string start, string finish, string month, string workingHours)
+    {
+        // The intramonth distribution is unknown, but its entire remaining
+        // quantity belongs to this one month for every possible curve phase.
+        // An exclusive finish at next month's midnight does not add a bucket.
+        XerDataStore store = Store(Loaded(), quantity: "20", start: start, finish: finish,
+            calendar: P6TestCalendars.WorkWeek(), hoursPerDay: "8");
+        Set(store, "TASK", "status_code", "TK_Active");
+        Set(store, "TASKRSRC", "act_start_date", "2026-01-01 08:00:00");
+
+        Dictionary<string, string> row = Assert.Single(Transform(store));
+
+        Assert.Equal("20.0000", row["monthly_quantity"]);
+        Assert.Equal(month, row["distribution_month"]);
+        Assert.Equal("Resource Curve", row["distribution_type"]);
+        Assert.Equal("0", row["is_actual"]);
+        Assert.Equal(workingHours, row["month_working_hours"]);
+        Assert.Equal(workingHours, row["total_working_hours"]);
+        Assert.Equal(start, row["Start"]);
+        Assert.Equal(finish, row["Finish"]);
+    }
+
+    [Fact]
+    public void Assignment_actual_start_also_allows_only_a_phase_independent_single_month_total()
+    {
+        XerDataStore store = Store(Loaded(backLoaded: true), quantity: "20",
+            start: "2026-08-26 08:00:00", finish: "2026-08-26 17:00:00");
+        // The exported assignment can carry progress independently of its task.
+        Set(store, "TASKRSRC", "act_start_date", "2026-08-01 08:00:00");
+
+        Assert.Equal("20.0000", Assert.Single(Transform(store))["monthly_quantity"]);
+
+        Set(store, "TASKRSRC", "reend_date", "2026-09-02 17:00:00");
+        AssertRejected(store);
+    }
+
+    [Theory]
+    [InlineData("2026-08-31 23:00:00", "2026-09-01 00:00:01")]
+    [InlineData("2026-12-31 23:00:00", "2027-01-01 00:00:01")]
+    [InlineData("2026-01-01 00:00:00", "2027-01-02 00:00:00")]
+    public void Active_nonlinear_curve_with_work_in_more_than_one_month_still_requires_remaining_profile(
+        string start, string finish)
+    {
+        XerDataStore store = Store(Loaded(), quantity: "20", start: start, finish: finish);
+        Set(store, "TASK", "status_code", "TK_Active");
+
+        AssertRejected(store);
+    }
+
+    [Theory]
+    [InlineData("invalid percentage")]
+    [InlineData("invalid total")]
+    [InlineData("missing curve")]
+    [InlineData("unsupported duration")]
+    [InlineData("manual curve without profile")]
+    [InlineData("malformed manual profile")]
+    [InlineData("invalid calendar")]
+    [InlineData("no working time")]
+    [InlineData("zero duration")]
+    public void Single_month_phase_independence_does_not_bypass_required_curve_calendar_and_period_validation(
+        string defect)
+    {
+        XerDataStore store = Store(Loaded(), quantity: "20",
+            start: "2026-08-26 08:00:00", finish: "2026-08-26 17:00:00");
+        Set(store, "TASK", "status_code", "TK_Active");
+        switch (defect)
+        {
+            case "invalid percentage": Set(store, "RSRCCURVDATA", "pct_usage_7", "NaN"); break;
+            case "invalid total": Set(store, "RSRCCURVDATA", "pct_usage_7", "1"); break;
+            case "missing curve": Set(store, "TASKRSRC", "curv_id", "MISSING"); break;
+            case "unsupported duration": Set(store, "TASK", "duration_type", "DT_FixedQty"); break;
+            case "manual curve without profile":
+                Set(store, "TASKRSRC", "curv_id", "9");
+                Set(store, "RSRCCURVDATA", "curv_id", "9");
+                break;
+            case "malformed manual profile": Set(store, "TASKRSRC", "remain_crv", "not-a-profile"); break;
+            case "invalid calendar": Set(store, "CALENDAR", "clndr_data", "malformed"); break;
+            case "no working time": Set(store, "CALENDAR", "clndr_data", AllDays("18:00", "19:00")); break;
+            case "zero duration": Set(store, "TASKRSRC", "reend_date", "2026-08-26 08:00:00"); break;
+            default: throw new InvalidOperationException(defect);
+        }
+
+        if (defect is "invalid calendar" or "no working time")
+            Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        else
+            AssertRejected(store);
     }
 
     [Fact]

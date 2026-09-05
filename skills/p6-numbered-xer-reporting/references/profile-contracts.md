@@ -1,6 +1,6 @@
 # Export profiles and fixed contracts
 
-Corrected implementation snapshot: 2026-09-05. Read actual headers rather than inferring profile from a table number or assuming an older build has these fixes. Field names/case below are intentional.
+Corrected implementation snapshot: 2026-09-06. Read actual headers rather than inferring profile from a table number or assuming an older build has these fixes. Field names/case below are intentional.
 
 ## Profile identity
 
@@ -18,7 +18,9 @@ Corrected implementation snapshot: 2026-09-05. Read actual headers rather than i
 | Table 10 | Raw CALENDAR plus keys/metadata | Key and name only | Key and name only |
 | Table 15 grain | Assignment x actual/remaining x month | Assignment x actual/remaining x month | Task x resource x actual/remaining x month within stage/project |
 
-Review profiles require source TASK, PROJECT, PROJWBS and CALENDAR. Their other six tables may be header-only when legitimately absent. Both profiles emit all ten fixed tables plus a manifest on successful validation. Standard emits every explicitly requested valid table, including header-only empty results; a requested missing source, unsupported table, invalid schema or failed calculation rejects the export before publication. An absent source is not the same as a present table with headers and zero rows.
+Review profiles require source TASK, PROJECT, PROJWBS and CALENDAR. Their other six tables may be header-only when legitimately absent. Both profiles emit all ten fixed tables, the supplemental `XER_DATA_QUALITY.csv`, and a manifest: twelve files. The numbered schemas remain Programme 3.0 / Tender 1.0; the companion has its own `diagnostic_schema_version=1.0`. Standard emits the companion whenever table 15 is selected, alongside every requested valid table. The companion is header-only when clean, replacing stale warnings on a clean rerun. A requested missing source, unsupported table, invalid schema or unrecoverable calculation still rejects export before publication. An absent source is not the same as a present table with headers and zero rows.
+
+Actual date problems with otherwise usable quantities, identities and calendars do not reject table 15: valid monthly and remaining allocations continue; unresolved actual units and unchanged source dates are reported in the companion. See the table dictionary for its exact fields and calculation rules for reconciliation. A successful export with warnings is not a declaration that the schedule is free of data-quality issues.
 
 Programme project codes accept uppercase ASCII letters, digits and underscores; programme type is C or T. Programme also rejects duplicate source content. Tender codes accept uppercase ASCII letters and digits only and permits repeated content across distinct stages. Do not infer cross-profile identity by stripping punctuation.
 
@@ -38,7 +40,7 @@ Programme history is matched across snapshots by project/activity business ident
 
 Tender canonical filenames are `<PROJECT>-TENDER-<yyyyMMdd-status-date>.xer`. `status_date` and `UpdateDate` are the selected stage status date. `data_date` and `monthupdate` are the independently read P6 `PROJECT.last_recalc_date`. `udf_datalake_status_date` reflects the selected status date; `add_date` is independent source project metadata. A status date must be unique per project within a bundle. Never collapse two stages because their hashes match. The source token protects parsing identity; the public namespace identifies the stage in reports.
 
-All review dates are date-only. They cannot reconstruct intraday relationship calculations or shifts; the parser uses timestamps before serialization.
+Numbered review-table dates are date-only. They cannot reconstruct intraday relationship calculations or shifts; the parser uses timestamps before serialization. The diagnostic companion instead preserves source date strings, including timestamps and malformed values; import those diagnostic fields as text.
 
 ## Exact Programme Review headers
 
@@ -112,4 +114,4 @@ Tender headers:
 schema_version,bundle_profile,bundle_id,bundle_status,parser_version,project_code,project_name,original_xer_filename,canonical_xer_filename,status_date,update_date,data_date,source_sha256,table_name,row_count,csv_sha256,exported_at_utc
 ```
 
-Programme completion literal is `complete`; Tender uses `COMPLETE` and `bundle_profile=tender_review`. Manifest rows describe each retained snapshot/stage and each exported table, not activity grain. Validate the declared version/profile, source-stage coverage, row counts at the declared source/table grain, and CSV hashes against the actual files. A CSV hash can repeat for the same combined table across manifest source rows; it does not make those source rows duplicates. Do not assemble one export from files belonging to different bundles or attach old files to a new manifest. Independently validated bundles can coexist in a comparison model when profile/bundle/scenario provenance remains explicit; public keys can recur across successive bundles, so do not accidentally join or sum duplicate snapshots across them.
+Programme completion literal remains `complete`; Tender uses `COMPLETE` and `bundle_profile=tender_review`. These indicate completed publication, not absence of warnings. Manifest rows describe each retained snapshot/stage and each exported table, including `table_name=XER_DATA_QUALITY`: eleven manifest rows per retained source. The companion's per-source row count is its warning count; its hash is validated like numbered CSVs. Validate the declared version/profile, source-stage coverage, row counts at the declared source/table grain, and CSV hashes against actual files. Consumers hard-coded to eleven bundle files or ten manifest rows per source must accept the approved supplemental artifact; numbered report columns have not changed. A CSV hash can repeat for the same combined table across manifest source rows; it does not make those source rows duplicates. Do not assemble one export from files belonging to different bundles or attach old files to a new manifest. Independently validated bundles can coexist in a comparison model when profile/bundle/scenario provenance remains explicit; public keys can recur across successive bundles, so do not accidentally join or sum duplicate snapshots across them.

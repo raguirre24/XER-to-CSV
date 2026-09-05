@@ -28,6 +28,8 @@ internal sealed class ProgrammeReviewTransformer
     private readonly IReadOnlyDictionary<string, ResolvedProgrammeReviewSnapshot> _snapshotByOriginal;
     private readonly Dictionary<string, string> _projectNativeIdBySource = new(StringComparer.OrdinalIgnoreCase);
 
+    internal XerTable DataQualityTable { get; private set; } = null!;
+
     internal ProgrammeReviewTransformer(XerDataStore dataStore, ResolvedProgrammeReviewRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -54,7 +56,8 @@ internal sealed class ProgrammeReviewTransformer
             [EnhancedTableNames.XerRsrc12] = transformer.Create12XerRsrc(),
             [EnhancedTableNames.XerResourceDist15] = transformer.Create15XerResourceDistribution()
         };
-        ValidateOptionalTransformOutcomes(enhanced);
+        ValidateTransformOutcomes(enhanced, transformer);
+        DataQualityTable = BuildDataQualityTable(transformer.CreateDataQualityTable(), cancellationToken);
 
         ProgrammeReviewTableContract taskContract = ProgrammeReviewContract.GetTable("01_XER_TASK");
         IReadOnlyList<ProgrammeReviewOutputRow> taskRows = BuildTaskRows(
@@ -79,6 +82,43 @@ internal sealed class ProgrammeReviewTransformer
 
         ValidateRequiredSnapshotCoverage(result);
         ValidateKeysAndRelationships(result);
+        return result;
+    }
+
+    private XerTable BuildDataQualityTable(XerTable source, CancellationToken cancellationToken)
+    {
+        var result = new XerTable(XerDataQuality.TableName, source.RowCount);
+        result.SetHeaders(source.Headers!.ToArray());
+        if (source.RowCount == 0) return result;
+
+        // Correlate diagnostic rows by their internal occurrence token. Filenames
+        // remain provenance, and the public namespace is the governed snapshot.
+        var snapshotsByToken = new Dictionary<string, ResolvedProgrammeReviewSnapshot>(StringComparer.Ordinal);
+        foreach (string tableName in _dataStore.TableNames)
+        {
+            foreach (DataRow row in _dataStore.GetTable(tableName)!.Rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ResolvedProgrammeReviewSnapshot snapshot = _snapshotByOriginal[row.SourceFilename];
+                if (snapshotsByToken.TryGetValue(row.SourceToken, out ResolvedProgrammeReviewSnapshot? existing)
+                    && !ReferenceEquals(existing, snapshot))
+                    throw new ProgrammeReviewValidationException("A data-quality source occurrence belongs to multiple snapshots.");
+                snapshotsByToken[row.SourceToken] = snapshot;
+            }
+        }
+
+        foreach (DataRow row in source.Rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!snapshotsByToken.TryGetValue(row.SourceToken, out ResolvedProgrammeReviewSnapshot? snapshot))
+                throw new ProgrammeReviewValidationException("A data-quality row has an unresolved retained source occurrence.");
+            string[] values = row.Fields.ToArray();
+            foreach (string key in new[] { "proj_id_key", "task_id_key", "rsrc_id_key", "taskrsrc_id_key" })
+                values[source.FieldIndexes[key]] = Namespace(values[source.FieldIndexes[key]], snapshot, key);
+            values[source.FieldIndexes["source_namespace"]] = ProgrammeReviewNaming.NamespacePrefix(
+                _request.ProjectCode, _request.ProgrammeType, snapshot.SnapshotTag).TrimEnd(':');
+            result.AddRow(row with { Fields = values, OriginalSourceFilename = snapshot.OriginalXerFilename });
+        }
         return result;
     }
 
@@ -433,8 +473,18 @@ internal sealed class ProgrammeReviewTransformer
         }
     }
 
-    private void ValidateOptionalTransformOutcomes(IReadOnlyDictionary<string, XerTable?> enhanced)
+    private void ValidateTransformOutcomes(IReadOnlyDictionary<string, XerTable?> enhanced,
+        XerTransformer transformer)
     {
+        // Null can mean a genuinely absent optional source or a rejected
+        // calculation. Preserve the latter's actionable cause in every profile.
+        foreach (var pair in enhanced)
+        {
+            if (pair.Value is null && transformer.GetGenerationFailure(pair.Key) is { } failure)
+                throw new ProgrammeReviewValidationException(
+                    $"Enhanced transformation '{pair.Key}' failed: {failure.Message}", failure);
+        }
+
         var rawSourceByEnhanced = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [EnhancedTableNames.XerPredecessor06] = TableNames.TaskPred,

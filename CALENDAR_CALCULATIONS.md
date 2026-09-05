@@ -4,6 +4,28 @@ The shared Core parser supplies calendar calculations to Standard Enhanced,
 Programme Review and Tender Review exports. No BI report measures or Programme
 history/weekday-variance rules are changed by this correction.
 
+## Real-XER compatibility correction (2026-09-06)
+
+The calendar reader now accepts P6's unnamed structured-text containers and ISO
+control separators, notably DEL/U+007F. This changes parsing, not calendar shifts,
+conversion factors or the relationship-float formula. Table 10 preserves the raw
+`clndr_data` value exactly after text decoding. Invalid semantic calendar definitions
+still fail. Shared 06/11/15 calculations can now resolve these valid calendars.
+
+Recorded actuals outside scheduled working time and equal actual timestamps are
+handled as described below, without inventing calendar hours. A progressed curve
+whose entire remaining period fits one monthly bucket has an exact monthly total
+without requiring its unknown intramonth phase. Cross-month restrictions remain.
+
+Generated-table failures retain original causes and input/calendar/assignment
+context across Standard, Programme and Tender. Corrected syntax does not make
+inconsistent source dates valid. The approved non-blocking policy now preserves
+unresolvable actual periods in `XER_DATA_QUALITY.csv`, while valid actual/remaining
+allocations continue. See [current warning validation](review/NONBLOCKING_ACTUAL_WARNINGS.md)
+and the [earlier calendar checkpoint](review/REAL_XER_VALIDATION.md) for the two
+supplied schedules and the distinction between real-file checks, synthetic
+regressions and native P6 parity.
+
 ## Integrated consistency fixes (2026-09-05)
 
 This section supersedes earlier phase-specific statements below that only
@@ -104,7 +126,8 @@ hour precision, invalid period factors, and source-occurrence isolation. Invalid
 hours/day do not erase a valid workweek; ambiguous calendar identities cannot
 produce a misleading detailed calendar.
 
-Table 15 is a **calendar-working-time distribution of assignment units**.
+Table 15 is a **monthly distribution of assignment units**, normally weighted by
+calendar working time.
 It uses TASK calendar availability for task-dependent activities and the assigned
 RSRC calendar for resource-dependent activities. Actual units include regular and
 overtime quantities, but the monthly distribution is an estimate: it does not
@@ -127,15 +150,26 @@ The table 15 correction:
   active; only a genuinely absent finish on an active activity uses its project's
   data date. A completed allocation requires its assignment actual finish.
 - Rejects positive quantities with invalid/missing/reversed periods or no working
-  availability. Failure discards the complete table so Standard, Programme and
-  Tender validation prevent a partial CSV/bundle from being published.
+  availability for remaining work. Recorded actuals with a valid but entirely
+  nonworking period use elapsed-time monthly shares (`Actual Elapsed Time`), with
+  zero working-hour diagnostics. Equal actual timestamps place units in that
+  instant's month (`Actual Recorded Date`), with zero duration diagnostics.
+  Neither exception permits malformed calendars or repairs reversed dates.
+  Missing/malformed required actual dates and reversed actual periods (including
+  fallback Data Date before actual start) instead produce reportable unallocated
+  actual warnings. Valid remaining work on the same assignment continues.
+  Unrecoverable failures still discard the complete table and prevent publication.
 - Slices periods as adjacent half-open intervals `[start, finish)`, including
   midnight/overnight work. Calendar-day diagnostics count occupied civil dates:
   January 31 00:00 -> February 2 00:00 occupies **two**, not three, calendar days.
 - Calculates cumulative proportional quantities from exact working ticks and
   subtracts successive four-decimal rounded cumulative amounts. Monthly rows
-  therefore sum to the assignment's actual/remaining quantity rounded to the
-  existing four-decimal export precision; a zero-work month receives no remainder.
+  therefore sum to the distributed assignment portion at existing four-decimal
+  export precision. Distributed actual plus companion unallocated actual equals
+  rounded source actual; remaining units reconcile entirely to monthly rows.
+  In working-time mode a zero-work month
+  receives no remainder. The actual-only elapsed fallback uses the same cumulative
+  rounding rule with elapsed rather than working ticks.
   For a quantity of 1 over 1/28/1 continuous working days, the monthly quantities
   are **0.0333, 0.9334, 0.0333**, summing to 1.0000.
 - Divides unrounded working hours by the selected calendar's positive hours/day
@@ -148,6 +182,30 @@ Programme Review consumes the corrected monthly quantities; Tender consumes and
 aggregates them at its existing task/resource/actual/month grain. Contract versions
 remain Programme **3.0** and Tender **1.0**. Table 06's relationship calculation and
 LongestPathVisual are not changed by this table 10/11/15 work.
+
+### Supplemental actual-date diagnostics
+
+Every selected table 15 export includes `XER_DATA_QUALITY.csv`, header-only when
+clean. This avoids leaving stale warnings after a clean rerun. It contains original
+assignment dates/quantity strings, raw project Data Date, source-qualified project,
+task, resource and assignment keys, per-source assignment row ordinal, known rounded
+unallocated actual quantity and the issue reason. Internal source tokens correlate
+rows but are not exported; public namespaces preserve repeated-file independence.
+
+No invalid actual period is silently dropped, assigned to a guessed month, zeroed
+or repaired using activity dates. The monthly numbered schema remains unchanged.
+Only actual-date validation is recoverable; invalid quantities, ambiguous required
+identities/calendars and unsupported or invalid remaining allocations retain their
+existing failure rules. This is not an exhaustive scheduling-quality audit.
+
+Review bundles contain ten numbered tables, companion and manifest (twelve files).
+Manifests retain their columns and publication-complete literals; each source gains
+one `XER_DATA_QUALITY` manifest row with warning count and companion hash. Numbered
+schema versions stay Programme 3.0 / Tender 1.0; the companion is independently
+versioned 1.0. Windows, Web and CLI display completed-with-warnings when its row count
+is nonzero. CLI warnings use stderr and successful publication still returns zero.
+Consumers with a hard-coded eleven-file review envelope must allow this approved
+supplemental file; report/visual repositories were not changed.
 
 ### Table 15 remaining resource curves
 
@@ -172,11 +230,15 @@ assignment**, before any Tender Review task/resource/month aggregation:
 3. No remaining profile and no curve ID preserves the existing uniform spread.
 
 Named curves require `TASK.duration_type = DT_FixedDrtn` or `DT_FixedDUR2`.
-Nonlinear named curves are currently supported only on unstarted activities with
-unstarted assignments. A named linear curve is phase-independent and can also be
-used on active work. A progressed nonlinear curve without an explicit `remain_crv`
-fails with a source/assignment/curve diagnostic: we do not restart its entire shape
-over the remaining period or infer a P6 curve phase from activity percent complete.
+Nonlinear named curves support unstarted activities with unstarted assignments.
+A named linear curve is phase-independent and can also be used on active work.
+A progressed nonlinear curve whose complete remaining interval fits one calendar
+month has an exact total in that bucket, independently of its unknown curve phase.
+This includes an exclusive finish at next month's midnight; curve/calendar
+validation still applies and no intramonth shape is inferred. Across monthly
+buckets, a progressed nonlinear curve without explicit `remain_crv` fails with
+source/assignment/curve context: we do not restart its entire shape over the
+remaining period or infer a P6 curve phase from activity percent complete.
 Manual curve ID 9 without `remain_crv` is also rejected. Opaque `RSRCCURV.curv_data`
 alone is not decoded or substituted for the required numeric definition.
 
@@ -196,10 +258,12 @@ curve retains the same quantity arithmetic as the original uniform calculation.
 calendar measurements, not curve-weighted resource quantities.
 
 Standard's existing `distribution_type` distinguishes `Working Hours`,
-`Resource Curve` and `Remaining Units Profile`; no columns are added. Programme
+`Resource Curve`, `Remaining Units Profile`, `Actual Elapsed Time` and
+`Actual Recorded Date`; no columns are added. Programme
 Review and Tender Review retain their fixed nine-column table 15 contracts and
-existing schema versions. Actual rows remain the previous uniform estimate even
-when `curv_id` or `actual_crv` exists. `target_crv` does not substitute for remaining
+existing schema versions. Actual rows use the working-time estimate or explicitly
+labeled off-calendar/recorded-date cases above, even when `curv_id` or `actual_crv`
+exists. `target_crv` does not substitute for remaining
 or actual units. Tables 06, 10, 11 and LongestPathVisual are unchanged.
 
 Curve errors propagate with table/source/assignment context through Standard,

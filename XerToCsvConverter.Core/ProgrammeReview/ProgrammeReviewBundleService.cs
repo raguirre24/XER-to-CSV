@@ -114,7 +114,7 @@ public sealed class ProgrammeReviewBundleService
 
     /// <summary>
     /// Browser-safe entrypoint that validates and hashes uploaded XER bytes, parses only the retained
-    /// baseline/update history, and returns the complete eleven-file bundle without using the file system.
+    /// baseline/update history, and returns the ten numbered tables, data-quality companion and manifest without using the file system.
     /// </summary>
     public async Task<ProgrammeReviewInMemoryBundleResult> BuildFromXerBytesAsync(
         ProgrammeReviewBundleRequest request,
@@ -247,21 +247,25 @@ public sealed class ProgrammeReviewBundleService
             IReadOnlyList<ProgrammeReviewOutputTable> tables = transformer.Build(cancellationToken);
             var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
 
-            // The manifest must be absent until all ten table files are fully written and hashed.
+            // The manifest must be absent until all numbered tables and the companion are written and hashed.
             foreach (ProgrammeReviewOutputTable table in tables)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string csvPath = Path.Combine(stagingPath, table.Contract.FileName);
                 hashes[table.Contract.FileName] = ProgrammeReviewCsv.WriteTable(csvPath, table, cancellationToken);
             }
+            byte[] dataQualityBytes = XerDataQuality.WriteToBytes(transformer.DataQualityTable, cancellationToken);
+            File.WriteAllBytes(Path.Combine(stagingPath, XerDataQuality.FileName), dataQualityBytes);
+            hashes.Add(XerDataQuality.FileName, ProgrammeReviewCsv.ComputeSha256(dataQualityBytes));
 
             IReadOnlyList<ProgrammeReviewManifestRow> manifestRows =
-                CreateManifestRows(request, tables, hashes);
+                CreateManifestRows(request, tables, transformer.DataQualityTable, hashes);
 
             string manifestPath = Path.Combine(stagingPath, ProgrammeReviewContract.ManifestFileName);
             ProgrammeReviewCsv.WriteManifest(manifestPath, manifestRows, cancellationToken);
 
             string[] expectedFiles = ProgrammeReviewContract.Tables.Select(t => t.FileName)
+                .Append(XerDataQuality.FileName)
                 .Append(ProgrammeReviewContract.ManifestFileName)
                 .Order(StringComparer.Ordinal)
                 .ToArray();
@@ -277,7 +281,10 @@ public sealed class ProgrammeReviewBundleService
                 request.BundleId,
                 finalPath,
                 new ReadOnlyCollection<ProgrammeReviewManifestRow>(manifestRows.ToList()),
-                new ReadOnlyDictionary<string, string>(hashes));
+                new ReadOnlyDictionary<string, string>(hashes))
+            {
+                WarningCount = transformer.DataQualityTable.RowCount
+            };
         }
         catch (Exception originalError)
         {
@@ -317,15 +324,19 @@ public sealed class ProgrammeReviewBundleService
             hashes.Add(table.Contract.FileName, ProgrammeReviewCsv.ComputeSha256(content));
             await Task.Delay(1, cancellationToken).ConfigureAwait(false);
         }
+        byte[] dataQualityBytes = XerDataQuality.WriteToBytes(transformer.DataQualityTable, cancellationToken);
+        files.Add(XerDataQuality.FileName, dataQualityBytes);
+        hashes.Add(XerDataQuality.FileName, ProgrammeReviewCsv.ComputeSha256(dataQualityBytes));
 
         IReadOnlyList<ProgrammeReviewManifestRow> manifestRows =
-            CreateManifestRows(request, tables, hashes);
+            CreateManifestRows(request, tables, transformer.DataQualityTable, hashes);
         files.Add(
             ProgrammeReviewContract.ManifestFileName,
             ProgrammeReviewCsv.WriteManifestToBytes(manifestRows, cancellationToken));
         await Task.Delay(1, cancellationToken).ConfigureAwait(false);
 
         string[] expectedFiles = ProgrammeReviewContract.Tables.Select(t => t.FileName)
+            .Append(XerDataQuality.FileName)
             .Append(ProgrammeReviewContract.ManifestFileName)
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -338,21 +349,31 @@ public sealed class ProgrammeReviewBundleService
             request.BundleId,
             new ReadOnlyDictionary<string, byte[]>(files),
             new ReadOnlyCollection<ProgrammeReviewManifestRow>(manifestRows.ToList()),
-            new ReadOnlyDictionary<string, string>(hashes));
+            new ReadOnlyDictionary<string, string>(hashes))
+        {
+            WarningCount = transformer.DataQualityTable.RowCount
+        };
     }
 
     private static IReadOnlyList<ProgrammeReviewManifestRow> CreateManifestRows(
         ResolvedProgrammeReviewRequest request,
         IReadOnlyList<ProgrammeReviewOutputTable> tables,
+        XerTable dataQuality,
         IReadOnlyDictionary<string, string> hashes)
     {
-        var manifestRows = new List<ProgrammeReviewManifestRow>(request.Snapshots.Count * tables.Count);
+        var manifestRows = new List<ProgrammeReviewManifestRow>(request.Snapshots.Count * (tables.Count + 1));
         foreach (ResolvedProgrammeReviewSnapshot snapshot in request.Snapshots
             .OrderBy(s => s.CanonicalXerFilename, StringComparer.Ordinal))
         {
-            foreach (ProgrammeReviewOutputTable table in tables)
+            var artifacts = tables.Select(table => (
+                table.Contract.TableName,
+                table.Contract.FileName,
+                RowCount: table.Rows.LongCount(row => ReferenceEquals(row.Snapshot, snapshot))))
+                .Append((TableName: XerDataQuality.TableName, FileName: XerDataQuality.FileName,
+                    RowCount: dataQuality.Rows.LongCount(row => string.Equals(
+                        row.SourceFilename, snapshot.OriginalXerFilename, StringComparison.OrdinalIgnoreCase))));
+            foreach (var artifact in artifacts)
             {
-                long sourceRows = table.Rows.LongCount(r => ReferenceEquals(r.Snapshot, snapshot));
                 manifestRows.Add(new ProgrammeReviewManifestRow(
                     ProgrammeReviewContract.SchemaVersion,
                     request.BundleId,
@@ -369,9 +390,9 @@ public sealed class ProgrammeReviewBundleService
                     snapshot.EffectiveUpdateDate,
                     snapshot.DataDate,
                     snapshot.SourceSha256,
-                    table.Contract.TableName,
-                    sourceRows,
-                    hashes[table.Contract.FileName],
+                    artifact.TableName,
+                    artifact.RowCount,
+                    hashes[artifact.FileName],
                     request.ExportedAtUtc));
             }
         }

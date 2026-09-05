@@ -2,7 +2,9 @@
 
 The Programme Review profile is a separate, versioned export path available in the Windows application, web application, CLI, and shared Core API. The existing raw and **Enhanced Power BI** exports remain available and keep their original behaviour.
 
-It creates one full-history local bundle for one project and programme type. The bundle is validated and written to a staging directory first; the final directory only appears after all ten CSV files are complete, their hashes have been calculated, and `XER_CSV_MANIFEST.csv` has been written last.
+It creates one full-history local bundle for one project and programme type. The bundle is validated and written to a staging directory first; the final directory only appears after all ten numbered CSV files and `XER_DATA_QUALITY.csv` are complete, their hashes have been calculated, and `XER_CSV_MANIFEST.csv` has been written last: twelve files in total.
+
+The diagnostic companion is always present, header-only when clean. Invalid actual date periods do not block otherwise valid allocations: unresolved actual quantities and unchanged source dates appear in the companion, while valid remaining work still distributes. Windows, Web and CLI report completion with warnings; CLI exit code remains zero. Manifest `complete` means publication completed, not that the schedule is free of data-quality issues. The manifest contains eleven rows per retained source, including the companion's row count and hash. Numbered schemas and Programme schema version 3.0 are unchanged. See [the warning and reconciliation contract](review/NONBLOCKING_ACTUAL_WARNINGS.md).
 
 ## Use the Windows application
 
@@ -17,7 +19,7 @@ The legacy **Export enhanced Power BI** action remains separate and continues to
 
 1. Add all history XER files and select **Programme Review** under **Export Profile**.
 2. Enter the governed project identity and review each file's snapshot metadata. The editable data date is prefilled from the single `PROJECT[last_recalc_date]` row when it is present and unambiguous. Recognised `BLnn`/`BLnn-A` and `YYMM` tags are suggested from filenames, but an update is never silently relabelled as a baseline.
-3. Choose **Create Programme Review Bundle**. The browser hashes and parses only the retained history, validates the same contract as the Windows/CLI paths, and downloads `<bundle_id>.zip` containing one `<bundle_id>/` folder and exactly eleven files.
+3. Choose **Create Programme Review Bundle**. The browser hashes and parses only the retained history, validates the same contract as the Windows/CLI paths, and downloads `<bundle_id>.zip` containing one `<bundle_id>/` folder and exactly twelve files.
 
 The browser path does not write temporary bundles to the client file system. Large downloads use a streamed browser Blob rather than a base64 data URL. It accepts at most 24 files, 128 MB per file, and 256 MB in total. Uploads are read directly into their retained byte arrays and the core browser entrypoint does not clone the full input history. Histories above 64 MB display a high-memory warning; use a 64-bit desktop browser, keep the tab open, and close other memory-heavy tabs. The Windows app remains the reliable option above the browser ceiling or when browser memory is constrained. Parsing yields cooperatively for progress and cancellation. Some report transformations remain CPU-bound and can briefly pause the tab; cancellation is applied at the next safe checkpoint.
 
@@ -65,7 +67,7 @@ The same workflow is available to application callers through:
 
 - `ProgrammeReviewBundleService.BuildFromXerFilesAsync(...)`
 - `ProgrammeReviewBundleService.BuildFromParsedDataAsync(...)` for a merged `XerDataStore`; each parsed snapshot must include its precomputed `source_sha256`.
-- `ProgrammeReviewBundleService.BuildFromXerBytesAsync(...)` for browser/in-memory inputs; it returns all eleven files without using the file system.
+- `ProgrammeReviewBundleService.BuildFromXerBytesAsync(...)` for browser/in-memory inputs; it returns all twelve files without using the file system.
 - `ProgrammeReviewBundleService.BuildFromParsedDataToMemoryAsync(...)` for callers that already own a parsed data store and need in-memory output.
 
 ## Metadata and selection rules

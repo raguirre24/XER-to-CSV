@@ -58,13 +58,19 @@ public sealed record ProgrammeReviewBundleResult(
     string BundleId,
     string BundlePath,
     IReadOnlyList<ProgrammeReviewManifestRow> ManifestRows,
-    IReadOnlyDictionary<string, string> CsvSha256ByFile);
+    IReadOnlyDictionary<string, string> CsvSha256ByFile)
+{
+    public int WarningCount { get; init; }
+}
 
 public sealed record ProgrammeReviewInMemoryBundleResult(
     string BundleId,
     IReadOnlyDictionary<string, byte[]> Files,
     IReadOnlyList<ProgrammeReviewManifestRow> ManifestRows,
-    IReadOnlyDictionary<string, string> CsvSha256ByFile);
+    IReadOnlyDictionary<string, string> CsvSha256ByFile)
+{
+    public int WarningCount { get; init; }
+}
 
 public sealed class ProgrammeReviewValidationException : InvalidOperationException
 {

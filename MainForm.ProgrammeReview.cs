@@ -25,7 +25,7 @@ public partial class MainForm
         };
         btnExportProgrammeReview.Click += BtnExportProgrammeReview_Click;
         toolTip.SetToolTip(btnExportProgrammeReview,
-            "Create the versioned ten-table Programme Review bundle with an audit manifest");
+            "Create the versioned ten-table Programme Review bundle with a data-quality companion and audit manifest");
         ApplyButtonStyle(btnExportProgrammeReview, UiTheme.Success, UiTheme.Success, Color.White,
             Color.FromArgb(26, 157, 98), Color.FromArgb(21, 112, 70));
         btnExportProgrammeReview.Font = _uiFontBold;
@@ -300,8 +300,12 @@ public partial class MainForm
             stopwatch.Stop();
 
             toolStripProgressBar.Value = 100;
-            string summary = $"Programme Review bundle complete: {result.BundleId}. " +
-                             $"{result.ManifestRows.Count} manifest rows; {stopwatch.Elapsed.TotalSeconds:F2}s.";
+            string completion = result.WarningCount > 0 ? "completed with warnings" : "complete";
+            string summary = $"Programme Review bundle {completion}: {result.BundleId}. " +
+                             $"{result.ManifestRows.Count} manifest rows; {stopwatch.Elapsed.TotalSeconds:F2}s." +
+                             (result.WarningCount > 0
+                                 ? $" {result.WarningCount} data-quality issue(s); see XER_DATA_QUALITY.csv for unallocated actuals and original source values."
+                                 : string.Empty);
             UpdateStatus(summary);
             LogActivity(summary);
             LogActivity("Bundle path: " + result.BundlePath);
@@ -425,16 +429,21 @@ public partial class MainForm
 
     private void ShowProgrammeReviewComplete(ProgrammeReviewBundleResult result)
     {
+        bool hasWarnings = result.WarningCount > 0;
+        string completion = hasWarnings
+            ? $"Programme Review bundle completed with warnings.\n\n" +
+              $"{result.WarningCount} data-quality issue(s). See XER_DATA_QUALITY.csv for unallocated actuals and original source values.\n\n"
+            : "Programme Review bundle created successfully.\n\n";
         DialogResult open = MessageBox.Show(
             this,
-            $"Programme Review bundle created successfully.\n\n" +
+            completion +
             $"Bundle: {result.BundleId}\n" +
             $"Folder: {result.BundlePath}\n" +
             $"Manifest rows: {result.ManifestRows.Count}\n\n" +
             "Open the completed bundle folder?",
-            "Programme Review Export Complete",
+            hasWarnings ? "Programme Review Export Completed with Warnings" : "Programme Review Export Complete",
             MessageBoxButtons.YesNo,
-            MessageBoxIcon.Information);
+            hasWarnings ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
         if (open != DialogResult.Yes) return;
 
         try

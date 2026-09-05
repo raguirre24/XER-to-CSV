@@ -119,6 +119,138 @@ public sealed class ResourceCurveProfileTests
             row => row.TableName == EnhancedTableNames.XerResourceDist15).RowCount);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Recorded_actual_fallbacks_preserve_exact_units_through_both_fixed_review_projections(
+        bool pointActual)
+    {
+        const string actualStart = "2026-01-31 12:00"; // Saturday.
+        string actualFinish = pointActual ? actualStart : "2026-02-01 12:00"; // Sunday.
+        var exports = await ExportAllProfiles(ActualStore);
+        decimal[] expected = pointActual ? [23.4567m] : [11.7284m, 11.7283m];
+        string[] months = pointActual ? ["2026-01-01"] : ["2026-01-01", "2026-02-01"];
+
+        foreach (var pair in exports)
+        {
+            IReadOnlyList<string[]> csv = ReadCsv(pair.Value);
+            Assert.Equal(pair.Key == "standard" ? StandardHeaders : ProfileHeaders, string.Join(',', csv[0]));
+            Dictionary<string, string>[] rows = Records(csv);
+            Assert.Equal(months, rows.Select(row => row["distribution_month"]));
+            Assert.Equal(expected, Quantities(rows));
+            Assert.Equal(23.4567m, Quantities(rows).Sum());
+            Assert.All(rows, row => Assert.Equal(pair.Key == "standard" ? "1" : "true", row["is_actual"]));
+            if (pair.Key == "standard")
+            {
+                Assert.All(rows, row =>
+                {
+                    Assert.Equal(pointActual ? "Actual Recorded Date" : "Actual Elapsed Time", row["distribution_type"]);
+                    Assert.Equal("0.00", row["month_working_hours"]);
+                    Assert.Equal("0.00", row["total_working_hours"]);
+                    Assert.Equal("0.00", row["month_working_days"]);
+                    Assert.Equal("0.00", row["total_working_days"]);
+                });
+            }
+            else
+            {
+                Assert.All(rows, row =>
+                {
+                    Assert.Equal(9, row.Count);
+                    Assert.Equal(pair.Key == "programme" ? "J123" : "J5001", row["ProjectCode"]);
+                    Assert.StartsWith(pair.Key == "programme" ? "CSV::J123::C::BL01::" : "CSV::J5001::TENDER::20260905::",
+                        row["task_id_key"]);
+                });
+            }
+        }
+
+        XerDataStore ActualStore(string source, string projectCode)
+        {
+            XerDataStore store = Store(source, projectCode, "DT_FixedDrtn", new Assignment("A1", "FRONT", "0"));
+            SetField(store, "PROJECT", "last_recalc_date", "2026-02-02");
+            SetField(store, "TASK", "status_code", "TK_Complete");
+            SetField(store, "TASK", "act_start_date", actualStart);
+            SetField(store, "TASK", "act_end_date", actualFinish);
+            SetField(store, "TASK", "remain_drtn_hr_cnt", "0");
+            SetField(store, "TASK", "act_work_qty", "23.4567");
+            SetField(store, "TASK", "remain_work_qty", "0");
+            SetField(store, "CALENDAR", "day_hr_cnt", "8");
+            SetField(store, "CALENDAR", "clndr_data", P6TestCalendars.WorkWeek());
+            SetField(store, "TASKRSRC", "act_reg_qty", "20.0001");
+            SetField(store, "TASKRSRC", "act_ot_qty", "3.4566");
+            SetField(store, "TASKRSRC", "act_start_date", actualStart);
+            SetField(store, "TASKRSRC", "act_end_date", actualFinish);
+            return store;
+        }
+    }
+
+    [Theory]
+    [InlineData("FRONT", "2026-02-20 00:00")]
+    [InlineData("BACK", "2026-03-01 00:00")]
+    public async Task Active_nonlinear_curve_with_one_monthly_bucket_preserves_all_20_units_in_review_profiles(
+        string curveId, string finish)
+    {
+        var exports = await ExportAllProfiles(ActiveStore);
+
+        foreach (var pair in exports)
+        {
+            IReadOnlyList<string[]> csv = ReadCsv(pair.Value);
+            Assert.Equal(pair.Key == "standard" ? StandardHeaders : ProfileHeaders, string.Join(',', csv[0]));
+            Dictionary<string, string> row = Assert.Single(Records(csv));
+            Assert.Equal("2026-02-01", row["distribution_month"]);
+            Assert.Equal(20m, Assert.Single(Quantities([row])));
+            Assert.Equal(pair.Key == "standard" ? "0" : "false", row["is_actual"]);
+            if (pair.Key == "standard") Assert.Equal("Resource Curve", row["distribution_type"]);
+            else Assert.Equal(9, row.Count);
+        }
+
+        XerDataStore ActiveStore(string source, string projectCode)
+        {
+            XerDataStore store = Store(source, projectCode, "DT_FixedDrtn", new Assignment("A1", curveId, "20"));
+            SetField(store, "PROJECT", "last_recalc_date", "2026-02-02");
+            SetField(store, "TASK", "status_code", "TK_Active");
+            SetField(store, "TASK", "act_start_date", "2026-01-31 00:00");
+            SetField(store, "TASKRSRC", "act_start_date", "2026-01-31 00:00");
+            SetField(store, "TASK", "remain_work_qty", "20");
+            foreach (string name in new[] { "TASK", "TASKRSRC" })
+            {
+                SetField(store, name, "restart_date", "2026-02-02 00:00");
+                SetField(store, name, "reend_date", finish);
+            }
+            return store;
+        }
+    }
+
+    private static async Task<IReadOnlyDictionary<string, byte[]>> ExportAllProfiles(
+        Func<string, string, XerDataStore> createStore)
+    {
+        Dictionary<string, byte[]> standard = await new ProcessingService().ExportTablesToMemoryAsync(
+            createStore("standard-source-occurrence", "J5001"), [EnhancedTableNames.XerResourceDist15],
+            null, CancellationToken.None);
+        ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
+            "resource fallback baseline.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-02-28", "2026-02-02");
+        ProgrammeReviewInMemoryBundleResult programme = await new ProgrammeReviewBundleService()
+            .BuildFromParsedDataToMemoryAsync(createStore(baseline.OriginalXerFilename, "J123"),
+                ProgrammeReviewNamingTests.Request([baseline]));
+        TenderReviewSource source = TenderReviewNamingTests.Source(0, "resource fallback.xer", "2026-09-05");
+        TenderReviewInMemoryBundleResult tender = await new TenderReviewBundleService()
+            .BuildFromParsedDataToMemoryAsync(createStore(source.SourceToken, "J5001"),
+                TenderReviewNamingTests.Request([source]));
+        Assert.All(programme.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
+        Assert.All(tender.ManifestRows, row => Assert.Equal("1.0", row.SchemaVersion));
+        return new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["standard"] = standard[EnhancedTableNames.XerResourceDist15],
+            ["programme"] = programme.Files[DistributionFile],
+            ["tender"] = tender.Files[DistributionFile]
+        };
+    }
+
+    private static void SetField(XerDataStore store, string tableName, string fieldName, string value)
+    {
+        XerTable table = store.GetTable(tableName)!;
+        Assert.Single(table.Rows).Fields[table.FieldIndexes[fieldName]] = value;
+    }
+
     [Fact]
     public async Task Repeated_curve_and_assignment_ids_resolve_by_source_occurrence_not_filename()
     {

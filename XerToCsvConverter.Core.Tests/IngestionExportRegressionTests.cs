@@ -163,8 +163,11 @@ public sealed class IngestionExportRegressionTests
         Dictionary<string, byte[]> result = await new ProcessingService().ExportTablesToMemoryAsync(store,
             ["TASKRSRC", "13_XER_TASKRSRC", "15_XER_RESOURCE_DISTRIBUTION"], null, CancellationToken.None);
 
-        Assert.Equal(3, result.Count);
+        Assert.Equal(new[] { "13_XER_TASKRSRC", "15_XER_RESOURCE_DISTRIBUTION", "TASKRSRC", XerDataQuality.TableName },
+            result.Keys.OrderBy(name => name, StringComparer.Ordinal));
         Assert.All(result.Values, bytes => Assert.Single(CsvLines(bytes)));
+        Assert.Equal(string.Join(',', XerDataQuality.Columns.Append("FileName")),
+            Assert.Single(CsvLines(result[XerDataQuality.TableName])));
         Assert.Contains("monthly_quantity", Encoding.UTF8.GetString(result["15_XER_RESOURCE_DISTRIBUTION"]));
         Assert.Contains("rsrc_id_key,task_id_key,MonthUpdate,FileName", Encoding.UTF8.GetString(result["13_XER_TASKRSRC"]));
     }
@@ -189,7 +192,9 @@ public sealed class IngestionExportRegressionTests
         var service = new ProcessingService();
         Dictionary<string, byte[]> full = await service.ExportTablesToMemoryAsync(populated, selected, null, CancellationToken.None);
         Dictionary<string, byte[]> headers = await service.ExportTablesToMemoryAsync(empty, selected, null, CancellationToken.None);
-        Assert.Equal(14, headers.Count);
+        Assert.Equal(15, headers.Count); // Fourteen numbered tables plus the current data-quality companion.
+        Assert.Equal(CsvLines(full[XerDataQuality.TableName])[0],
+            Assert.Single(CsvLines(headers[XerDataQuality.TableName])));
         foreach (string name in selected)
             Assert.Equal(CsvLines(full[name])[0], Assert.Single(CsvLines(headers[name])));
     }

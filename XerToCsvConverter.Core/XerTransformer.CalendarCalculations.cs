@@ -18,6 +18,7 @@ public partial class XerTransformer
 
     public XerTable? Create11XerCalendarDetailed()
     {
+        ClearGenerationFailure(EnhancedTableNames.XerCalendarDetailed11);
         if (!IsTableValid(_dataStore.GetTable(TableNames.Calendar))) return null;
         try
         {
@@ -65,6 +66,7 @@ public partial class XerTransformer
         catch (InvalidDataException ex)
         {
             Console.WriteLine($"Error creating {EnhancedTableNames.XerCalendarDetailed11}: {ex.Message}");
+            RecordGenerationFailure(EnhancedTableNames.XerCalendarDetailed11, ex);
             return null;
         }
     }

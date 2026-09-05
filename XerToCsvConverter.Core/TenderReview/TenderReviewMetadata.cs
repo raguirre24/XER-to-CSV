@@ -55,13 +55,19 @@ public sealed record TenderReviewBundleResult(
     string BundleId,
     string BundlePath,
     IReadOnlyList<TenderReviewManifestRow> ManifestRows,
-    IReadOnlyDictionary<string, string> CsvSha256ByFile);
+    IReadOnlyDictionary<string, string> CsvSha256ByFile)
+{
+    public int WarningCount { get; init; }
+}
 
 public sealed record TenderReviewInMemoryBundleResult(
     string BundleId,
     IReadOnlyDictionary<string, byte[]> Files,
     IReadOnlyList<TenderReviewManifestRow> ManifestRows,
-    IReadOnlyDictionary<string, string> CsvSha256ByFile);
+    IReadOnlyDictionary<string, string> CsvSha256ByFile)
+{
+    public int WarningCount { get; init; }
+}
 
 public sealed class TenderReviewValidationException : InvalidOperationException
 {

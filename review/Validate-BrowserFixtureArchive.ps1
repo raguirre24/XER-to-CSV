@@ -13,6 +13,7 @@ $archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $Archiv
 try {
     $tables = @{}
     $hashes = @{}
+    $headers = @{}
     foreach ($entry in $archive.Entries) {
         if (-not $entry.Name.EndsWith('.csv', [StringComparison]::Ordinal)) { throw "Unexpected entry: $($entry.FullName)" }
         $tableName = [IO.Path]::GetFileNameWithoutExtension($entry.Name)
@@ -24,16 +25,21 @@ try {
         $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes).TrimStart([char]0xFEFF)
         [object[]]$rows = ConvertFrom-Csv -InputObject $text
         $tables[$tableName] = $rows
+        $headers[$tableName] = ($text -split '\r?\n', 2)[0]
         $hashes[$tableName] = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
     }
 
     $expected = @('01_XER_TASK','02_XER_PROJECT','03_XER_PROJWBS','06_XER_PREDECESSOR',
-        '07_XER_ACTVTYPE','08_XER_ACTVCODE','09_XER_TASKACTV','10_XER_CALENDAR','12_XER_RSRC','15_XER_RESOURCE_DISTRIBUTION')
+        '07_XER_ACTVTYPE','08_XER_ACTVCODE','09_XER_TASKACTV','10_XER_CALENDAR','12_XER_RSRC','15_XER_RESOURCE_DISTRIBUTION',
+        'XER_DATA_QUALITY')
     if ($Profile -eq 'Standard') {
         $expected += @('04_XER_BASELINE','11_XER_CALENDAR_DETAILED','13_XER_TASKRSRC','14_XER_UMEASURE')
     } else { $expected += 'XER_CSV_MANIFEST' }
     if ($tables.Count -ne $expected.Count) { throw "Unexpected archive file count: $($tables.Count)" }
     foreach ($name in $expected) { if (-not $tables.ContainsKey($name)) { throw "Missing CSV: $name" } }
+    $dataQualityHeader = 'diagnostic_schema_version,severity,issue_code,table_name,source_namespace,source_row_number,proj_id_key,task_id_key,rsrc_id_key,taskrsrc_id_key,taskrsrc_id,task_code,rsrc_name,rsrc_type,unit,status_code,act_start_date,act_end_date,project_data_date,act_reg_qty,act_ot_qty,unallocated_actual_quantity,message,FileName'
+    if ($headers['XER_DATA_QUALITY'] -cne $dataQualityHeader) { throw 'Data-quality companion schema changed.' }
+    if ($tables['XER_DATA_QUALITY'].Count -ne 0) { throw 'The clean synthetic fixture must have a header-only data-quality companion.' }
 
     foreach ($pair in @(@('01_XER_TASK',2),@('02_XER_PROJECT',1),@('06_XER_PREDECESSOR',1),@('10_XER_CALENDAR',1),@('15_XER_RESOURCE_DISTRIBUTION',1))) {
         if ($tables[$pair[0]].Count -ne ([int]$pair[1] * $SourceCount)) { throw "Unexpected row count: $($pair[0])" }
@@ -59,7 +65,9 @@ try {
         }
     } else {
         $manifest = $tables['XER_CSV_MANIFEST']
-        if ($manifest.Count -ne (10 * $SourceCount)) { throw 'Unexpected manifest coverage.' }
+        if ($manifest.Count -ne (11 * $SourceCount)) { throw 'Unexpected manifest coverage.' }
+        $dataQualityManifest = @($manifest | Where-Object table_name -CEQ 'XER_DATA_QUALITY')
+        if ($dataQualityManifest.Count -ne $SourceCount) { throw 'Missing per-source data-quality manifest coverage.' }
         foreach ($row in $manifest) {
             if ($row.csv_sha256 -cne $hashes[$row.table_name]) { throw "Manifest CSV hash mismatch: $($row.table_name)" }
             if ($row.source_sha256 -cne $fixtureHash) { throw 'Manifest source hash mismatch.' }
@@ -84,5 +92,5 @@ try {
             if (@($manifest | ForEach-Object status_date | Sort-Object -Unique).Count -ne $SourceCount) { throw 'Tender stage identity collapsed.' }
         }
     }
-    Write-Output "Passed $Profile saved archive: $($tables.Count) CSVs, $SourceCount source occurrence(s), unique activity keys, valid relationships and $quantity resource units; review manifest hashes/counts checked when present."
+    Write-Output "Passed $Profile saved archive: $($tables.Count) CSVs, $SourceCount source occurrence(s), unique activity keys, valid relationships and $quantity resource units; header-only data-quality companion checked; review manifest hashes/counts checked when present."
 } finally { $archive.Dispose() }

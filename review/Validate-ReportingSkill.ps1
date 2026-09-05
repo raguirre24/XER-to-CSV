@@ -36,6 +36,11 @@ foreach ($profile in $profiles) {
     }
 }
 
+$dictionaryText = Get-Content -LiteralPath (Join-Path $skillRoot 'references/table-dictionary.md') -Raw
+$diagnosticHeader = [regex]::Match($dictionaryText, '(?m)^diagnostic_schema_version,[^\r\n]+').Value
+$actualDiagnosticHeader = (@([XerToCsvConverter.XerDataQuality]::Columns) + 'FileName') -join ','
+if ($diagnosticHeader -cne $actualDiagnosticHeader) { throw 'Documented diagnostic companion header mismatch.' }
+
 $linkCount = 0
 $files = Get-ChildItem -LiteralPath $skillRoot -Recurse -File
 foreach ($file in $files) {
@@ -52,4 +57,4 @@ foreach ($file in $files) {
         $linkCount++
     }
 }
-Write-Output "Passed: $checkedContracts exact review table contracts, $linkCount relative reference links, and skill whitespace."
+Write-Output "Passed: $checkedContracts exact numbered review table contracts, diagnostic companion header, $linkCount relative reference links, and skill whitespace."

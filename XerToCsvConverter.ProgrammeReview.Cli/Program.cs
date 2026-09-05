@@ -65,6 +65,9 @@ static async Task<int> RunAsync(string[] args)
             var service = new ProgrammeReviewBundleService();
             ProgrammeReviewBundleResult result = await service.BuildFromXerFilesAsync(
                 request, Path.GetFullPath(outputRoot), progress, cancellation.Token);
+            if (result.WarningCount > 0)
+                Console.Error.WriteLine($"Programme Review bundle completed with warnings: {result.WarningCount} data-quality issue(s). " +
+                                        "See XER_DATA_QUALITY.csv in the bundle for unallocated actuals and original source values.");
             Console.WriteLine(result.BundlePath);
             return 0;
         }

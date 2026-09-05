@@ -315,7 +315,7 @@ public sealed class ResourceCalendarCalculationTests
     [InlineData("TK_Active", "act_end_date", "2025-12-31 08:00:00")]
     [InlineData("TK_Complete", "act_end_date", "")]
     [InlineData("TK_Complete", "act_end_date", "not-a-date")]
-    public void Positive_actual_quantity_with_invalid_assignment_period_fails_export(
+    public void Positive_actual_quantity_with_invalid_assignment_period_is_preserved_as_unallocated(
         string status, string field, string value)
     {
         XerDataStore store = ActualStore(status, "8", "0",
@@ -323,7 +323,13 @@ public sealed class ResourceCalendarCalculationTests
         SetField(store, "PROJECT", "last_recalc_date", "2026-01-02 16:00:00");
         SetField(store, "TASKRSRC", field, value);
 
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        var transformer = new XerTransformer(store);
+        XerTable table = Assert.IsType<XerTable>(transformer.Create15XerResourceDistribution());
+        Assert.Empty(table.Rows);
+        XerTable diagnostics = transformer.CreateDataQualityTable();
+        DataRow issue = Assert.Single(diagnostics.Rows);
+        Assert.Equal("8.0000", issue.Fields[diagnostics.FieldIndexes["unallocated_actual_quantity"]]);
+        Assert.Equal(value, issue.Fields[diagnostics.FieldIndexes[field]]);
     }
 
     [Fact]
@@ -333,7 +339,13 @@ public sealed class ResourceCalendarCalculationTests
             "2026-01-01 08:00:00", "");
         SetField(store, "PROJECT", "last_recalc_date", "");
 
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        var transformer = new XerTransformer(store);
+        XerTable table = Assert.IsType<XerTable>(transformer.Create15XerResourceDistribution());
+        Assert.Empty(table.Rows);
+        XerTable diagnostics = transformer.CreateDataQualityTable();
+        DataRow issue = Assert.Single(diagnostics.Rows);
+        Assert.Equal("8.0000", issue.Fields[diagnostics.FieldIndexes["unallocated_actual_quantity"]]);
+        Assert.Equal("", issue.Fields[diagnostics.FieldIndexes["project_data_date"]]);
     }
 
     [Fact]
@@ -533,6 +545,101 @@ public sealed class ResourceCalendarCalculationTests
             row => row["distribution_month"] == "2026-02-01");
         Assert.Equal("0.00", february["month_working_hours"]);
         Assert.Equal("0.0000", february["monthly_quantity"]);
+    }
+
+    [Fact]
+    public void Recorded_actuals_on_a_nonworking_Sunday_retain_units_without_inventing_hours()
+    {
+        XerDataStore store = ActualStore("TK_Complete", "1", "0.25",
+            "2024-06-30 08:00:00", "2024-06-30 17:00:00");
+        SetField(store, "CALENDAR", "clndr_data", P6TestCalendars.WorkWeek());
+
+        var table = Assert.IsType<XerTable>(new XerTransformer(store).Create15XerResourceDistribution());
+        var row = Assert.Single(Records(table));
+        Assert.Equal("2024-06-01", row["distribution_month"]);
+        Assert.Equal("1.2500", row["monthly_quantity"]);
+        Assert.Equal("Actual Elapsed Time", row["distribution_type"]);
+        Assert.Equal("0.00", row["month_working_hours"]);
+        Assert.Equal("0.00", row["total_working_hours"]);
+        Assert.Equal("0.00", row["month_working_days"]);
+        Assert.Equal("0.00", row["total_working_days"]);
+        Assert.Equal("1", row["total_calendar_days"]);
+    }
+
+    [Theory]
+    [InlineData("2026-02-01 00:00:00")]
+    [InlineData("2026-02-01 08:00:00")]
+    [InlineData("2199-12-31 23:59:59")]
+    public void Instant_recorded_actuals_belong_to_their_recorded_month_with_zero_duration(string instant)
+    {
+        XerDataStore store = ActualStore("TK_Complete", "0.00011", "0", instant, instant);
+        var table = Assert.IsType<XerTable>(new XerTransformer(store).Create15XerResourceDistribution());
+        var row = Assert.Single(Records(table));
+        Assert.Equal(instant[..7] + "-01", row["distribution_month"]);
+        Assert.Equal("0.0001", row["monthly_quantity"]);
+        Assert.Equal("Actual Recorded Date", row["distribution_type"]);
+        Assert.Equal(instant, row["Start"]);
+        Assert.Equal(instant, row["Finish"]);
+        Assert.Equal(instant, row["month_start_date"]);
+        Assert.Equal(instant, row["month_end_date"]);
+        Assert.Equal("0.00", row["total_working_hours"]);
+        Assert.Equal("0", row["month_calendar_days"]);
+        Assert.Equal("0", row["total_calendar_days"]);
+    }
+
+    [Theory]
+    [InlineData("1", "0.3333", "0.6667")]
+    [InlineData("0.0001", "0.0000", "0.0001")]
+    public void Entirely_nonworking_actual_period_uses_elapsed_weights_and_conserves_rounded_units(
+        string quantity, string januaryUnits, string februaryUnits)
+    {
+        // Friday 18:00 to Saturday noon: 6 elapsed hours in January, 12 in February,
+        // but no scheduled work anywhere in the complete actual period.
+        XerDataStore store = ActualStore("TK_Complete", quantity, "0",
+            "2025-01-31 18:00:00", "2025-02-01 12:00:00");
+        SetField(store, "CALENDAR", "clndr_data", P6TestCalendars.WorkWeek());
+        var table = Assert.IsType<XerTable>(new XerTransformer(store).Create15XerResourceDistribution());
+        var rows = Records(table);
+        Assert.Equal(new[] { januaryUnits, februaryUnits }, rows.Select(row => row["monthly_quantity"]));
+        Assert.All(rows, row =>
+        {
+            Assert.Equal("Actual Elapsed Time", row["distribution_type"]);
+            Assert.Equal("0.00", row["month_working_hours"]);
+            Assert.Equal("0.00", row["total_working_hours"]);
+            Assert.Equal("2", row["total_calendar_days"]);
+        });
+    }
+
+    [Fact]
+    public void Nonworking_actual_period_ending_at_month_boundary_does_not_allocate_next_month()
+    {
+        XerDataStore store = ActualStore("TK_Complete", "7", "0",
+            "2025-01-31 18:00:00", "2025-02-01 00:00:00");
+        SetField(store, "CALENDAR", "clndr_data", P6TestCalendars.WorkWeek());
+        var table = Assert.IsType<XerTable>(new XerTransformer(store).Create15XerResourceDistribution());
+        var row = Assert.Single(Records(table));
+        Assert.Equal("2025-01-01", row["distribution_month"]);
+        Assert.Equal("7.0000", row["monthly_quantity"]);
+        Assert.Equal("1", row["total_calendar_days"]);
+    }
+
+    [Theory]
+    [InlineData("2024-06-30 08:00:00", "2024-06-30 17:00:00")]
+    [InlineData("2024-06-30 08:00:00", "2024-06-30 08:00:00")]
+    public void Actual_fallback_never_allows_remaining_units_without_working_time(string start, string finish)
+    {
+        XerDataStore store = BuildStore("TT_Task", "C1", "C1", "1", start, finish,
+            new CalendarInput("C1", "8", P6TestCalendars.WorkWeek()));
+        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+    }
+
+    [Fact]
+    public void Actual_fallback_does_not_hide_a_malformed_calendar_even_for_an_instant()
+    {
+        XerDataStore store = ActualStore("TK_Complete", "1", "0",
+            "2026-01-01 08:00:00", "2026-01-01 08:00:00");
+        SetField(store, "CALENDAR", "clndr_data", "malformed");
+        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
     }
 
     private static XerDataStore MultiProjectStore(bool reverseTaskOrder)

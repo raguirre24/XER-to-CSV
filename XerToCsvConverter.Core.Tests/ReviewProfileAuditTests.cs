@@ -155,7 +155,14 @@ public sealed class ReviewProfileAuditTests
         if (empty)
         {
             IReadOnlyDictionary<string, byte[]> files = await Export(store, tender);
-            Assert.Equal(11, files.Count);
+            IEnumerable<string> expectedFiles = tender
+                ? TenderReviewContract.Tables.Select(table => table.FileName).Append(TenderReviewContract.ManifestFileName)
+                : ProgrammeReviewContract.Tables.Select(table => table.FileName).Append(ProgrammeReviewContract.ManifestFileName);
+            Assert.Equal(expectedFiles.Append(XerDataQuality.FileName).OrderBy(name => name, StringComparer.Ordinal),
+                files.Keys.OrderBy(name => name, StringComparer.Ordinal));
+            Assert.Empty(Rows(files[XerDataQuality.FileName]));
+            Assert.Equal(string.Join(',', XerDataQuality.Columns.Append("FileName")),
+                Encoding.UTF8.GetString(files[XerDataQuality.FileName]).TrimStart('\uFEFF').Trim());
             Assert.Empty(Rows(files["12_XER_RSRC.csv"]));
             Assert.Equal("rsrc_id_key,def_qty_per_hr", Encoding.UTF8.GetString(files["12_XER_RSRC.csv"])
                 .TrimStart('\uFEFF').Trim());
@@ -356,7 +363,13 @@ public sealed class ReviewProfileAuditTests
                 ["audit.xer"] = retainedBytes,
                 [discardedSource] = discardedBytes
             });
-        Assert.Equal(11, parsed.Files.Count);
+        Assert.Equal(ProgrammeReviewContract.Tables.Select(table => table.FileName)
+                .Append(ProgrammeReviewContract.ManifestFileName).Append(XerDataQuality.FileName)
+                .OrderBy(name => name, StringComparer.Ordinal),
+            parsed.Files.Keys.OrderBy(name => name, StringComparer.Ordinal));
+        Assert.Empty(Rows(parsed.Files[XerDataQuality.FileName]));
+        Assert.Equal(string.Join(',', XerDataQuality.Columns.Append("FileName")),
+            Encoding.UTF8.GetString(parsed.Files[XerDataQuality.FileName]).TrimStart('\uFEFF').Trim());
         Dictionary<string, string> allocation = Assert.Single(Rows(parsed.Files["15_XER_RESOURCE_DISTRIBUTION.csv"]));
         Assert.Equal("8", allocation["monthly_quantity"]);
         Assert.Equal("Retained resource", allocation["rsrc_name"]);

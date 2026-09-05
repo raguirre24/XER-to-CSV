@@ -24,12 +24,13 @@ public sealed class TenderReviewBundleServiceTests
         TenderReviewInMemoryBundleResult result = await new TenderReviewBundleService()
             .BuildFromParsedDataToMemoryAsync(store, request);
 
-        Assert.Equal(11, result.Files.Count);
+        Assert.Equal(12, result.Files.Count);
         Assert.Equal(
             TenderReviewContract.Tables.Select(table => table.FileName)
+                .Append(XerDataQuality.FileName)
                 .Append(TenderReviewContract.ManifestFileName).Order(StringComparer.Ordinal),
             result.Files.Keys.Order(StringComparer.Ordinal));
-        Assert.Equal(20, result.ManifestRows.Count);
+        Assert.Equal(22, result.ManifestRows.Count);
         Assert.All(result.ManifestRows, row =>
         {
             Assert.Equal("1.0", row.SchemaVersion);
@@ -132,7 +133,7 @@ public sealed class TenderReviewBundleServiceTests
             Assert.Equal(2, disk.ManifestRows.Select(row => row.CanonicalXerFilename).Distinct().Count());
             Assert.Single(disk.ManifestRows.Select(row => row.OriginalXerFilename).Distinct());
             Assert.Single(disk.ManifestRows.Select(row => row.SourceSha256).Distinct());
-            Assert.Equal(20, disk.ManifestRows.Count);
+            Assert.Equal(22, disk.ManifestRows.Count);
             foreach (string fileName in memory.Files.Keys)
                 Assert.Equal(memory.Files[fileName], File.ReadAllBytes(Path.Combine(disk.BundlePath, fileName)));
 
@@ -554,7 +555,7 @@ public sealed class TenderReviewBundleServiceTests
         });
         Assert.Equal("clndr_id_key,clndr_name", string.Join(',', ReadCsv(result.Files["10_XER_CALENDAR.csv"])[0]));
         Assert.DoesNotContain("11_XER_CALENDAR_DETAILED.csv", result.Files.Keys);
-        Assert.Equal(11, result.Files.Count);
+        Assert.Equal(12, result.Files.Count);
         Assert.All(result.ManifestRows, row => Assert.Equal("1.0", row.SchemaVersion));
         Assert.Equal(3, result.ManifestRows.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
     }

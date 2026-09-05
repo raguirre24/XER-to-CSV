@@ -85,11 +85,11 @@
                     </label>
                     <label class="profile-option @(_exportProfile == ExportProfile.ProgrammeReview ? "selected" : "")">
                         <InputRadio TValue="ExportProfile" Value="@ExportProfile.ProgrammeReview" disabled="@_isProcessing" />
-                        <span><strong>Programme Review</strong><small>Validated full-history, ten-table report bundle with manifest.</small></span>
+                        <span><strong>Programme Review</strong><small>Validated full-history, ten-table report bundle with data-quality companion and manifest.</small></span>
                     </label>
                     <label class="profile-option @(_exportProfile == ExportProfile.TenderReview ? "selected" : "")">
                         <InputRadio TValue="ExportProfile" Value="@ExportProfile.TenderReview" disabled="@_isProcessing" />
-                        <span><strong>Tender Review</strong><small>Validated tender-stage, ten-table report bundle with editable status dates.</small></span>
+                        <span><strong>Tender Review</strong><small>Validated tender-stage, ten-table report bundle with editable status dates, data-quality companion and manifest.</small></span>
                     </label>
                 </div>
             </InputRadioGroup>
@@ -283,6 +283,11 @@
         <div class="validation-banner" role="alert">@_validationMessage</div>
     }
 
+    @if (!string.IsNullOrWhiteSpace(_exportWarningMessage))
+    {
+        <div class="warning-banner" role="status">@_exportWarningMessage</div>
+    }
+
     @if (_isProcessing || _progressPercent > 0)
     {
         <div class="progress-section" role="progressbar" aria-valuenow="@_progressPercent" aria-valuemin="0" aria-valuemax="100"
@@ -384,6 +389,7 @@
     private string _tableFilter = string.Empty;
     private string _activityLog = string.Empty;
     private string _validationMessage = string.Empty;
+    private string _exportWarningMessage = string.Empty;
     private string _projectCode = string.Empty;
     private string _projectName = string.Empty;
     private string _programmeType = string.Empty;
@@ -544,6 +550,7 @@
         _progressPercent = 0;
         _progressMessage = string.Empty;
         _validationMessage = string.Empty;
+        _exportWarningMessage = string.Empty;
         if (!keepLog) _activityLog = string.Empty;
     }
 
@@ -651,17 +658,19 @@
             StateHasChanged();
             await _downloadService!.DownloadFileAsync(
                 $"{bundle.BundleId}.zip", zipStream, "application/zip", _cts.Token);
-            _progressMessage = "Programme Review bundle complete.";
+            SetExportCompletion("Programme Review bundle", bundle.WarningCount);
             _progressPercent = 100;
             HashSet<string> retainedNames = bundle.ManifestRows
                 .Select(row => row.OriginalXerFilename)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (UploadedFile file in _uploadedFiles)
-                file.Status = retainedNames.Contains(file.Name) ? "Success" : "Skipped";
-            LogActivity($"Programme Review bundle complete: {bundle.BundleId}");
+                file.Status = retainedNames.Contains(file.Name)
+                    ? (bundle.WarningCount > 0 ? "Warnings" : "Success")
+                    : "Skipped";
+            LogActivity($"Bundle: {bundle.BundleId}");
             LogActivity($"Retained {retainedNames.Count} of {_uploadedFiles.Count} supplied history snapshots; " +
                         $"{_uploadedFiles.Count - retainedNames.Count} superseded/pre-anchor snapshot(s) were skipped.");
-            LogActivity("Sent 10 report CSV files plus XER_CSV_MANIFEST.csv to the browser download manager. Check browser downloads for saved-file delivery.");
+            LogActivity("Sent 10 report CSV files plus XER_DATA_QUALITY.csv and XER_CSV_MANIFEST.csv to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Programme Review bundle generation was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Programme Review bundle failed: {ex.Message}"); }
@@ -730,13 +739,13 @@
             StateHasChanged();
             await _downloadService!.DownloadFileAsync(
                 $"{bundle.BundleId}.zip", zipStream, "application/zip", _cts.Token);
-            _progressMessage = "Tender Review bundle complete.";
+            SetExportCompletion("Tender Review bundle", bundle.WarningCount);
             _progressPercent = 100;
             foreach (UploadedFile file in stagedFiles)
-                file.Status = "Success";
-            LogActivity($"Tender Review bundle complete: {bundle.BundleId}");
+                file.Status = bundle.WarningCount > 0 ? "Warnings" : "Success";
+            LogActivity($"Bundle: {bundle.BundleId}");
             LogActivity($"Exported {stagedFiles.Length} ordered Tender stage(s). Repeated source names and hashes remain distinct by stage identity.");
-            LogActivity("Sent 10 report CSV files plus XER_CSV_MANIFEST.csv to the browser download manager. Check browser downloads for saved-file delivery.");
+            LogActivity("Sent 10 report CSV files plus XER_DATA_QUALITY.csv and XER_CSV_MANIFEST.csv to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Tender Review bundle generation was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Tender Review bundle failed: {ex.Message}"); }
@@ -922,6 +931,7 @@
         _isProcessing = true;
         _cts = new CancellationTokenSource();
         _validationMessage = string.Empty;
+        _exportWarningMessage = string.Empty;
         _progressPercent = 0;
         _progressMessage = message;
         _activityLog = string.Empty;
@@ -944,6 +954,18 @@
     {
         _validationMessage = message;
         LogActivity(message);
+    }
+
+    private void SetExportCompletion(string subject, int warningCount)
+    {
+        _progressMessage = warningCount > 0
+            ? $"{subject} completed with warnings."
+            : $"{subject} complete.";
+        _exportWarningMessage = warningCount > 0
+            ? $"{_progressMessage} {warningCount} data-quality issue(s). See XER_DATA_QUALITY.csv in the download " +
+              "for unallocated actuals and original source values. Check browser downloads for saved-file delivery."
+            : string.Empty;
+        LogActivity(warningCount > 0 ? _exportWarningMessage : _progressMessage);
     }
 
     private void AddEnhancedTableNames()
@@ -988,8 +1010,9 @@
                 _progressMessage = item.message;
                 RefreshProgress(version);
             });
-            Dictionary<string, byte[]> csvData = await _processingService.ExportTablesToMemoryAsync(
+            StandardMemoryExportResult result = await _processingService.ExportTablesToMemoryWithDiagnosticsAsync(
                 _dataStore, tables, progress, _cts!.Token);
+            Dictionary<string, byte[]> csvData = result.Files;
             if (csvData.Count == 0) { LogActivity("No data to export."); return; }
 
             using var zipStream = new MemoryStream();
@@ -1004,7 +1027,10 @@
             }
             _cts.Token.ThrowIfCancellationRequested();
             await _downloadService!.DownloadFileAsync("XER_Export.zip", zipStream, "application/zip", _cts.Token);
-            LogActivity($"Export complete: {csvData.Count} CSV files sent to the browser download manager. Check browser downloads for saved-file delivery.");
+            SetExportCompletion("Export", result.WarningCount);
+            foreach (UploadedFile file in _uploadedFiles)
+                file.Status = result.WarningCount > 0 ? "Warnings" : "Success";
+            LogActivity($"{csvData.Count} CSV files sent to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Export was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Export failed: {ex.Message}"); }

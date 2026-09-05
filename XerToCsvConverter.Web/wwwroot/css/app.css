@@ -275,6 +275,7 @@ html, body {
 .file-status.success { background: #e8f5e9; color: #2e7d32; }
 .file-status.error { background: #ffebee; color: #c62828; }
 .file-status.skipped { background: #fff3e0; color: #e65100; }
+.file-status.warnings { background: #fff3e0; color: #8a4600; }
 
 .file-item .btn-remove {
     background: none;
