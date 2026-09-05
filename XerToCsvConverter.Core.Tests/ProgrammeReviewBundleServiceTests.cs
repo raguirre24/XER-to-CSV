@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.VisualBasic.FileIO;
@@ -509,6 +510,114 @@ public sealed class ProgrammeReviewBundleServiceTests
         }
     }
 
+    [Fact]
+    public async Task Resource_distribution_preserves_conserved_monthly_quantities_and_existing_profile_schema()
+    {
+        ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
+            "resource baseline.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-30");
+        XerDataStore store = BuildDataStore((baseline, "2026-01-31 00:00", "2026-03-02 00:00"));
+        AddContinuousCalendarResourceAssignments(store, baseline.OriginalXerFilename, "1");
+
+        ProgrammeReviewInMemoryBundleResult result = await new ProgrammeReviewBundleService()
+            .BuildFromParsedDataToMemoryAsync(store, ProgrammeReviewNamingTests.Request(new[] { baseline }));
+        IReadOnlyList<string[]> csv = ReadCsv(result.Files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
+        Assert.Equal(
+            "task_id_key,rsrc_id_key,is_actual,distribution_month,monthly_quantity,rsrc_name,rsrc_type,unit,ProjectCode",
+            string.Join(',', csv[0]));
+        Dictionary<string, string>[] rows = csv.Skip(1).Select(values => csv[0].Zip(values)
+            .ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal)).ToArray();
+
+        Assert.Equal(new[] { "2026-01-01", "2026-02-01", "2026-03-01" },
+            rows.Select(row => row["distribution_month"]));
+        Assert.Equal(new[] { 0.0333m, 0.9334m, 0.0333m },
+            rows.Select(row => decimal.Parse(row["monthly_quantity"], CultureInfo.InvariantCulture)));
+        Assert.Equal(1m, rows.Sum(row => decimal.Parse(row["monthly_quantity"], CultureInfo.InvariantCulture)));
+        Assert.All(rows, row =>
+        {
+            Assert.Equal("CSV::J123::C::BL01::T1", row["task_id_key"]);
+            Assert.Equal("CSV::J123::C::BL01::R1", row["rsrc_id_key"]);
+        });
+        Assert.Equal("clndr_id_key,clndr_name", string.Join(',', ReadCsv(result.Files["10_XER_CALENDAR.csv"])[0]));
+        Assert.DoesNotContain("11_XER_CALENDAR_DETAILED.csv", result.Files.Keys);
+        Assert.Equal(11, result.Files.Count);
+        Assert.All(result.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
+        Assert.Equal(3, result.ManifestRows.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Invalid_positive_resource_assignment_rejects_partial_profile_output(bool toDisk)
+    {
+        string root = NewTempDirectory();
+        try
+        {
+            ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
+                "resource baseline.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-30");
+            XerDataStore store = BuildDataStore((baseline, "2026-01-31 00:00", "2026-03-02 00:00"));
+            AddContinuousCalendarResourceAssignments(store, baseline.OriginalXerFilename, "1", "2");
+            XerTable assignments = store.GetTable("TASKRSRC")!;
+            assignments.Rows[1].Fields[assignments.FieldIndexes["restart_date"]] = "not-a-date";
+            ProgrammeReviewBundleRequest request = ProgrammeReviewNamingTests.Request(new[] { baseline });
+            var service = new ProgrammeReviewBundleService();
+
+            ProgrammeReviewValidationException error = toDisk
+                ? await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
+                    service.BuildFromParsedDataAsync(store, request, root))
+                : await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
+                    service.BuildFromParsedDataToMemoryAsync(store, request));
+
+            Assert.Contains("15_XER_RESOURCE_DISTRIBUTION", error.Message, StringComparison.Ordinal);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void AddContinuousCalendarResourceAssignments(
+        XerDataStore store, string source, params string[] quantities)
+    {
+        XerTable calendar = store.GetTable("CALENDAR")!;
+        calendar.Rows[0].Fields[calendar.FieldIndexes["day_hr_cnt"]] = "24";
+        calendar.Rows[0].Fields[calendar.FieldIndexes["clndr_data"]] = P6TestCalendars.WorkWeek("24");
+        var resource = NewTable("RSRC", new[]
+        {
+            "rsrc_id", "rsrc_short_name", "rsrc_name", "rsrc_type", "clndr_id", "def_qty_per_hr"
+        });
+        resource.AddRow(new DataRow(new[] { "R1", "LAB", "Labour", "RT_Labor", "C1", "1" }, source));
+        store.AddTable(resource);
+        var assignments = NewTable("TASKRSRC", new[]
+        {
+            "taskrsrc_id", "task_id", "proj_id", "rsrc_id", "act_reg_qty", "act_ot_qty", "remain_qty",
+            "act_start_date", "act_end_date", "restart_date", "reend_date"
+        });
+        for (int index = 0; index < quantities.Length; index++)
+            assignments.AddRow(new DataRow(new[]
+            {
+                $"A{index + 1}", "T1", "P1", "R1", "0", "0", quantities[index], "", "",
+                "2026-01-31 00:00", "2026-03-02 00:00"
+            }, source));
+        store.AddTable(assignments);
+    }
+
+    private static IReadOnlyList<string[]> ReadCsv(byte[] content)
+    {
+        using var stream = new MemoryStream(content, writable: false);
+        using var parser = new TextFieldParser(stream, Encoding.UTF8, detectEncoding: false)
+        {
+            TextFieldType = FieldType.Delimited,
+            HasFieldsEnclosedInQuotes = true,
+            TrimWhiteSpace = false
+        };
+        parser.SetDelimiters(",");
+        var rows = new List<string[]>();
+        while (!parser.EndOfData)
+            rows.Add(parser.ReadFields() ?? throw new InvalidDataException("Unreadable Programme CSV row."));
+        return rows;
+    }
+
     private static XerDataStore BuildDataStore(params (ProgrammeReviewSnapshot Snapshot, string Start, string Finish)[] snapshots)
     {
         var store = new XerDataStore();
@@ -537,7 +646,7 @@ public sealed class ProgrammeReviewBundleServiceTests
             }, source));
             project.AddRow(new DataRow(new[] { "P1", snapshot.DataDate.ToString("yyyy-MM-dd") }, source));
             wbs.AddRow(new DataRow(new[] { "W1", "", "P1", "Root WBS" }, source));
-            calendar.AddRow(new DataRow(new[] { "C1", "Standard 8h", "8", "CA_Project", "" }, source));
+            calendar.AddRow(new DataRow(new[] { "C1", "Standard 8h", "8", "CA_Project", P6TestCalendars.WorkWeek() }, source));
         }
 
         store.AddTable(task);
@@ -575,7 +684,7 @@ public sealed class ProgrammeReviewBundleServiceTests
             new[] { "W1", "", "P1", "Root WBS" });
         AppendXerTable(builder, "CALENDAR",
             new[] { "clndr_id", "clndr_name", "day_hr_cnt", "clndr_type", "clndr_data" },
-            new[] { "C1", "Standard 8h", "8", "CA_Project", "" });
+            new[] { "C1", "Standard 8h", "8", "CA_Project", P6TestCalendars.WorkWeek() });
         builder.Append("%E\r\n");
         return Encoding.UTF8.GetBytes(builder.ToString());
     }

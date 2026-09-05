@@ -27,14 +27,17 @@
     <Compile Remove="XerToCsvConverter.Core\**" />
     <Compile Remove="XerToCsvConverter.Web\**" />
     <Compile Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />
+    <Compile Remove="XerToCsvConverter.TenderReview.Cli\**" />
     <Compile Remove="XerToCsvConverter.Core.Tests\**" />
     <EmbeddedResource Remove="XerToCsvConverter.Core\**" />
     <EmbeddedResource Remove="XerToCsvConverter.Web\**" />
     <EmbeddedResource Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />
+    <EmbeddedResource Remove="XerToCsvConverter.TenderReview.Cli\**" />
     <EmbeddedResource Remove="XerToCsvConverter.Core.Tests\**" />
     <None Remove="XerToCsvConverter.Core\**" />
     <None Remove="XerToCsvConverter.Web\**" />
     <None Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />
+    <None Remove="XerToCsvConverter.TenderReview.Cli\**" />
     <None Remove="XerToCsvConverter.Core.Tests\**" />
   </ItemGroup>
 </Project>

@@ -49,6 +49,7 @@ Thank you for using this software.
             smokeForm.Show();
             Application.DoEvents();
             smokeForm.VerifyProgrammeReviewUiIntegration();
+            smokeForm.VerifyTenderReviewUiIntegration();
             smokeForm.Close();
             return;
         }

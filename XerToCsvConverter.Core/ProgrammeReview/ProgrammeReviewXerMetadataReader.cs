@@ -10,10 +10,6 @@ namespace XerToCsvConverter.ProgrammeReview;
 public static class ProgrammeReviewXerMetadataReader
 {
     private const int CooperativeYieldIntervalLines = 2048;
-    private static readonly Encoding StrictUtf8 = new UTF8Encoding(
-        encoderShouldEmitUTF8Identifier: false,
-        throwOnInvalidBytes: true);
-    private static readonly Encoding Windows1252 = CreateWindows1252Encoding();
 
     public static async ValueTask<DateOnly?> ReadSingleProjectDataDateAsync(
         byte[] xerContent,
@@ -37,18 +33,8 @@ public static class ProgrammeReviewXerMetadataReader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(xerFilePath);
 
-        try
-        {
-            await using FileStream stream = OpenXerFile(xerFilePath);
-            return await ReadWithEncodingAsync(stream, StrictUtf8, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (DecoderFallbackException)
-        {
-            await using FileStream stream = OpenXerFile(xerFilePath);
-            return await ReadWithEncodingAsync(stream, Windows1252, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        await using FileStream stream = OpenXerFile(xerFilePath);
+        return await ReadSingleProjectDataDateAsync(stream, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Reads an XER metadata date from a readable, seekable stream without taking ownership.</summary>
@@ -63,17 +49,17 @@ public static class ProgrammeReviewXerMetadataReader
             throw new ArgumentException("The XER stream must be seekable for encoding fallback.", nameof(xerStream));
         if (xerStream.Position >= xerStream.Length) return null;
 
-        long initialPosition = xerStream.Position;
+        XerTextEncoding.Selection selection = XerTextEncoding.Detect(xerStream);
 
         try
         {
-            return await ReadWithEncodingAsync(xerStream, StrictUtf8, cancellationToken)
+            return await ReadWithEncodingAsync(xerStream, selection.Encoding, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (DecoderFallbackException)
+        catch (DecoderFallbackException) when (!selection.HasBom)
         {
-            xerStream.Position = initialPosition;
-            return await ReadWithEncodingAsync(xerStream, Windows1252, cancellationToken)
+            xerStream.Position = selection.ContentPosition;
+            return await ReadWithEncodingAsync(xerStream, XerTextEncoding.Windows1252, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -86,7 +72,7 @@ public static class ProgrammeReviewXerMetadataReader
         using var reader = new StreamReader(
             xerStream,
             encoding,
-            detectEncodingFromByteOrderMarks: true,
+            detectEncodingFromByteOrderMarks: false,
             bufferSize: 4096,
             leaveOpen: true);
 
@@ -153,12 +139,4 @@ public static class ProgrammeReviewXerMetadataReader
         bufferSize: 4096,
         FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-    private static Encoding CreateWindows1252Encoding()
-    {
-        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-        return Encoding.GetEncoding(
-            1252,
-            EncoderFallback.ExceptionFallback,
-            DecoderFallback.ExceptionFallback);
-    }
 }

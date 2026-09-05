@@ -436,7 +436,7 @@ html, body {
 /* Export profiles and Programme Review metadata */
 .profile-options {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.75rem;
     margin-bottom: 0.75rem;
 }
@@ -489,6 +489,10 @@ html, body {
     margin-bottom: 1rem;
 }
 
+.tender-project-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .form-grid label {
     display: flex;
     flex-direction: column;
@@ -525,6 +529,10 @@ html, body {
     min-width: 830px;
     border-collapse: collapse;
     font-size: 0.8rem;
+}
+
+.tender-stage-table {
+    min-width: 620px;
 }
 
 .snapshot-table caption {

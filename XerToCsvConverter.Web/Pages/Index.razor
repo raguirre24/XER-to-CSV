@@ -1,8 +1,10 @@
 @page "/"
+@implements IDisposable
 @using System.Globalization
 @using System.IO.Compression
 @using XerToCsvConverter
 @using XerToCsvConverter.ProgrammeReview
+@using XerToCsvConverter.TenderReview
 @using XerToCsvConverter.Web.Services
 @inject IJSRuntime JS
 
@@ -11,13 +13,13 @@
 <div class="page-container">
     <div class="page-header">
         <h1>XER to CSV Converter</h1>
-        <p>Convert Primavera P6 XER schedules using the standard Enhanced or Programme Review profile</p>
+        <p>Convert Primavera P6 XER schedules using the Standard, Programme Review, or Tender Review profile</p>
     </div>
 
     <div class="panel">
         <div class="panel-header">
             <h2><span class="step-number">1</span> Add XER Files</h2>
-            @if (_uploadedFiles.Count > 0)
+            @if (_uploadedFiles.Count > 0 || _isUploading)
             {
                 <button class="btn btn-sm btn-secondary" @onclick="ClearFiles" disabled="@_isProcessing"
                         aria-label="Clear all uploaded files">Clear All</button>
@@ -27,15 +29,21 @@
             <div class="drop-zone @(_isDragOver ? "drag-over" : "")"
                  role="button" tabindex="0"
                  aria-label="File upload area. Drag and drop XER files or click to browse."
+                 aria-disabled="@_isBusy"
                  @ondragenter="HandleDragEnter" @ondragleave="HandleDragLeave"
                  @ondragover:preventDefault @ondrop:preventDefault>
                 <InputFile OnChange="HandleFileSelected" multiple accept=".xer"
+                           disabled="@_isBusy"
                            @ondragenter="HandleDragEnter" @ondragleave="HandleDragLeave"
                            aria-label="Select XER files to upload"
                            style="position:absolute;width:100%;height:100%;opacity:0;cursor:pointer;top:0;left:0;" />
                 <span class="drop-zone-icon" aria-hidden="true">&#8682;</span>
                 <p>Drag and drop XER files here or click to browse</p>
-                <span class="hint">Add one or more XER files. Programme Review requires a baseline and its applicable updates.</span>
+                <span class="hint">Add one or more XER files. Programme Review requires a baseline and its applicable updates; each Tender Review XER is one stage.</span>
+                @if (_isUploading)
+                {
+                    <span role="status">Reading selected files. Clear All or change profile to cancel this upload.</span>
+                }
             </div>
 
             @if (_uploadedFiles.Count > 0)
@@ -43,7 +51,7 @@
                 <ul class="file-list" role="list" aria-label="Uploaded files">
                     @foreach (UploadedFile file in _uploadedFiles)
                     {
-                        <li class="file-item" role="listitem">
+                        <li class="file-item" role="listitem" @key="file.SourceToken">
                             <span class="file-name" title="@file.Name">@file.Name</span>
                             <span class="file-status @file.Status.ToLowerInvariant()" role="status">@file.Status</span>
                             <button class="btn-remove" @onclick="() => RemoveFile(file)" disabled="@_isProcessing"
@@ -79,6 +87,10 @@
                         <InputRadio TValue="ExportProfile" Value="@ExportProfile.ProgrammeReview" disabled="@_isProcessing" />
                         <span><strong>Programme Review</strong><small>Validated full-history, ten-table report bundle with manifest.</small></span>
                     </label>
+                    <label class="profile-option @(_exportProfile == ExportProfile.TenderReview ? "selected" : "")">
+                        <InputRadio TValue="ExportProfile" Value="@ExportProfile.TenderReview" disabled="@_isProcessing" />
+                        <span><strong>Tender Review</strong><small>Validated tender-stage, ten-table report bundle with editable status dates.</small></span>
+                    </label>
                 </div>
             </InputRadioGroup>
 
@@ -89,7 +101,7 @@
                     <label for="chkPowerBi">Include legacy Enhanced Power BI tables</label>
                 </div>
             }
-            else
+            else if (_exportProfile == ExportProfile.ProgrammeReview)
             {
                 <div class="programme-review-editor">
                     <div class="form-grid">
@@ -175,6 +187,66 @@
                     }
                 </div>
             }
+            else
+            {
+                <div class="programme-review-editor">
+                    <div class="form-grid tender-project-grid">
+                        <label>
+                            <span>Project code</span>
+                            <input class="form-control" @bind="_projectCode" disabled="@_isProcessing"
+                                   placeholder="Example: C5001" autocomplete="off" />
+                            <small>Letters and numbers only; underscores and punctuation are rejected.</small>
+                        </label>
+                        <label>
+                            <span>Project name</span>
+                            <input class="form-control" @bind="_projectName" disabled="@_isProcessing"
+                                   placeholder="Governed project name" autocomplete="off" />
+                        </label>
+                    </div>
+
+                    @if (_uploadedFiles.Count == 0)
+                    {
+                        <p class="empty-hint">Add one or more XER files. Each ordered input is a separate Tender stage.</p>
+                    }
+                    else
+                    {
+                        <div class="snapshot-table-wrap">
+                            <table class="snapshot-table tender-stage-table">
+                                <caption>
+                                    Tender stage metadata. Status date defaults once from this browser's local calendar date and remains editable.
+                                    Dates must use yyyy-MM-dd. Repeated filenames and file contents are valid when status dates differ.
+                                </caption>
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Stage</th>
+                                        <th scope="col">XER file</th>
+                                        <th scope="col">Status date</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @for (int index = 0; index < _uploadedFiles.Count; index++)
+                                    {
+                                        UploadedFile file = _uploadedFiles[index];
+                                        <tr @key="file.SourceToken">
+                                            <td>@(index + 1)</td>
+                                            <th scope="row" title="@file.Name">@file.Name</th>
+                                            <td>
+                                                <input class="form-control" type="text" inputmode="numeric" placeholder="yyyy-MM-dd"
+                                                       @bind="file.StatusDate" disabled="@_isProcessing"
+                                                       aria-label="Status date for Tender stage @(index + 1), @file.Name" />
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="info-banner">
+                            Tender Review web limit: @MaxBrowserFiles files, @MaxBrowserFileMegabytes MB each,
+                            @MaxBrowserTotalMegabytes MB total. The P6 Data Date is read independently from PROJECT/last_recalc_date.
+                        </div>
+                    }
+                </div>
+            }
         </div>
     </div>
 
@@ -186,13 +258,20 @@
         else if (_exportProfile == ExportProfile.ProgrammeReview)
         {
             <button class="btn btn-success btn-lg" @onclick="CreateProgrammeReviewBundle"
-                    disabled="@(_uploadedFiles.Count == 0)" aria-label="Validate and download Programme Review bundle">
+                    disabled="@(_isBusy || _uploadedFiles.Count == 0)" aria-label="Validate and download Programme Review bundle">
                 <span class="step-number" aria-hidden="true">3</span> Create Programme Review Bundle
+            </button>
+        }
+        else if (_exportProfile == ExportProfile.TenderReview)
+        {
+            <button class="btn btn-success btn-lg" @onclick="CreateTenderReviewBundle"
+                    disabled="@(_isBusy || _uploadedFiles.Count == 0)" aria-label="Validate and download Tender Review bundle">
+                <span class="step-number" aria-hidden="true">3</span> Create Tender Review Bundle
             </button>
         }
         else
         {
-            <button class="btn btn-primary btn-lg" @onclick="ParseFiles" disabled="@(_uploadedFiles.Count == 0)"
+            <button class="btn btn-primary btn-lg" @onclick="ParseFiles" disabled="@(_isBusy || _uploadedFiles.Count == 0)"
                     aria-label="Parse and load tables from uploaded XER files">
                 <span class="step-number" aria-hidden="true">3</span> Parse and Load Tables
             </button>
@@ -251,18 +330,18 @@
         </div>
 
         <div class="export-area" role="group" aria-label="Standard export actions">
-            <button class="btn btn-primary" @onclick="ExportAll" disabled="@(_isProcessing || _allTableNames.Count == 0)">Export All as ZIP</button>
-            <button class="btn btn-secondary" @onclick="ExportSelected" disabled="@(_isProcessing || _selectedTables.Count == 0)">Export Selected as ZIP</button>
-            <button class="btn btn-info" @onclick="ExportPowerBi" disabled="@(_isProcessing || !_allTableNames.Any(IsEnhancedTable))">Export Power BI as ZIP</button>
+            <button class="btn btn-primary" @onclick="ExportAll" disabled="@(_isBusy || _allTableNames.Count == 0)">Export All as ZIP</button>
+            <button class="btn btn-secondary" @onclick="ExportSelected" disabled="@(_isBusy || _selectedTables.Count == 0)">Export Selected as ZIP</button>
+            <button class="btn btn-info" @onclick="ExportPowerBi" disabled="@(_isBusy || !_allTableNames.Any(IsEnhancedTable))">Export Power BI as ZIP</button>
         </div>
     }
 
-    @if (_exportProfile == ExportProfile.ProgrammeReview && !string.IsNullOrWhiteSpace(_activityLog))
+    @if (_exportProfile != ExportProfile.Standard && !string.IsNullOrWhiteSpace(_activityLog))
     {
         <div class="panel">
-            <div class="panel-header"><h2>Programme Review Activity</h2></div>
+            <div class="panel-header"><h2>@ReviewProfileDisplayName Activity</h2></div>
             <div class="panel-body">
-                <div class="activity-log" @ref="_logElement" aria-label="Programme Review activity log" role="log" aria-live="polite">@_activityLog</div>
+                <div class="activity-log" @ref="_logElement" aria-label="@ReviewProfileDisplayName activity log" role="log" aria-live="polite">@_activityLog</div>
             </div>
         </div>
     }
@@ -278,13 +357,24 @@
     private const long MaxStandardFileBytes = 100L * 1024 * 1024;
     private const long BrowserWarningBytes = 64L * 1024 * 1024;
 
-    private enum ExportProfile { Standard, ProgrammeReview }
+    private enum ExportProfile { Standard, ProgrammeReview, TenderReview }
 
     private readonly List<UploadedFile> _uploadedFiles = new();
     private readonly HashSet<string> _selectedTables = new(StringComparer.OrdinalIgnoreCase);
     private List<string> _allTableNames = new();
     private List<string> _filteredTableNames = new();
-    private ExportProfile _exportProfile;
+    private ExportProfile _selectedExportProfile;
+    private ExportProfile _exportProfile
+    {
+        get => _selectedExportProfile;
+        set
+        {
+            if (_selectedExportProfile == value || _isProcessing || _disposed) return;
+            _uploads.Invalidate();
+            _selectedExportProfile = value;
+            ClearResults(keepLog: false);
+        }
+    }
     private bool _generatePowerBiTables;
     private bool _isProcessing;
     private bool _isDragOver;
@@ -297,23 +387,43 @@
     private string _projectCode = string.Empty;
     private string _projectName = string.Empty;
     private string _programmeType = string.Empty;
+    private readonly BrowserUploadSession _uploads = new();
+    private bool _disposed;
+    private long _operationVersion;
+    private bool _isUploading => _uploads.IsUploading;
+    private bool _isBusy => _isProcessing || _isUploading || _disposed;
     private XerDataStore? _dataStore;
     private readonly ProcessingService _processingService = new();
     private CancellationTokenSource? _cts;
     private ElementReference _logElement;
     private DownloadService? _downloadService;
 
+    private string ReviewProfileDisplayName => _exportProfile == ExportProfile.TenderReview
+        ? "Tender Review"
+        : "Programme Review";
+
     protected override void OnInitialized() => _downloadService = new DownloadService(JS);
 
     private async Task HandleFileSelected(InputFileChangeEventArgs e)
     {
         _isDragOver = false;
+        if (_isBusy)
+            return;
+
+        BrowserUploadSession.Batch? batch = _uploads.TryBegin();
+        if (batch is null) return;
+        StateHasChanged();
+
         try
         {
             bool programmeReview = _exportProfile == ExportProfile.ProgrammeReview;
-            int maximumFiles = programmeReview ? MaxBrowserFiles : MaxStandardFiles;
-            long maximumFileBytes = programmeReview ? MaxBrowserFileBytes : MaxStandardFileBytes;
+            bool tenderReview = _exportProfile == ExportProfile.TenderReview;
+            bool reviewProfile = programmeReview || tenderReview;
+            int maximumFiles = reviewProfile ? MaxBrowserFiles : MaxStandardFiles;
+            long maximumFileBytes = reviewProfile ? MaxBrowserFileBytes : MaxStandardFileBytes;
             IReadOnlyList<IBrowserFile> selectedFiles = e.GetMultipleFiles(maximumFiles);
+            string addedLocalStatusDate = await CaptureBrowserLocalDateForUploadAsync(tenderReview);
+            batch.Token.ThrowIfCancellationRequested();
 
             long totalBytes = _uploadedFiles.Sum(file => file.Data.LongLength);
             var pending = new List<UploadedFile>(selectedFiles.Count);
@@ -326,7 +436,8 @@
                     skippedNames.Add(browserFile.Name);
                     continue;
                 }
-                if (_uploadedFiles.Concat(pending).Any(file =>
+                batch.Token.ThrowIfCancellationRequested();
+                if (programmeReview && _uploadedFiles.Concat(pending).Any(file =>
                         file.Name.Equals(browserFile.Name, StringComparison.OrdinalIgnoreCase)))
                 {
                     skippedNames.Add(browserFile.Name);
@@ -337,60 +448,78 @@
                 if (browserFile.Size > maximumFileBytes)
                     throw new InvalidOperationException(
                         $"{browserFile.Name} is larger than this profile's {maximumFileBytes / (1024 * 1024)} MB per-file limit.");
-                if (programmeReview && totalBytes + browserFile.Size > MaxBrowserTotalBytes)
+                if (totalBytes + browserFile.Size > MaxBrowserTotalBytes)
                     throw new InvalidOperationException(
                         $"The selected history exceeds the {MaxBrowserTotalMegabytes} MB browser limit. " +
                         "Use the Windows app for larger histories.");
 
                 byte[] data = GC.AllocateUninitializedArray<byte>(checked((int)browserFile.Size));
-                await using (Stream stream = browserFile.OpenReadStream(maximumFileBytes))
-                    await stream.ReadExactlyAsync(data);
+                await using (Stream stream = browserFile.OpenReadStream(maximumFileBytes, batch.Token))
+                    await stream.ReadExactlyAsync(data, batch.Token);
                 DateOnly? detectedDataDate = await ProgrammeReviewXerMetadataReader
-                    .ReadSingleProjectDataDateAsync(data);
+                    .ReadSingleProjectDataDateAsync(data, batch.Token);
                 if (programmeReview && detectedDataDate is null)
                     undetectedDataDateNames.Add(browserFile.Name);
-                string? baselineTag = TryInferBaselineTag(browserFile.Name);
-                string? updateTag = TryInferUpdateTag(browserFile.Name);
+                ProgrammeReviewUploadSuggestion suggestion = ProgrammeReviewUploadMetadata.Infer(browserFile.Name, detectedDataDate);
                 pending.Add(new UploadedFile
                 {
+                    SourceToken = _uploads.NextSourceToken(batch),
                     Name = browserFile.Name,
                     Data = data,
                     Status = "Ready",
-                    SnapshotKind = baselineTag is not null ? "Baseline" : updateTag is not null ? "Update" : string.Empty,
-                    SnapshotTag = baselineTag ?? updateTag ?? string.Empty,
-                    MonthUpdate = updateTag is null ? string.Empty : MonthStartFromTag(updateTag),
-                    DataDate = detectedDataDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty
+                    SnapshotKind = suggestion.SnapshotKind,
+                    SnapshotTag = suggestion.SnapshotTag,
+                    MonthUpdate = suggestion.MonthUpdate,
+                    DataDate = detectedDataDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty,
+                    StatusDate = addedLocalStatusDate
                 });
                 totalBytes += browserFile.Size;
             }
 
-            if (pending.Count > 0)
+            // Commit against the live collection, and only if clear/profile/disposal has not
+            // invalidated this generation. A late read may never resurrect discarded sources.
+            if (!_uploads.TryCommit(batch, () =>
             {
-                _uploadedFiles.AddRange(pending);
-                ClearResults(keepLog: false);
-            }
+                BrowserUploadSession.ValidateCombined(
+                    _uploadedFiles.Concat(pending).Select(file => new BrowserUploadDescriptor(file.Name, file.Data.LongLength)),
+                    maximumFiles, maximumFileBytes, MaxBrowserTotalBytes, allowRepeatedNames: !programmeReview);
+                if (pending.Count > 0)
+                {
+                    _uploadedFiles.AddRange(pending);
+                    ClearResults(keepLog: false);
+                }
+            }))
+                return;
             var notices = new List<string>();
             if (skippedNames.Count > 0)
-                notices.Add("Skipped unsupported or duplicate file name(s): " + string.Join(", ", skippedNames));
+                notices.Add((programmeReview ? "Skipped unsupported or duplicate file name(s): " : "Skipped unsupported file(s): ") +
+                            string.Join(", ", skippedNames));
             if (undetectedDataDateNames.Count > 0)
                 notices.Add(
                     "Data date could not be detected from one unambiguous PROJECT row; enter it manually for: " +
                     string.Join(", ", undetectedDataDateNames));
             _validationMessage = string.Join(" ", notices);
         }
+        catch (OperationCanceledException) when (batch.Token.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            _validationMessage = "Files were not added: " + ex.Message;
+            if (_uploads.IsCurrent(batch)) _validationMessage = "Files were not added: " + ex.Message;
         }
         finally
         {
-            _fileSizeWarning = IsHighMemoryHistory();
-            StateHasChanged();
+            _uploads.Complete(batch);
+            if (!_disposed)
+            {
+                _fileSizeWarning = IsHighMemoryHistory();
+                StateHasChanged();
+            }
         }
     }
 
     private void RemoveFile(UploadedFile file)
     {
+        if (_isProcessing || _disposed) return;
+        _uploads.Invalidate();
         _uploadedFiles.Remove(file);
         _fileSizeWarning = IsHighMemoryHistory();
         ClearResults(keepLog: false);
@@ -398,6 +527,8 @@
 
     private void ClearFiles()
     {
+        if (_isProcessing || _disposed) return;
+        _uploads.Invalidate();
         _uploadedFiles.Clear();
         _fileSizeWarning = false;
         ClearResults(keepLog: false);
@@ -421,24 +552,38 @@
 
     private async Task ParseFiles()
     {
-        if (_uploadedFiles.Count == 0) return;
+        if (_isBusy || _uploadedFiles.Count == 0) return;
+        UploadedFile[] stagedFiles = _uploadedFiles.ToArray();
+        try
+        {
+            BrowserUploadSession.ValidateCombined(
+                stagedFiles.Select(file => new BrowserUploadDescriptor(file.Name, file.Data.LongLength)),
+                MaxStandardFiles, MaxStandardFileBytes, MaxBrowserTotalBytes, allowRepeatedNames: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _validationMessage = ex.Message;
+            return;
+        }
         BeginOperation("Starting standard XER parse...");
         _allTableNames.Clear();
         _filteredTableNames.Clear();
         _selectedTables.Clear();
         try
         {
-            var progress = CreateParseProgress();
-            var streams = _uploadedFiles.Select(file => ((Stream)new MemoryStream(file.Data, writable: false), file.Name)).ToList();
+            var progress = CreateParseProgress(stagedFiles);
+            var streams = stagedFiles.Select(file => ((Stream)new MemoryStream(file.Data, writable: false), file.Name)).ToList();
             try
             {
                 await Task.Yield();
                 _dataStore = await _processingService.ParseXerStreamsAsync(streams, progress, _cts!.Token);
+                _cts.Token.ThrowIfCancellationRequested();
             }
             finally
             {
                 foreach ((Stream stream, _) in streams) stream.Dispose();
             }
+            foreach (UploadedFile file in stagedFiles) file.Status = "Success";
 
             if (_dataStore.TableCount == 0)
             {
@@ -460,6 +605,7 @@
 
     private async Task CreateProgrammeReviewBundle()
     {
+        if (_isBusy) return;
         if (!TryCreateProgrammeReviewRequest(out ProgrammeReviewBundleRequest? request, out string error))
         {
             _validationMessage = error;
@@ -475,6 +621,7 @@
             var service = new ProgrammeReviewBundleService();
             ProgrammeReviewInMemoryBundleResult bundle = await service.BuildFromXerBytesAsync(
                 request!, files, CreateProgrammeReviewProgress(), _cts!.Token);
+            _cts.Token.ThrowIfCancellationRequested();
 
             _progressMessage = "Packaging validated bundle...";
             _progressPercent = 85;
@@ -504,7 +651,6 @@
             StateHasChanged();
             await _downloadService!.DownloadFileAsync(
                 $"{bundle.BundleId}.zip", zipStream, "application/zip", _cts.Token);
-            _cts.Token.ThrowIfCancellationRequested();
             _progressMessage = "Programme Review bundle complete.";
             _progressPercent = 100;
             HashSet<string> retainedNames = bundle.ManifestRows
@@ -515,11 +661,137 @@
             LogActivity($"Programme Review bundle complete: {bundle.BundleId}");
             LogActivity($"Retained {retainedNames.Count} of {_uploadedFiles.Count} supplied history snapshots; " +
                         $"{_uploadedFiles.Count - retainedNames.Count} superseded/pre-anchor snapshot(s) were skipped.");
-            LogActivity("Downloaded 10 report CSV files plus XER_CSV_MANIFEST.csv.");
+            LogActivity("Sent 10 report CSV files plus XER_CSV_MANIFEST.csv to the browser download manager. Check browser downloads for saved-file delivery.");
         }
-        catch (OperationCanceledException) { LogActivity("Programme Review bundle generation was cancelled; no download was created."); }
+        catch (OperationCanceledException) { LogActivity("Programme Review bundle generation was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Programme Review bundle failed: {ex.Message}"); }
         finally { EndOperation(); }
+    }
+
+    private async Task CreateTenderReviewBundle()
+    {
+        if (_isBusy)
+            return;
+
+        UploadedFile[] stagedFiles = _uploadedFiles.ToArray();
+        if (!TryCreateTenderReviewRequest(stagedFiles, out TenderReviewBundleRequest? request, out string error))
+        {
+            _validationMessage = error;
+            return;
+        }
+
+        BeginOperation("Validating Tender Review stages...");
+        try
+        {
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(1, _cts!.Token);
+            TenderReviewSourceBytes[] sourceBytes = stagedFiles
+                .Select(file => new TenderReviewSourceBytes
+                {
+                    SourceToken = file.SourceToken,
+                    Content = file.Data
+                })
+                .ToArray();
+            var service = new TenderReviewBundleService();
+            TenderReviewInMemoryBundleResult bundle = await service.BuildFromXerBytesAsync(
+                request!, sourceBytes, CreateTenderReviewProgress(), _cts!.Token);
+            _cts.Token.ThrowIfCancellationRequested();
+
+            _progressMessage = "Packaging validated Tender Review bundle...";
+            _progressPercent = 85;
+            StateHasChanged();
+            if (bundle.ManifestRows.Count == 0)
+                throw new TenderReviewValidationException("Tender Review manifest contains no source rows.");
+            DateTimeOffset zipEntryTimestamp = TenderReviewWebContract.GetDeterministicZipEntryTimestamp(
+                bundle.ManifestRows[0].ExportedAtUtc);
+            using var zipStream = new MemoryStream();
+            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                KeyValuePair<string, byte[]>[] bundleFiles = bundle.Files
+                    .OrderBy(item => item.Key, StringComparer.Ordinal)
+                    .ToArray();
+                int packagedFiles = 0;
+                foreach ((string fileName, byte[] content) in bundleFiles)
+                {
+                    _cts.Token.ThrowIfCancellationRequested();
+                    ZipArchiveEntry entry = archive.CreateEntry($"{bundle.BundleId}/{fileName}", CompressionLevel.Fastest);
+                    entry.LastWriteTime = zipEntryTimestamp;
+                    await using Stream entryStream = entry.Open();
+                    await WriteZipContentAsync(entryStream, content, _cts.Token);
+                    packagedFiles++;
+                    _progressPercent = 85 + (packagedFiles * 10 / bundleFiles.Length);
+                    StateHasChanged();
+                }
+            }
+
+            _cts.Token.ThrowIfCancellationRequested();
+            _progressMessage = "Preparing browser download...";
+            _progressPercent = 97;
+            StateHasChanged();
+            await _downloadService!.DownloadFileAsync(
+                $"{bundle.BundleId}.zip", zipStream, "application/zip", _cts.Token);
+            _progressMessage = "Tender Review bundle complete.";
+            _progressPercent = 100;
+            foreach (UploadedFile file in stagedFiles)
+                file.Status = "Success";
+            LogActivity($"Tender Review bundle complete: {bundle.BundleId}");
+            LogActivity($"Exported {stagedFiles.Length} ordered Tender stage(s). Repeated source names and hashes remain distinct by stage identity.");
+            LogActivity("Sent 10 report CSV files plus XER_CSV_MANIFEST.csv to the browser download manager. Check browser downloads for saved-file delivery.");
+        }
+        catch (OperationCanceledException) { LogActivity("Tender Review bundle generation was cancelled before browser download handoff."); }
+        catch (Exception ex) { SetOperationError($"Tender Review bundle failed: {ex.Message}"); }
+        finally { EndOperation(); }
+    }
+
+    private bool TryCreateTenderReviewRequest(
+        IReadOnlyList<UploadedFile> stagedFiles,
+        out TenderReviewBundleRequest? request,
+        out string error)
+    {
+        request = null;
+        error = string.Empty;
+        string projectCode = _projectCode.Trim().ToUpperInvariant();
+        if (projectCode.Length == 0) { error = "Project code is required."; return false; }
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                projectCode,
+                "^[A-Z0-9]+$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
+            error = "Tender project code must contain only ASCII letters A-Z and digits 0-9; underscores and punctuation are not allowed.";
+            return false;
+        }
+        if (_projectName.Trim().Length == 0) { error = "Project name is required."; return false; }
+        if (stagedFiles.Count == 0) { error = "Add at least one XER file."; return false; }
+        if (stagedFiles.Count > MaxBrowserFiles)
+        { error = $"Tender Review supports at most {MaxBrowserFiles} files in the browser. Use the Windows app or Tender Review CLI for this build."; return false; }
+        UploadedFile? oversized = stagedFiles.FirstOrDefault(file => file.Data.LongLength > MaxBrowserFileBytes);
+        if (oversized is not null)
+        { error = $"{oversized.Name} exceeds the {MaxBrowserFileMegabytes} MB Tender Review browser limit. Use the Windows app or Tender Review CLI."; return false; }
+        if (stagedFiles.Sum(file => file.Data.LongLength) > MaxBrowserTotalBytes)
+        { error = $"These Tender stages exceed the {MaxBrowserTotalMegabytes} MB browser limit. Use the Windows app or Tender Review CLI."; return false; }
+
+        try
+        {
+            TenderReviewSource[] sources = TenderReviewWebContract.CreateOrderedSources(
+                stagedFiles.Select(file => new TenderReviewWebSourceInput(
+                    file.SourceToken,
+                    file.Name,
+                    file.StatusDate)))
+                .ToArray();
+            request = new TenderReviewBundleRequest
+            {
+                ProjectCode = projectCode,
+                ProjectName = _projectName.Trim(),
+                ExportedAtUtc = DateTimeOffset.UtcNow,
+                Sources = sources
+            };
+            return true;
+        }
+        catch (ArgumentException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 
     private bool TryCreateProgrammeReviewRequest(out ProgrammeReviewBundleRequest? request, out string error)
@@ -531,6 +803,8 @@
         if (_projectName.Trim().Length == 0) { error = "Project name is required."; return false; }
         if (_programmeType is not ("C" or "T")) { error = "Select programme type C or T."; return false; }
         if (_uploadedFiles.Count == 0) { error = "Add at least one XER file."; return false; }
+        if (HasDuplicateOriginalFilenames())
+        { error = "Programme Review does not accept duplicate XER filenames. Remove duplicate names or use Tender Review."; return false; }
         if (_uploadedFiles.Count > MaxBrowserFiles)
         { error = $"Programme Review supports at most {MaxBrowserFiles} files in the browser. Use the Windows app for this history."; return false; }
         UploadedFile? oversized = _uploadedFiles.FirstOrDefault(file => file.Data.LongLength > MaxBrowserFileBytes);
@@ -577,22 +851,31 @@
         return true;
     }
 
-    private IProgress<ProcessingService.DetailedProgress> CreateParseProgress() =>
-        new Progress<ProcessingService.DetailedProgress>(progress =>
+    private IProgress<ProcessingService.DetailedProgress> CreateParseProgress(IReadOnlyList<UploadedFile> stagedFiles)
+    {
+        long version = _operationVersion;
+        return new Progress<ProcessingService.DetailedProgress>(progress =>
         {
+            if (_disposed || version != _operationVersion) return;
             _progressPercent = progress.Percent;
             _progressMessage = progress.Message ?? string.Empty;
             if (!string.IsNullOrEmpty(progress.FilePath) && !string.IsNullOrEmpty(progress.FileStatus))
             {
-                UploadedFile? file = _uploadedFiles.FirstOrDefault(item => item.Name == progress.FilePath);
+                UploadedFile? file = progress.InputIndex is int index && index >= 0 && index < stagedFiles.Count
+                    ? stagedFiles[index]
+                    : null;
                 if (file is not null) file.Status = progress.FileStatus;
             }
-            _ = InvokeAsync(async () => { StateHasChanged(); await ScrollLogToBottom(); });
+            RefreshProgress(version);
         });
+    }
 
-    private IProgress<ProcessingService.DetailedProgress> CreateProgrammeReviewProgress() =>
-        new Progress<ProcessingService.DetailedProgress>(progress =>
+    private IProgress<ProcessingService.DetailedProgress> CreateProgrammeReviewProgress()
+    {
+        long version = _operationVersion;
+        return new Progress<ProcessingService.DetailedProgress>(progress =>
         {
+            if (_disposed || version != _operationVersion) return;
             bool building = string.Equals(
                 progress.Message,
                 "Building and validating Programme Review tables...",
@@ -604,11 +887,38 @@
                 UploadedFile? file = _uploadedFiles.FirstOrDefault(item => item.Name == progress.FilePath);
                 if (file is not null) file.Status = progress.FileStatus;
             }
-            _ = InvokeAsync(async () => { StateHasChanged(); await ScrollLogToBottom(); });
+            RefreshProgress(version);
         });
+    }
+
+    private IProgress<ProcessingService.DetailedProgress> CreateTenderReviewProgress()
+    {
+        long version = _operationVersion;
+        return new Progress<ProcessingService.DetailedProgress>(progress =>
+        {
+            if (_disposed || version != _operationVersion) return;
+            _progressPercent = Math.Min(80, Math.Max(0, progress.Percent) * 80 / 100);
+            _progressMessage = progress.Message ?? string.Empty;
+            if (!string.IsNullOrEmpty(progress.FilePath) && !string.IsNullOrEmpty(progress.FileStatus))
+            {
+                UploadedFile? file = _uploadedFiles.FirstOrDefault(item =>
+                    string.Equals(item.SourceToken, progress.FilePath, StringComparison.Ordinal));
+                if (file is not null) file.Status = progress.FileStatus;
+            }
+            RefreshProgress(version);
+        });
+    }
+
+    private void RefreshProgress(long version) => _ = InvokeAsync(async () =>
+    {
+        if (_disposed || version != _operationVersion) return;
+        StateHasChanged();
+        await ScrollLogToBottom();
+    });
 
     private void BeginOperation(string message, bool resetFileStatuses = true)
     {
+        _operationVersion++;
         _isProcessing = true;
         _cts = new CancellationTokenSource();
         _validationMessage = string.Empty;
@@ -622,11 +932,12 @@
 
     private void EndOperation()
     {
+        _operationVersion++;
         _isProcessing = false;
         _progressPercent = 0;
         _cts?.Dispose();
         _cts = null;
-        StateHasChanged();
+        if (!_disposed) StateHasChanged();
     }
 
     private void SetOperationError(string message)
@@ -665,15 +976,17 @@
 
     private async Task ExportTables(List<string> tables)
     {
-        if (_dataStore is null || tables.Count == 0) return;
+        if (_isBusy || _dataStore is null || tables.Count == 0) return;
         BeginOperation($"Exporting {tables.Count} tables...", resetFileStatuses: false);
         try
         {
+            long version = _operationVersion;
             var progress = new Progress<(int percent, string message)>(item =>
             {
+                if (_disposed || version != _operationVersion) return;
                 _progressPercent = item.percent;
                 _progressMessage = item.message;
-                _ = InvokeAsync(StateHasChanged);
+                RefreshProgress(version);
             });
             Dictionary<string, byte[]> csvData = await _processingService.ExportTablesToMemoryAsync(
                 _dataStore, tables, progress, _cts!.Token);
@@ -691,10 +1004,9 @@
             }
             _cts.Token.ThrowIfCancellationRequested();
             await _downloadService!.DownloadFileAsync("XER_Export.zip", zipStream, "application/zip", _cts.Token);
-            _cts.Token.ThrowIfCancellationRequested();
-            LogActivity($"Export complete: {csvData.Count} CSV files.");
+            LogActivity($"Export complete: {csvData.Count} CSV files sent to the browser download manager. Check browser downloads for saved-file delivery.");
         }
-        catch (OperationCanceledException) { LogActivity("Export was cancelled."); }
+        catch (OperationCanceledException) { LogActivity("Export was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Export failed: {ex.Message}"); }
         finally { EndOperation(); }
     }
@@ -730,39 +1042,51 @@
     private static bool IsEnhancedTable(string name) =>
         name.Length > 3 && char.IsDigit(name[0]) && char.IsDigit(name[1]) && name[2] == '_';
 
-    private void LogActivity(string message) => _activityLog += $"[{DateTime.Now:HH:mm:ss}] {message}\n";
+    private void LogActivity(string message)
+    {
+        if (!_disposed) _activityLog += $"[{DateTime.Now:HH:mm:ss}] {message}\n";
+    }
     private async Task ScrollLogToBottom()
     { try { await JS.InvokeVoidAsync("scrollToBottom", _logElement); } catch { } }
 
-    private static string? TryInferUpdateTag(string fileName)
+    private async Task<string> ReadBrowserLocalDateAsync()
     {
-        foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(fileName, @"(?<!\d)(\d{4})(?!\d)"))
+        string value = await JS.InvokeAsync<string>(TenderReviewWebContract.BrowserLocalDateJsIdentifier);
+        return TenderReviewWebContract.CaptureAddedLocalIsoDate(value);
+    }
+
+    private async Task<string> CaptureBrowserLocalDateForUploadAsync(bool tenderReview)
+    {
+        try
         {
-            string tag = match.Groups[1].Value;
-            if (int.TryParse(tag.AsSpan(2, 2), NumberStyles.None, CultureInfo.InvariantCulture, out int month)
-                && month is >= 1 and <= 12) return tag;
+            return await ReadBrowserLocalDateAsync();
         }
-        return null;
+        catch when (!tenderReview)
+        {
+            // Tender metadata is inert in Standard/Programme Review. Preserve those upload flows if JS is unavailable.
+            return string.Empty;
+        }
     }
 
-    private static string? TryInferBaselineTag(string fileName)
+    private bool HasDuplicateOriginalFilenames() =>
+        _uploadedFiles
+            .GroupBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+            .Any(group => group.Count() > 1);
+
+    public void Dispose()
     {
-        System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
-            fileName,
-            @"(?:^|[-_ ])(BL[0-9]{2}(?:-[A-Z])?)(?=[-_. ]|$)",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        return match.Success ? match.Groups[1].Value.ToUpperInvariant() : null;
+        if (_disposed) return;
+        _disposed = true;
+        _uploads.Dispose();
+        _cts?.Cancel();
     }
-
-    private static string MonthStartFromTag(string tag) =>
-        $"20{tag[..2]}-{tag[2..]}-01";
 
     private bool IsHighMemoryHistory() =>
         _uploadedFiles.Sum(file => file.Data.LongLength) > BrowserWarningBytes;
 
     private sealed class UploadedFile
     {
+        public string SourceToken { get; init; } = string.Empty;
         public string Name { get; init; } = string.Empty;
         public byte[] Data { get; init; } = Array.Empty<byte>();
         public string Status { get; set; } = "Ready";
@@ -770,5 +1094,6 @@
         public string SnapshotTag { get; set; } = string.Empty;
         public string MonthUpdate { get; set; } = string.Empty;
         public string DataDate { get; set; } = string.Empty;
+        public string StatusDate { get; set; } = string.Empty;
     }
 }

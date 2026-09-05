@@ -362,732 +362,33 @@ namespace XerToCsvConverter;
 
     // Working Day Calculator - Handles calendar-aware date calculations
 
-    public class WorkingDayCalculator
-
-    {
-
-        // --- Data Structures ---
-
-        // These are pre-populated by the XerTransformer
-
-        private readonly Dictionary<DateTime, decimal> _exceptionHours;
-
-        private readonly Dictionary<DateTime, List<(TimeSpan Start, TimeSpan End)>> _exceptionTimeSlots;
-
-        private readonly decimal[] _standardWeekHours; // Index 0=Sunday, 1=Monday... 6=Saturday
-
-        private readonly List<(TimeSpan Start, TimeSpan End)>[] _standardWeekTimeSlots; // Index 0=Sunday...
-
-        private static readonly WorkingDayCalculator _default = CreateDefaultCalendar();
-
-
-
-        public WorkingDayCalculator(
-
-            Dictionary<DateTime, decimal> exceptionHours,
-
-            Dictionary<DateTime, List<(TimeSpan Start, TimeSpan End)>> exceptionTimeSlots,
-
-            decimal[] standardWeekHours,
-
-            List<(TimeSpan Start, TimeSpan End)>[] standardWeekTimeSlots)
-
-        {
-
-            _exceptionHours = exceptionHours ?? new Dictionary<DateTime, decimal>();
-
-            _exceptionTimeSlots = exceptionTimeSlots ?? new Dictionary<DateTime, List<(TimeSpan, TimeSpan)>>();
-
-            _standardWeekHours = standardWeekHours ?? new decimal[7];
-
-            _standardWeekTimeSlots = standardWeekTimeSlots ?? new List<(TimeSpan, TimeSpan)>[7];
-
-        }
-
-
-
-        // Creates a default 5-day work week calendar (Mon-Fri, 8-12, 13-17)
-
-        private static WorkingDayCalculator CreateDefaultCalendar()
-
-        {
-
-            var stdHours = new decimal[7]; // 0=Sun, 6=Sat
-
-            var stdSlots = new List<(TimeSpan, TimeSpan)>[7];
-
-            var defaultSlots = new List<(TimeSpan, TimeSpan)>
-
-            {
-
-                (new TimeSpan(8, 0, 0), new TimeSpan(12, 0, 0)),
-
-                (new TimeSpan(13, 0, 0), new TimeSpan(17, 0, 0))
-
-            };
-
-
-
-            for (int i = 0; i < 7; i++)
-
-            {
-
-                stdSlots[i] = new List<(TimeSpan, TimeSpan)>(); // Initialize all lists
-
-            }
-
-
-
-            for (int i = 1; i <= 5; i++) // 1=Monday to 5=Friday
-
-            {
-
-                stdHours[i] = 8m;
-
-                stdSlots[i] = defaultSlots;
-
-            }
-
-            // Sunday (0) and Saturday (6)
-
-            stdHours[0] = 0m;
-
-            stdHours[6] = 0m;
-
-
-
-            return new WorkingDayCalculator(
-
-                new Dictionary<DateTime, decimal>(),
-
-                new Dictionary<DateTime, List<(TimeSpan, TimeSpan)>>(),
-
-                stdHours,
-
-                stdSlots);
-
-        }
-
-
-
-        public static WorkingDayCalculator Default => _default;
-
-
-
-        // --- Helper Methods ---
-
-
-
-        /// <summary>
-
-        /// Gets the defined work hours for a specific date, checking exceptions first.
-
-        /// </summary>
-
-        private decimal GetWorkHours(DateTime date)
-
-        {
-
-            date = date.Date;
-
-            if (_exceptionHours.TryGetValue(date, out decimal hours))
-
-            {
-
-                return hours; // Return specific exception hours (could be 0)
-
-            }
-
-            return _standardWeekHours[(int)date.DayOfWeek]; // Return standard week hours
-
-        }
-
-
-
-        /// <summary>
-
-        /// Gets the list of defined time slots for a specific date.
-
-        /// </summary>
-
-        private List<(TimeSpan Start, TimeSpan End)> GetTimeSlots(DateTime date)
-
-        {
-
-            date = date.Date;
-
-            if (_exceptionTimeSlots.TryGetValue(date, out var slots))
-
-            {
-
-                return slots; // Return specific exception slots
-
-            }
-
-            var stdSlots = _standardWeekTimeSlots[(int)date.DayOfWeek];
-
-            return stdSlots ?? new List<(TimeSpan, TimeSpan)>(); // Ensure list is never null
-
-        }
-
-
-
-        /// <summary>
-
-        /// Checks if a date is a working day (has > 0 work hours).
-
-        /// </summary>
-
-        public bool IsWorkingDay(DateTime date)
-
-        {
-
-            return GetWorkHours(date.Date) > 0;
-
-        }
-
-
-
-        /// <summary>
-
-        /// Calculates remaining work hours on a given day from a specific time.
-
-        /// </summary>
-
-        private decimal GetRemainingHoursOnDay(DateTime startDateTime)
-
-        {
-
-            var slots = GetTimeSlots(startDateTime.Date);
-
-            if (slots == null || slots.Count == 0)
-
-            {
-
-                return 0m;
-
-            }
-
-
-
-            TimeSpan startTime = startDateTime.TimeOfDay;
-
-            decimal remainingHours = 0m;
-
-
-
-            foreach (var (slotStart, slotEnd) in slots)
-
-            {
-
-                if (startTime < slotEnd) // If the time is before the end of the slot
-
-                {
-
-                    // Find the effective start time (either the slot start or the current time, whichever is later)
-
-                    TimeSpan effectiveStart = (startTime > slotStart) ? startTime : slotStart;
-
-                    remainingHours += (decimal)(slotEnd - effectiveStart).TotalHours;
-
-                }
-
-            }
-
-            return Math.Max(0, remainingHours);
-
-        }
-
-
-
-        /// <summary>
-
-        /// Calculates hours worked on a given day up to a specific time.
-
-        /// </summary>
-
-        private decimal GetHoursWorkedOnDay(DateTime endDateTime)
-
-        {
-
-            var slots = GetTimeSlots(endDateTime.Date);
-
-            if (slots == null || slots.Count == 0)
-
-            {
-
-                return 0m;
-
-            }
-
-
-
-            TimeSpan endTime = endDateTime.TimeOfDay;
-
-            decimal hoursWorked = 0m;
-
-
-
-            foreach (var (slotStart, slotEnd) in slots)
-
-            {
-
-                if (endTime > slotStart) // If the time is after the start of the slot
-
-                {
-
-                    // Find the effective end time (either the slot end or the current time, whichever is earlier)
-
-                    TimeSpan effectiveEnd = (endTime < slotEnd) ? endTime : slotEnd;
-
-                    hoursWorked += (decimal)(effectiveEnd - slotStart).TotalHours;
-
-                }
-
-            }
-
-            return Math.Max(0, hoursWorked);
-
-        }
-
-
-
-        /// <summary>
-
-        /// Finds the exact time on a given day when a certain amount of work has been completed.
-
-        /// </summary>
-
-        private TimeSpan FindTimeForHoursWorked(DateTime date, decimal hoursWorked)
-
-        {
-
-            var slots = GetTimeSlots(date.Date);
-
-            if (slots == null || slots.Count == 0)
-
-            {
-
-                return TimeSpan.Zero;
-
-            }
-
-
-
-            decimal hoursAccumulated = 0m;
-
-
-
-            foreach (var (slotStart, slotEnd) in slots)
-
-            {
-
-                decimal slotDuration = (decimal)(slotEnd - slotStart).TotalHours;
-
-                if (hoursAccumulated + slotDuration >= hoursWorked)
-
-                {
-
-                    // The time is in this slot
-
-                    decimal hoursNeededInSlot = hoursWorked - hoursAccumulated;
-
-                    return slotStart + TimeSpan.FromHours((double)hoursNeededInSlot);
-
-                }
-
-                // Time is after this slot, add this slot's full duration
-
-                hoursAccumulated += slotDuration;
-
-            }
-
-            // If hoursWorked > total work hours, return end of last slot
-
-            return slots.LastOrDefault().End;
-
-        }
-
-
-
-        // --- NEW CALCULATION METHODS (WITH NEGATIVE LAG FIX) ---
-
-
-
-        /// <summary>
-
-        /// Projects a date forward or backward by a specific number of working hours.
-
-        /// </summary>
-
-        public DateTime AddWorkingHours(DateTime startDate, decimal lagHours)
-
-        {
-
-            if (lagHours == 0) return startDate;
-
-
-
-            if (lagHours > 0)
-
-            {
-
-                return ProjectForward(startDate, lagHours);
-
-            }
-
-            else
-
-            {
-
-                // Call new method for projecting backward
-
-                return ProjectBackward(startDate, -lagHours); // Pass a positive duration
-
-            }
-
-        }
-
-
-
-        private DateTime ProjectForward(DateTime startDate, decimal hoursToAdd)
-
-        {
-
-            DateTime currentDate = startDate;
-
-            decimal hoursRemaining = hoursToAdd;
-
-
-
-            // 1. Spend remaining hours on the start day
-
-            decimal remainingDayHours = GetRemainingHoursOnDay(currentDate);
-
-            if (remainingDayHours > hoursRemaining)
-
-            {
-
-                // Lag finishes on the same day.
-
-                // We need to find the exact finish time.
-
-                var slots = GetTimeSlots(currentDate.Date);
-
-                TimeSpan currentTime = currentDate.TimeOfDay;
-
-                foreach (var (slotStart, slotEnd) in slots)
-
-                {
-
-                    if (currentTime < slotEnd)
-
-                    {
-
-                        TimeSpan effectiveStart = (currentTime > slotStart) ? currentTime : slotStart;
-
-                        decimal slotDuration = (decimal)(slotEnd - effectiveStart).TotalHours;
-
-
-
-                        if (hoursRemaining <= slotDuration)
-
-                        {
-
-                            // Finishes in this slot
-
-                            return currentDate.Date + effectiveStart + TimeSpan.FromHours((double)hoursRemaining);
-
-                        }
-
-                        // Finishes after this slot, consume this slot's hours
-
-                        hoursRemaining -= slotDuration;
-
-                        currentTime = slotEnd; // Move time to end of this slot
-
-                    }
-
-                }
-
-                // Should not be reachable if GetRemainingHoursOnDay was correct
-
-                return currentDate.Date.AddDays(1);
-
-            }
-
-
-
-            // Lag does not finish on the start day
-
-            hoursRemaining -= remainingDayHours;
-
-            currentDate = currentDate.Date.AddDays(1); // Move to start of next day
-
-
-
-            // 2. Spend hours on full days
-
-            while (true)
-
-            {
-
-                decimal dayHours = GetWorkHours(currentDate);
-
-                if (dayHours > 0)
-
-                {
-
-                    if (hoursRemaining <= dayHours)
-
-                    {
-
-                        // Lag finishes on this day
-
-                        break;
-
-                    }
-
-                    // Consume the full day and move to the next
-
-                    hoursRemaining -= dayHours;
-
-                }
-
-                currentDate = currentDate.AddDays(1);
-
-            }
-
-
-
-            // 3. Find the exact finish time on the final day
-
-            var finalDaySlots = GetTimeSlots(currentDate.Date);
-
-            if (finalDaySlots == null || finalDaySlots.Count == 0)
-
-            {
-
-                // This case should be impossible if GetWorkHours(currentDate) > 0
-
-                return currentDate;
-
-            }
-
-
-
-            // This is just `GetHoursWorkedOnDay` in reverse, which is `FindTimeForHoursWorked`
-
-            TimeSpan finalTime = FindTimeForHoursWorked(currentDate, hoursRemaining);
-
-            return currentDate.Date + finalTime;
-
-        }
-
-
-
-        private DateTime ProjectBackward(DateTime startDate, decimal hoursToSubtract)
-
-        {
-
-            DateTime currentDate = startDate;
-
-            decimal hoursRemainingToSubtract = hoursToSubtract;
-
-
-
-            // 1. "Un-spend" hours on the start day
-
-            decimal hoursWorkedToday = GetHoursWorkedOnDay(currentDate);
-
-
-
-            if (hoursWorkedToday > hoursRemainingToSubtract)
-
-            {
-
-                // Lag finishes (starts) on the same day.
-
-                decimal targetHoursWorked = hoursWorkedToday - hoursRemainingToSubtract;
-
-                TimeSpan finalTime = FindTimeForHoursWorked(currentDate, targetHoursWorked);
-
-                return currentDate.Date + finalTime;
-
-            }
-
-
-
-            // Lag does not finish on the start day
-
-            hoursRemainingToSubtract -= hoursWorkedToday;
-
-            currentDate = currentDate.Date.AddDays(-1); // Move to previous day
-
-
-
-            // 2. "Un-spend" hours on full days
-
-            while (true)
-
-            {
-
-                decimal dayHours = GetWorkHours(currentDate);
-
-                if (dayHours > 0)
-
-                {
-
-                    if (hoursRemainingToSubtract <= dayHours)
-
-                    {
-
-                        // Lag finishes (starts) on this day
-
-                        break;
-
-                    }
-
-                    // Consume the full day and move to the previous
-
-                    hoursRemainingToSubtract -= dayHours;
-
-                }
-
-                currentDate = currentDate.AddDays(-1);
-
-            }
-
-
-
-            // 3. Find the exact start time on the final day
-
-            decimal hoursToWorkOnFinalDay = GetWorkHours(currentDate) - hoursRemainingToSubtract;
-
-            TimeSpan finalTimeOnDay = FindTimeForHoursWorked(currentDate, hoursToWorkOnFinalDay);
-
-            return currentDate.Date + finalTimeOnDay;
-
-        }
-
-
-
-        /// <summary>
-
-        /// Counts the precise working hours between two DateTimes.
-
-        /// </summary>
-
-        public decimal CountWorkingHours(DateTime startDate, DateTime endDate)
-
-        {
-
-            if (Math.Abs((startDate - endDate).TotalSeconds) < 1) return 0m;
-
-
-
-            // Handle reverse
-
-            if (endDate < startDate)
-
-            {
-
-                return -CountWorkingHours(endDate, startDate);
-
-            }
-
-
-
-            decimal totalHours = 0m;
-
-            DateTime currentDate = startDate.Date;
-
-
-
-            // --- 1. Handle Start Day (Partial Day) ---
-
-            if (currentDate == endDate.Date)
-
-            {
-
-                // Start and End are on the same day
-
-                var slots = GetTimeSlots(currentDate);
-
-                if (slots == null) return 0m;
-
-
-
-                TimeSpan startTime = startDate.TimeOfDay;
-
-                TimeSpan endTime = endDate.TimeOfDay;
-
-
-
-                foreach (var (slotStart, slotEnd) in slots)
-
-                {
-
-                    TimeSpan effectiveStart = (startTime > slotStart) ? startTime : slotStart;
-
-                    TimeSpan effectiveEnd = (endTime < slotEnd) ? endTime : slotEnd;
-
-
-
-                    if (effectiveEnd > effectiveStart)
-
-                    {
-
-                        totalHours += (decimal)(effectiveEnd - effectiveStart).TotalHours;
-
-                    }
-
-                }
-
-                return totalHours;
-
-            }
-
-
-
-            // Start and End are on different days
-
-            totalHours += GetRemainingHoursOnDay(startDate);
-
-            currentDate = currentDate.AddDays(1);
-
-
-
-            // --- 2. Handle Full Days Between ---
-
-            while (currentDate < endDate.Date)
-
-            {
-
-                totalHours += GetWorkHours(currentDate);
-
-                currentDate = currentDate.AddDays(1);
-
-            }
-
-
-
-            // --- 3. Handle End Day (Partial Day) ---
-
-            totalHours += GetHoursWorkedOnDay(endDate);
-
-
-
-            return totalHours;
-
-        }
-
-    }
 
 
 
     // Lightweight struct for data rows
-    public readonly record struct DataRow(string[] Fields, string SourceFilename);
+    public readonly record struct DataRow
+    {
+        public DataRow(string[] Fields, string SourceFilename, string? sourceToken = null,
+            string? originalSourceFilename = null)
+        {
+            this.Fields = Fields;
+            this.SourceFilename = SourceFilename;
+            SourceToken = sourceToken ?? SourceFilename;
+            OriginalSourceFilename = originalSourceFilename ?? SourceFilename;
+        }
+
+        public string[] Fields { get; init; }
+        // Compatibility/public-key namespace, distinct from immutable occurrence identity.
+        public string SourceFilename { get; init; }
+        public string SourceToken { get; init; }
+        public string OriginalSourceFilename { get; init; }
+        public DataRow WithFields(string[] fields) => this with { Fields = fields };
+        public void Deconstruct(out string[] fields, out string sourceFilename)
+        {
+            fields = Fields;
+            sourceFilename = SourceFilename;
+        }
+    }
 
 
     // Represents a table extracted from the XER file
@@ -1158,7 +459,7 @@ namespace XerToCsvConverter;
             {
                 newValues[i] = string.Empty;
             }
-            return new DataRow(newValues, row.SourceFilename);
+            return row.WithFields(newValues);
         }
 
 
@@ -1230,104 +531,67 @@ namespace XerToCsvConverter;
         private readonly Dictionary<string, XerTable> _tables = new Dictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
 
 
-        // Merges data from another store (used during parallel parsing)
-
+        // Ordered, schema-preserving merge. Neither the incoming headers nor rows are mutated.
         public void MergeStore(XerDataStore otherStore)
-
         {
+            ArgumentNullException.ThrowIfNull(otherStore);
+            if (ReferenceEquals(this, otherStore))
+                throw new ArgumentException("A data store cannot be merged into itself.", nameof(otherStore));
 
-            foreach (var kvp in otherStore._tables)
+            // Preflight both complete stores before mutating either schema or row set.
+            // Otherwise a later source's duplicate columns can collapse during union and
+            // evade the final export-schema checks with one overwritten value remaining.
+            foreach (XerTable table in _tables.Values.Concat(otherStore._tables.Values))
+                XerSourceSchema.ValidateHeaders(table.Name, table.Headers);
+
+            foreach (var pair in otherStore._tables)
             {
-                if (_tables.TryGetValue(kvp.Key, out XerTable? existingTable) && existingTable != null)
+                XerTable incoming = pair.Value;
+                if (!_tables.TryGetValue(pair.Key, out XerTable? existing))
                 {
-                    var incomingTable = kvp.Value;
-                    if (existingTable.Headers == null)
-                    {
-                        if (incomingTable.Headers != null)
-                        {
-                            existingTable.SetHeaders(incomingTable.Headers);
-                        }
-
-                        existingTable.AddRows(incomingTable.Rows);
-                        continue;
-                    }
-
-                    if (incomingTable.Headers == null)
-                    {
-                        existingTable.AddRows(incomingTable.Rows);
-                        continue;
-                    }
-
-                    if (HeadersMatch(existingTable.Headers, incomingTable.Headers))
-                    {
-                        existingTable.AddRows(incomingTable.Rows);
-                    }
-                    else
-                    {
-                        MergeRowsByHeader(existingTable, incomingTable);
-                    }
-                }
-                else
-                {
-                    _tables.Add(kvp.Key, kvp.Value);
-                }
-            }
-
-        }
-
-        private static bool HeadersMatch(string[] existingHeaders, string[] incomingHeaders)
-        {
-            if (existingHeaders.Length != incomingHeaders.Length)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < existingHeaders.Length; i++)
-            {
-                if (!string.Equals(existingHeaders[i], incomingHeaders[i], StringComparison.OrdinalIgnoreCase))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private static void MergeRowsByHeader(XerTable targetTable, XerTable sourceTable)
-        {
-            if (targetTable.Headers == null || sourceTable.Headers == null)
-            {
-                targetTable.AddRows(sourceTable.Rows);
-                return;
-            }
-
-            var targetIndexes = targetTable.FieldIndexes;
-            string[] sourceHeaders = sourceTable.Headers;
-            int targetLength = targetTable.Headers.Length;
-
-            foreach (var row in sourceTable.Rows)
-            {
-                string[] merged = new string[targetLength];
-                Array.Fill(merged, string.Empty);
-
-                string[] sourceFields = row.Fields;
-                int copyLimit = Math.Min(sourceHeaders.Length, sourceFields.Length);
-
-                for (int i = 0; i < copyLimit; i++)
-                {
-                    string header = sourceHeaders[i];
-                    if (string.IsNullOrEmpty(header))
-                    {
-                        continue;
-                    }
-
-                    if (targetIndexes.TryGetValue(header, out int targetIndex))
-                    {
-                        merged[targetIndex] = sourceFields[i] ?? string.Empty;
-                    }
+                    var copy = new XerTable(incoming.Name, incoming.RowCount);
+                    if (incoming.Headers is not null) copy.SetHeaders(incoming.Headers.ToArray());
+                    copy.AddRows(incoming.Rows);
+                    _tables.Add(pair.Key, copy);
+                    continue;
                 }
 
-                targetTable.AddRow(new DataRow(merged, row.SourceFilename));
+                string[] currentHeaders = existing.Headers ?? Array.Empty<string>();
+                string[] incomingHeaders = incoming.Headers ?? Array.Empty<string>();
+                var headers = currentHeaders.ToList();
+                var seen = currentHeaders.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (string header in incomingHeaders)
+                    if (seen.Add(header)) headers.Add(header);
+
+                if (headers.Count != currentHeaders.Length)
+                {
+                    var widened = new XerTable(existing.Name, existing.RowCount + incoming.RowCount);
+                    widened.SetHeaders(headers.ToArray());
+                    foreach (DataRow row in existing.Rows)
+                        widened.AddRow(row); // Extends with blanks and preserves source metadata.
+                    existing = widened;
+                    _tables[pair.Key] = existing;
+                }
+                else if (existing.Headers is null)
+                {
+                    existing.SetHeaders(headers.ToArray());
+                }
+
+                if (headers.SequenceEqual(incomingHeaders, StringComparer.OrdinalIgnoreCase))
+                {
+                    existing.AddRows(incoming.Rows);
+                    continue;
+                }
+
+                foreach (DataRow row in incoming.Rows)
+                {
+                    var fields = new string[headers.Count];
+                    Array.Fill(fields, string.Empty);
+                    for (int i = 0; i < Math.Min(incomingHeaders.Length, row.Fields.Length); i++)
+                        if (existing.FieldIndexes.TryGetValue(incomingHeaders[i], out int destination))
+                            fields[destination] = row.Fields[i] ?? string.Empty;
+                    existing.AddRow(row.WithFields(fields));
+                }
             }
         }
 
@@ -1362,27 +626,11 @@ namespace XerToCsvConverter;
 
         private const char Delimiter = '\t';
 
-        private static readonly Encoding StrictUtf8 = new UTF8Encoding(
-            encoderShouldEmitUTF8Identifier: false,
-            throwOnInvalidBytes: true);
-
-        private static readonly Encoding Windows1252 = CreateWindows1252Encoding();
-
-        private static Encoding CreateWindows1252Encoding()
-        {
-            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            return Encoding.GetEncoding(
-                1252,
-                EncoderFallback.ExceptionFallback,
-                DecoderFallback.ExceptionFallback);
-        }
-
-
-
         // Parses XER content from a Stream (for in-memory / Blazor scenarios)
         public XerDataStore ParseXerStream(Stream stream, string fileName, Action<int, string>? reportProgressAction, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(stream);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
             if (!stream.CanRead) throw new ArgumentException("The XER stream must be readable.", nameof(stream));
 
             Stream readableStream = stream;
@@ -1395,19 +643,20 @@ namespace XerToCsvConverter;
                 readableStream = ownedCopy;
             }
 
-            long startPosition = readableStream.Position;
+            XerTextEncoding.Selection selection = XerTextEncoding.Detect(readableStream);
+            string sourceToken = "parser-source-" + Guid.NewGuid().ToString("N");
             try
             {
                 try
                 {
                     return ParseXerStreamWithEncoding(
-                        readableStream, fileName, StrictUtf8, reportProgressAction, cancellationToken);
+                        readableStream, fileName, sourceToken, selection.Encoding, reportProgressAction, cancellationToken);
                 }
-                catch (DecoderFallbackException)
+                catch (DecoderFallbackException) when (!selection.HasBom)
                 {
-                    readableStream.Position = startPosition;
+                    readableStream.Position = selection.ContentPosition;
                     return ParseXerStreamWithEncoding(
-                        readableStream, fileName, Windows1252, reportProgressAction, cancellationToken);
+                        readableStream, fileName, sourceToken, XerTextEncoding.Windows1252, reportProgressAction, cancellationToken);
                 }
             }
             finally
@@ -1425,6 +674,7 @@ namespace XerToCsvConverter;
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(stream);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
             if (!stream.CanRead) throw new ArgumentException("The XER stream must be readable.", nameof(stream));
 
             Stream readableStream = stream;
@@ -1437,19 +687,20 @@ namespace XerToCsvConverter;
                 readableStream = ownedCopy;
             }
 
-            long startPosition = readableStream.Position;
+            XerTextEncoding.Selection selection = XerTextEncoding.Detect(readableStream);
+            string sourceToken = "parser-source-" + Guid.NewGuid().ToString("N");
             try
             {
                 try
                 {
                     return await ParseXerStreamWithEncodingAsync(
-                        readableStream, fileName, StrictUtf8, reportProgressAction, cancellationToken);
+                        readableStream, fileName, sourceToken, selection.Encoding, reportProgressAction, cancellationToken);
                 }
-                catch (DecoderFallbackException)
+                catch (DecoderFallbackException) when (!selection.HasBom)
                 {
-                    readableStream.Position = startPosition;
+                    readableStream.Position = selection.ContentPosition;
                     return await ParseXerStreamWithEncodingAsync(
-                        readableStream, fileName, Windows1252, reportProgressAction, cancellationToken);
+                        readableStream, fileName, sourceToken, XerTextEncoding.Windows1252, reportProgressAction, cancellationToken);
                 }
             }
             finally
@@ -1461,6 +712,7 @@ namespace XerToCsvConverter;
         private static async Task<XerDataStore> ParseXerStreamWithEncodingAsync(
             Stream stream,
             string fileName,
+            string sourceToken,
             Encoding encoding,
             Action<int, string>? reportProgressAction,
             CancellationToken cancellationToken)
@@ -1475,7 +727,7 @@ namespace XerToCsvConverter;
             long bytesRead = 0;
             int lastReportedProgress = 0;
 
-            using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+            using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
             while (await reader.ReadLineAsync(cancellationToken) is { } line)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1499,11 +751,11 @@ namespace XerToCsvConverter;
                     await Task.Delay(1, cancellationToken);
                 }
 
-                ParseXerContentLine(line, filename, localTables, ref currentTable);
+                ParseXerContentLine(line, filename, sourceToken, localTables, ref currentTable);
             }
 
             foreach ((string _, XerTable table) in localTables)
-                if (!table.IsEmpty) fileStore.AddTable(table);
+                if (table.Headers is not null) fileStore.AddTable(table);
 
             reportProgressAction?.Invoke(100, $"Finished parsing {filename}");
             return fileStore;
@@ -1512,6 +764,7 @@ namespace XerToCsvConverter;
         private static void ParseXerContentLine(
             string line,
             string filename,
+            string sourceToken,
             Dictionary<string, XerTable> localTables,
             ref XerTable? currentTable)
         {
@@ -1526,6 +779,7 @@ namespace XerToCsvConverter;
                     if (!tableNameSpan.IsEmpty)
                     {
                         string currentTableName = StringInternPool.Intern(tableNameSpan);
+                        StandardExportPublication.ValidateTableName(currentTableName);
                         currentTable = new XerTable(currentTableName);
                         localTables[currentTable.Name] = currentTable;
                     }
@@ -1535,7 +789,9 @@ namespace XerToCsvConverter;
                     {
                         ReadOnlySpan<char> fieldsLine = lineSpan[2..];
                         if (!fieldsLine.IsEmpty && fieldsLine[0] == Delimiter) fieldsLine = fieldsLine[1..];
-                        currentTable.SetHeaders(FastSplitAndIntern(fieldsLine, Delimiter, trim: true));
+                        string[] headers = FastSplitAndIntern(fieldsLine, Delimiter, trim: true);
+                        XerSourceSchema.ValidateHeaders(currentTable.Name, headers);
+                        currentTable.SetHeaders(headers);
                     }
                     break;
                 case 'R':
@@ -1544,7 +800,7 @@ namespace XerToCsvConverter;
                         ReadOnlySpan<char> dataLine = lineSpan[2..];
                         if (!dataLine.IsEmpty && dataLine[0] == Delimiter) dataLine = dataLine[1..];
                         currentTable.AddRow(new DataRow(
-                            FastSplitAndIntern(dataLine, Delimiter, trim: false), filename));
+                            FastSplitAndIntern(dataLine, Delimiter, trim: false), filename, sourceToken));
                     }
                     break;
             }
@@ -1553,13 +809,14 @@ namespace XerToCsvConverter;
         private XerDataStore ParseXerStreamWithEncoding(
             Stream stream,
             string fileName,
+            string sourceToken,
             Encoding encoding,
             Action<int, string>? reportProgressAction,
             CancellationToken cancellationToken)
         {
             var fileStore = new XerDataStore();
             string filename = StringInternPool.Intern(fileName);
-            int progressReportInterval = PerformanceConfig.ProgressReportIntervalLines;
+            int progressReportInterval = Math.Max(1, PerformanceConfig.ProgressReportIntervalLines);
 
             var localTables = new Dictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
             XerTable? currentTable = null;
@@ -1569,7 +826,7 @@ namespace XerToCsvConverter;
             long bytesRead = 0;
             int lastReportedProgress = 0;
 
-            using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+            using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
             string? line;
 
             while ((line = reader.ReadLine()) != null)
@@ -1600,6 +857,7 @@ namespace XerToCsvConverter;
                         if (!tableNameSpan.IsEmpty)
                         {
                             string currentTableName = StringInternPool.Intern(tableNameSpan);
+                            StandardExportPublication.ValidateTableName(currentTableName);
                             currentTable = new XerTable(currentTableName);
                             localTables[currentTable.Name] = currentTable;
                         }
@@ -1610,6 +868,7 @@ namespace XerToCsvConverter;
                             ReadOnlySpan<char> fieldsLine = lineSpan[2..];
                             if (!fieldsLine.IsEmpty && fieldsLine[0] == Delimiter) fieldsLine = fieldsLine[1..];
                             string[] headers = FastSplitAndIntern(fieldsLine, Delimiter, trim: true);
+                            XerSourceSchema.ValidateHeaders(currentTable.Name, headers);
                             currentTable.SetHeaders(headers);
                         }
                         break;
@@ -1619,7 +878,7 @@ namespace XerToCsvConverter;
                             ReadOnlySpan<char> dataLine = lineSpan[2..];
                             if (!dataLine.IsEmpty && dataLine[0] == Delimiter) dataLine = dataLine[1..];
                             string[] values = FastSplitAndIntern(dataLine, Delimiter, trim: false);
-                            currentTable.AddRow(new DataRow(values, filename));
+                            currentTable.AddRow(new DataRow(values, filename, sourceToken));
                         }
                         break;
                 }
@@ -1627,7 +886,7 @@ namespace XerToCsvConverter;
 
             foreach (var kvp in localTables)
             {
-                if (!kvp.Value.IsEmpty)
+                if (kvp.Value.Headers is not null)
                 {
                     fileStore.AddTable(kvp.Value);
                 }
@@ -1637,251 +896,16 @@ namespace XerToCsvConverter;
             return fileStore;
         }
 
-        // PERFORMANCE/UX OPTIMIZATION: Added CancellationToken, Optimized Encoding and Progress Reporting
-
+        // File, synchronous stream and cooperative browser parsing share the same strict decoder.
         public XerDataStore ParseXerFile(string xerFilePath, Action<int, string>? reportProgressAction, CancellationToken cancellationToken)
         {
-
-            var fileStore = new XerDataStore();
-
-            string filename = StringInternPool.Intern(Path.GetFileName(xerFilePath));
-
-            int bufferSize = PerformanceConfig.FileReadBufferSize;
-
-            int progressReportInterval = PerformanceConfig.ProgressReportIntervalLines;
-
-
-
-            var localTables = new Dictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
-            XerTable? currentTable = null;
-            int lineCount = 0;
-
-            long bytesRead = 0;
-
-
-
-            // Use strict UTF-8 first; legacy P6 exports are retried explicitly as Windows-1252.
-
-            Encoding encoding = StrictUtf8;
-            bool retryWithWindows1252 = false;
-
-            while (true)
+            ArgumentException.ThrowIfNullOrWhiteSpace(xerFilePath);
+            using var stream = new FileStream(xerFilePath, new FileStreamOptions
             {
-                fileStore = new XerDataStore();
-                localTables = new Dictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
-                currentTable = null;
-                lineCount = 0;
-                bytesRead = 0;
-
-
-
-            try
-
-            {
-
-                var fileInfo = new FileInfo(xerFilePath);
-
-                long fileSize = fileInfo.Length;
-
-                if (fileSize == 0) return fileStore;
-
-
-
-                int lastReportedProgress = 0;
-
-
-
-                // Use FileStreamOptions for optimized sequential reading of large files
-                var fileOptions = new FileStreamOptions
-                {
-                    Mode = FileMode.Open,
-                    Access = FileAccess.Read,
-                    Share = FileShare.Read,
-                    BufferSize = bufferSize,
-                    Options = FileOptions.SequentialScan
-                };
-                using var fileStream = new FileStream(xerFilePath, fileOptions);
-                // Enable BOM detection, fallback to defined encoding (UTF8)
-                using var reader = new StreamReader(fileStream, encoding, detectEncodingFromByteOrderMarks: true, bufferSize);
-                {
-                    string? line;
-
-
-
-                    // Get the actual encoding used by the reader (might change if BOM is detected)
-
-                    encoding = reader.CurrentEncoding;
-
-
-
-                    // PERFORMANCE OPTIMIZATION: Estimate average bytes per char for faster progress calculation
-
-                    // Calculating exact byte count for every line is slow.
-
-                    double avgBytesPerChar = 1.0; // Default assumption for UTF8/ASCII
-
-                    if (encoding is UnicodeEncoding || encoding is UTF32Encoding)
-
-                    {
-
-                        // More accurate estimation for wide encodings
-
-                        avgBytesPerChar = encoding.GetEncoder().GetByteCount(new char[] { 'a' }, 0, 1, true);
-
-                    }
-
-
-
-                    while ((line = reader.ReadLine()) != null)
-
-                    {
-
-                        // UI/UX OPTIMIZATION: Check for cancellation
-
-                        cancellationToken.ThrowIfCancellationRequested();
-
-
-
-                        // PERFORMANCE OPTIMIZATION: Optimized progress calculation using estimation
-
-                        bytesRead += (long)(line.Length * avgBytesPerChar) + Environment.NewLine.Length;
-
-
-
-                        lineCount++;
-
-
-
-                        if (lineCount % progressReportInterval == 0)
-
-                        {
-
-                            // Ensure progress doesn't exceed 100% due to estimation inaccuracies
-
-                            int progress = Math.Min(100, (int)((double)bytesRead * 100 / fileSize));
-
-                            if (progress > lastReportedProgress)
-
-                            {
-
-                                reportProgressAction?.Invoke(progress, $"Parsing {filename}: {progress}%");
-
-                                lastReportedProgress = progress;
-
-                            }
-
-                        }
-
-
-
-                        if (string.IsNullOrWhiteSpace(line)) continue;
-
-                        ReadOnlySpan<char> lineSpan = line.AsSpan();
-                        // XER format lines start with %T (Table), %F (Fields), or %R (Row)
-                        if (lineSpan.Length < 2 || lineSpan[0] != '%') continue;
-
-                        char typeChar = lineSpan[1];
-
-
-                        switch (typeChar)
-
-                        {
-
-                            case 'T': // Table Definition
-                                ReadOnlySpan<char> tableNameSpan = lineSpan[2..].Trim();
-                                if (!tableNameSpan.IsEmpty)
-                                {
-                                    string currentTableName = StringInternPool.Intern(tableNameSpan);
-                                    currentTable = new XerTable(currentTableName);
-                                    localTables[currentTable.Name] = currentTable;
-                                }
-                                break;
-
-
-                            case 'F': // Field Definitions (Headers)
-                                if (currentTable != null)
-                                {
-                                    ReadOnlySpan<char> fieldsLine = lineSpan[2..];
-                                    // Handle potential leading delimiter
-                                    if (!fieldsLine.IsEmpty && fieldsLine[0] == Delimiter) fieldsLine = fieldsLine[1..];
-                                    string[] headers = FastSplitAndIntern(fieldsLine, Delimiter, trim: true);
-                                    currentTable.SetHeaders(headers);
-                                }
-                                break;
-
-
-                            case 'R': // Row Data
-                                if (currentTable != null && currentTable.Headers is not null)
-                                {
-                                    ReadOnlySpan<char> dataLine = lineSpan[2..];
-                                    if (!dataLine.IsEmpty && dataLine[0] == Delimiter) dataLine = dataLine[1..];
-                                    string[] values = FastSplitAndIntern(dataLine, Delimiter, trim: false);
-                                    currentTable.AddRow(new DataRow(values, filename));
-                                }
-                                break;
-                        }
-
-                    }
-
-                }
-
-
-
-                // Add non-empty tables to the store
-
-                foreach (var kvp in localTables)
-
-                {
-
-                    if (!kvp.Value.IsEmpty)
-
-                    {
-
-                        fileStore.AddTable(kvp.Value);
-
-                    }
-
-                }
-
-
-
-                reportProgressAction?.Invoke(100, $"Finished parsing {filename}");
-
-                return fileStore;
-
-            }
-
-            catch (DecoderFallbackException)
-            {
-                if (!retryWithWindows1252)
-                {
-                    encoding = Windows1252;
-                    retryWithWindows1252 = true;
-                    continue;
-                }
-
-                throw;
-            }
-            catch (OperationCanceledException)
-
-            {
-
-                // Rethrow cancellation to be handled by the caller (ProcessingService)
-
-                throw;
-
-            }
-
-            catch (Exception ex)
-
-            {
-
-                throw new Exception($"Error reading file {filename} at line {lineCount}. Bytes read: {bytesRead}.", ex);
-
-            }
-
-        }
-
+                Mode = FileMode.Open, Access = FileAccess.Read, Share = FileShare.Read,
+                BufferSize = PerformanceConfig.FileReadBufferSize, Options = FileOptions.SequentialScan
+            });
+            return ParseXerStream(stream, Path.GetFileName(xerFilePath), reportProgressAction, cancellationToken);
         }
 
 
@@ -2003,7 +1027,7 @@ namespace XerToCsvConverter;
 
                         // Add FileName data
                         if (rowFields.Length > 0) writer.Write(',');
-                        WriteEscapedField(writer, dataRow.SourceFilename);
+                        WriteEscapedField(writer, dataRow.OriginalSourceFilename);
                         writer.WriteLine();
                     }
 
@@ -2044,7 +1068,7 @@ namespace XerToCsvConverter;
                     WriteEscapedField(writer, rowFields[j] ?? string.Empty);
                 }
                 if (rowFields.Length > 0) writer.Write(',');
-                WriteEscapedField(writer, dataRow.SourceFilename);
+                WriteEscapedField(writer, dataRow.OriginalSourceFilename);
                 writer.WriteLine();
             }
             writer.Flush();
@@ -2070,7 +1094,7 @@ namespace XerToCsvConverter;
 
             // Escape internal quotes and wrap the field
             writer.Write('"');
-            
+
             // If we have no quotes, we can construct the quoted string faster
             if (!fieldSpan.Contains('"'))
             {
@@ -2114,46 +1138,9 @@ namespace XerToCsvConverter;
             FieldNames.MonthUpdate
         }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
-        // Generated Regex for optimized pattern matching in calendar parsing
-        [GeneratedRegex("""\(0\|\|(\d+)\(d\|(\d+)\)\s*\((.*?)\)\s*\)""", RegexOptions.Singleline)]
-        private static partial Regex ExcPatternRegex();
-
-        [GeneratedRegex("""\(0\|\|(\d+)\(d\|(\d+)\|0\)\s*\((.*?)\)\s*\)""", RegexOptions.Singleline)]
-        private static partial Regex ExcPatternRegex2();
-
-        [GeneratedRegex("""(\|\|)\s+""", RegexOptions.Singleline)]
-        private static partial Regex CleanRegex1();
-
-        [GeneratedRegex("""\s+(\|\|)""", RegexOptions.Singleline)]
-        private static partial Regex CleanRegex2();
-
-        // Captures day number (Group 1) and content (Group 2). Handles nested parentheses in content.
-        [GeneratedRegex("""\(0\|\|(\d)\(\)\s*\(((?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)\s*\)""", RegexOptions.Singleline)]
-        private static partial Regex DayPatternRegex();
-
-        [GeneratedRegex("""\(0\|\|(\d)\(\)\s*\(\s*\)\s*\)""", RegexOptions.Singleline)]
-        private static partial Regex EmptyDayPatternRegex();
-
         // Regex to extract YYMM from filename for MonthUpdate column
         [GeneratedRegex("""^(\d{4})""", RegexOptions.Singleline)]
         private static partial Regex MonthUpdateRegex();
-
-        // .NET 8: GeneratedRegex for time slot parsing in calendar work hours
-        // Pattern 1: (0||N (s|HH:MM|f|HH:MM) ()) - Most common format
-        [GeneratedRegex(@"\(0\|\|\d+\s*\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)\s*\(\s*\)\s*\)", RegexOptions.Singleline)]
-        private static partial Regex TimeSlotPattern1Regex();
-
-        // Pattern 2: (s|HH:MM|f|HH:MM) - Alternative format
-        [GeneratedRegex(@"\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)", RegexOptions.Singleline)]
-        private static partial Regex TimeSlotPattern2Regex();
-
-        // Pattern 3: s|HH:MM|f|HH:MM (Simplified format)
-        [GeneratedRegex(@"([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})", RegexOptions.Singleline)]
-        private static partial Regex TimeSlotPattern3Regex();
-
-        // Regex for collapsing multiple whitespace characters
-        [GeneratedRegex(@"\s{2,}", RegexOptions.Singleline)]
-        private static partial Regex MultiSpaceRegex();
 
 
         public XerTransformer(XerDataStore dataStore)
@@ -2205,7 +1192,7 @@ namespace XerToCsvConverter;
 
                             var date = new DateTime(year, month, 1);
 
-                            return date.ToString("yyyy-MM-dd"); // Use a standard, sortable format
+                            return date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
                         }
 
@@ -2292,36 +1279,7 @@ namespace XerToCsvConverter;
 
         // Creates the enhanced TASK table (01_XER_TASK)
 
-        public XerTable? Create01XerTaskTable()
-        {
-
-            var taskTable = _dataStore.GetTable(TableNames.Task);
-
-            var calendarTable = _dataStore.GetTable(TableNames.Calendar);
-
-            var projectTable = _dataStore.GetTable(TableNames.Project);
-
-
-
-            if (!IsTableValid(taskTable) || !IsTableValid(calendarTable) || !IsTableValid(projectTable)) return null;
-
-
-
-            try
-
-            {
-
-                var taskIndexes = taskTable.FieldIndexes;
-
-                // Pre-build lookup tables
-
-                var calendarHours = BuildCalendarHoursLookup(calendarTable);
-
-                var projectDataDates = BuildProjectDataDatesLookup(projectTable);
-
-
-
-                string[] finalColumns = {
+        internal static readonly string[] TaskColumns01 = {
 
                 FieldNames.TaskId, FieldNames.ProjectId, FieldNames.WbsId, FieldNames.CalendarId,
 
@@ -2354,6 +1312,37 @@ namespace XerToCsvConverter;
 
             };
 
+        public XerTable? Create01XerTaskTable()
+        {
+
+            var taskTable = _dataStore.GetTable(TableNames.Task);
+
+            var calendarTable = _dataStore.GetTable(TableNames.Calendar);
+
+            var projectTable = _dataStore.GetTable(TableNames.Project);
+
+
+
+            if (!IsTableValid(taskTable) || !IsTableValid(calendarTable) || !IsTableValid(projectTable)) return null;
+
+
+
+            try
+
+            {
+
+                var taskIndexes = taskTable.FieldIndexes;
+
+                // Pre-build lookup tables
+
+                var calendarHours = BuildCalendarHoursLookup(calendarTable);
+
+                var projectDataDates = BuildProjectDataDatesLookup(projectTable);
+
+
+
+                string[] finalColumns = TaskColumns01;
+
 
 
                 // PERFORMANCE OPTIMIZATION: Pre-calculate target indexes for O(1) lookups in the parallel loop
@@ -2384,13 +1373,14 @@ namespace XerToCsvConverter;
 
                 var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
 
-                var transformedRowsBag = new ConcurrentBag<DataRow>();
+                var transformedRows = new DataRow[taskTable.RowCount];
 
 
 
-                Parallel.ForEach(taskTable.Rows, parallelOptions, sourceRowData =>
+                Parallel.For(0, taskTable.RowCount, parallelOptions, rowIndex =>
 
                 {
+                    DataRow sourceRowData = taskTable.Rows[rowIndex];
 
                     string[] row = sourceRowData.Fields;
 
@@ -2466,7 +1456,7 @@ namespace XerToCsvConverter;
 
                     string calendarKey = CreateKey(originalFilename, clndrId);
 
-                    if (!string.IsNullOrEmpty(clndrId) && calendarHours.TryGetValue(calendarKey, out decimal dayHrCnt) && dayHrCnt > 0)
+                    if (!string.IsNullOrEmpty(clndrId) && calendarHours.TryGetValue((sourceRowData.SourceToken, clndrId.Trim()), out decimal dayHrCnt) && dayHrCnt > 0)
 
                     {
 
@@ -2528,11 +1518,11 @@ namespace XerToCsvConverter;
 
                     // Percentage Complete calculation
 
-                    double pct = CalculateCompletionPercentage(row, taskIndexes, statusCode);
+                    decimal? pct = CalculateCompletionPercentage(row, taskIndexes, statusCode);
 
                     SetTransformedField(transformed, finalIndexes, FieldNames.PercentComplete,
 
-                        pct.ToString("F2", CultureInfo.InvariantCulture));
+                        pct?.ToString("F2", CultureInfo.InvariantCulture) ?? "");
 
 
 
@@ -2540,7 +1530,7 @@ namespace XerToCsvConverter;
 
                     string projectKey = CreateKey(originalFilename, projId);
 
-                    if (!string.IsNullOrEmpty(projId) && projectDataDates.TryGetValue(projectKey, out DateTime dataDateValue))
+                    if (!string.IsNullOrEmpty(projId) && projectDataDates.TryGetValue((sourceRowData.SourceToken, projId.Trim()), out DateTime dataDateValue))
 
                     {
 
@@ -2572,7 +1562,7 @@ namespace XerToCsvConverter;
 
                     // Add MonthUpdate value
 
-                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(sourceRowData.OriginalSourceFilename));
 
 
 
@@ -2588,13 +1578,13 @@ namespace XerToCsvConverter;
 
 
 
-                    transformedRowsBag.Add(new DataRow(transformed, originalFilename));
+                    transformedRows[rowIndex] = sourceRowData.WithFields(transformed);
 
                 });
 
 
 
-                finalTable.AddRows(transformedRowsBag);
+                finalTable.AddRows(transformedRows);
 
                 return finalTable;
 
@@ -2720,185 +1710,61 @@ namespace XerToCsvConverter;
 
 
 
-        private Dictionary<string, decimal> BuildCalendarHoursLookup(XerTable? calendarTable)
-
+        private Dictionary<(string Source, string Id), decimal> BuildCalendarHoursLookup(XerTable? table)
         {
-
-            var lookup = new Dictionary<string, decimal>(calendarTable?.RowCount ?? 0, StringComparer.OrdinalIgnoreCase);
-
-            if (!IsTableValid(calendarTable)) return lookup;
-
-            var indexes = calendarTable.FieldIndexes;
-
-
-
-            if (!indexes.ContainsKey(FieldNames.ClndrId) || !indexes.ContainsKey(FieldNames.DayHourCount)) return lookup;
-
-
-
-            foreach (var rowData in calendarTable.Rows)
-
+            var result = new Dictionary<(string Source, string Id), decimal>();
+            if (!IsTableValid(table)) return result;
+            foreach (var group in table.Rows.GroupBy(row => (row.SourceToken,
+                         GetFieldValue(row.Fields, table.FieldIndexes, FieldNames.ClndrId).Trim())))
             {
-
-                var row = rowData.Fields;
-
-                string clndrId = GetFieldValue(row, indexes, FieldNames.ClndrId);
-
-                string dayHrCntStr = GetFieldValue(row, indexes, FieldNames.DayHourCount);
-
-
-
-                if (!string.IsNullOrEmpty(clndrId) && decimal.TryParse(dayHrCntStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal dayHrCnt) && dayHrCnt > 0)
-
-                {
-
-                    string compositeKey = CreateKey(rowData.SourceFilename, clndrId);
-
-                    lookup[compositeKey] = dayHrCnt;
-
-                }
-
+                if (group.Key.Item2.Length == 0 || group.Count() != 1) continue;
+                string raw = GetFieldValue(group.Single().Fields, table.FieldIndexes, FieldNames.DayHourCount);
+                if (decimal.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out decimal hours) && hours > 0)
+                    result.Add(group.Key, hours);
             }
-
-            return lookup;
-
+            return result;
         }
 
-
-
-        private Dictionary<string, DateTime> BuildProjectDataDatesLookup(XerTable? projectTable)
-
+        private Dictionary<(string Source, string Id), DateTime> BuildProjectDataDatesLookup(XerTable? table)
         {
-
-            var lookup = new Dictionary<string, DateTime>(projectTable?.RowCount ?? 0, StringComparer.OrdinalIgnoreCase);
-
-            if (!IsTableValid(projectTable)) return lookup;
-
-            var indexes = projectTable.FieldIndexes;
-
-
-
-            // P6 uses last_recalc_date as the Data Date (DD)
-
-            if (!indexes.ContainsKey(FieldNames.ProjectId) || !indexes.ContainsKey(FieldNames.LastRecalcDate)) return lookup;
-
-
-
-            foreach (var rowData in projectTable.Rows)
-
+            var result = new Dictionary<(string Source, string Id), DateTime>();
+            if (!IsTableValid(table)) return result;
+            foreach (var group in table.Rows.GroupBy(row => (row.SourceToken,
+                         GetFieldValue(row.Fields, table.FieldIndexes, FieldNames.ProjectId).Trim())))
             {
-
-                var row = rowData.Fields;
-
-                string projId = GetFieldValue(row, indexes, FieldNames.ProjectId);
-
-                var dataDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.LastRecalcDate));
-
-
-
-                if (!string.IsNullOrEmpty(projId) && dataDate.HasValue)
-
-                {
-
-                    string compositeKey = CreateKey(rowData.SourceFilename, projId);
-
-                    lookup[compositeKey] = dataDate.Value;
-
-                }
-
+                if (group.Key.Item2.Length == 0 || group.Count() != 1) continue;
+                DateTime? date = DateParser.TryParse(GetFieldValue(group.Single().Fields,
+                    table.FieldIndexes, FieldNames.LastRecalcDate));
+                if (date.HasValue) result.Add(group.Key, date.Value);
             }
-
-            return lookup;
-
+            return result;
         }
-
-
-
-
-
-
 
         // Calculation Logic Helpers
 
-        private DateTime CalculateStartDate(string[] row, IReadOnlyDictionary<string, int> indexes, string statusCode)
-
+        private static DateTime? ReadPreferredDate(string[] row, IReadOnlyDictionary<string, int> indexes,
+            string preferred, string fallback)
         {
-
-            if (statusCode == "TK_NotStart")
-
-            {
-
-                var parsed = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyStartDate));
-
-                if (parsed.HasValue) return parsed.Value;
-
-                // Fallback for milestones (Start Milestone)
-
-                parsed = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyEndDate));
-
-                if (parsed.HasValue) return parsed.Value;
-
-            }
-
-            else // In Progress or Complete
-
-            {
-
-                var parsed = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActStartDate));
-
-                if (parsed.HasValue) return parsed.Value;
-
-                // Fallback for milestones
-
-                parsed = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActEndDate));
-
-                if (parsed.HasValue) return parsed.Value;
-
-            }
-
-            return DateTime.MinValue;
-
+            string raw = GetFieldValue(row, indexes, preferred);
+            // Only absence permits fallback; malformed preferred values remain unknown.
+            return DateParser.TryParse(string.IsNullOrWhiteSpace(raw) ? GetFieldValue(row, indexes, fallback) : raw);
         }
 
-
-
-        private DateTime CalculateFinishDate(string[] row, IReadOnlyDictionary<string, int> indexes, string statusCode)
-
-        {
-
-            if (statusCode == "TK_Complete")
-
+        private DateTime CalculateStartDate(string[] row, IReadOnlyDictionary<string, int> indexes, string statusCode) =>
+            (statusCode.Trim().ToUpperInvariant() switch
             {
+                "TK_NOTSTART" => ReadPreferredDate(row, indexes, FieldNames.RestartDate, FieldNames.EarlyStartDate),
+                "TK_ACTIVE" or "TK_COMPLETE" => DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActStartDate)),
+                _ => null
+            }) ?? DateTime.MinValue;
 
-                var parsed = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActEndDate));
-
-                if (parsed.HasValue) return parsed.Value;
-
-            }
-
-            else // Not Started or In Progress
-
+        private DateTime CalculateFinishDate(string[] row, IReadOnlyDictionary<string, int> indexes, string statusCode) =>
+            (statusCode.Trim().ToUpperInvariant() switch
             {
-
-                // Use Early Finish (Remaining Finish)
-
-                var parsed = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyEndDate));
-
-                if (parsed.HasValue) return parsed.Value;
-
-                // Fallback to Late Finish if Early Finish is missing (less common but possible)
-
-                parsed = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.LateEndDate));
-
-                if (parsed.HasValue) return parsed.Value;
-
-            }
-
-            return DateTime.MinValue;
-
-        }
-
-
+                "TK_COMPLETE" => DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActEndDate)),
+                "TK_NOTSTART" or "TK_ACTIVE" => ReadPreferredDate(row, indexes, FieldNames.ReendDate, FieldNames.EarlyEndDate),
+                _ => null
+            }) ?? DateTime.MinValue;
 
         private string CalculateDaysFromHours(string[] row, IReadOnlyDictionary<string, int> indexes, string hourFieldName, decimal hoursPerDay, int decimalPlaces = 1)
 
@@ -2926,161 +1792,42 @@ namespace XerToCsvConverter;
 
 
 
-        private double CalculateCompletionPercentage(string[] row, IReadOnlyDictionary<string, int> indexes, string statusCode)
-
+        private decimal? CalculateCompletionPercentage(string[] row, IReadOnlyDictionary<string, int> indexes, string statusCode)
         {
+            if (string.Equals(statusCode, "TK_Complete", StringComparison.OrdinalIgnoreCase)) return 100m;
+            if (string.Equals(statusCode, "TK_NotStart", StringComparison.OrdinalIgnoreCase)) return 0m;
+            if (!string.Equals(statusCode, "TK_Active", StringComparison.OrdinalIgnoreCase)) return null;
 
-            if (statusCode == "TK_Complete") return 100.0;
-
-            if (statusCode == "TK_NotStart") return 0.0;
-
-
-
-            string completePctType = GetFieldValue(row, indexes, FieldNames.CompletePctType);
-
-            NumberStyles numStyle = NumberStyles.Any;
-
-            IFormatProvider formatProvider = CultureInfo.InvariantCulture;
-
-
-
-            switch (completePctType)
-
+            decimal? ReadNumber(string field, bool optional = false)
             {
-
-                case "CP_Phys": // Physical % Complete
-
-                    if (double.TryParse(GetFieldValue(row, indexes, FieldNames.PhysCompletePct), numStyle, formatProvider, out double pct))
-
-                    {
-
-                        return Math.Max(0.0, Math.Min(100.0, pct));
-
-                    }
-
-                    break;
-
-
-
-                case "CP_Units": // Units % Complete (Actual / (Actual + Remaining))
-
-                    if (double.TryParse(GetFieldValue(row, indexes, FieldNames.ActWorkQty), numStyle, formatProvider, out double actVal) &&
-
-                        double.TryParse(GetFieldValue(row, indexes, FieldNames.RemainWorkQty), numStyle, formatProvider, out double remVal))
-
-                    {
-
-                        double total = actVal + remVal;
-
-                        if (total > 0.0001) // Avoid division by zero
-
-                        {
-
-                            double calculatedPct = (actVal / total) * 100.0;
-
-                            return Math.Max(0.0, Math.Min(100.0, calculatedPct));
-
-                        }
-
-                    }
-
-                    break;
-
-
-
-                case "CP_Drtn": // Duration % Complete ((Target - Remaining) / Target)
-
-                    if (double.TryParse(GetFieldValue(row, indexes, FieldNames.TargetDurationHrCnt), numStyle, formatProvider, out double targVal) &&
-
-                        double.TryParse(GetFieldValue(row, indexes, FieldNames.RemainDurationHrCnt), numStyle, formatProvider, out double remDurVal))
-
-                    {
-
-                        if (targVal > 0.0001)
-
-                        {
-
-                            double calculatedPct = ((targVal - remDurVal) / targVal) * 100.0;
-
-                            return Math.Max(0.0, Math.Min(100.0, calculatedPct));
-
-                        }
-
-                    }
-
-                    break;
-
+                string raw = GetFieldValue(row, indexes, field);
+                if (optional && string.IsNullOrWhiteSpace(raw)) return 0m;
+                return decimal.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out decimal number)
+                    && number >= 0 ? number : null;
             }
-
-
-
-            return 0.0;
-
-        }
-
-
-
-        private Dictionary<string, string> BuildProjectScheduleOptionsLookup(XerTable? schedOptionsTable)
-
-        {
-
-            var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            if (!IsTableValid(schedOptionsTable)) return lookup;
-
-
-
-            var indexes = schedOptionsTable.FieldIndexes;
-
-            const string lagSettingCol = "sched_calendar_on_relationship_lag";
-
-
-
-            if (!indexes.ContainsKey(FieldNames.ProjectId) || !indexes.ContainsKey(lagSettingCol))
-
+            try
             {
-
-                // Log or notify that the required column is missing
-
-                Console.WriteLine($"Warning: SCHEDOPTIONS table is missing '{FieldNames.ProjectId}' or '{lagSettingCol}'. Defaulting to Predecessor calendar for lag.");
-
-                return lookup;
-
-            }
-
-
-
-            foreach (var rowData in schedOptionsTable.Rows)
-
-            {
-
-                var row = rowData.Fields;
-
-                string projId = GetFieldValue(row, indexes, FieldNames.ProjectId);
-
-                string lagSetting = GetFieldValue(row, indexes, lagSettingCol); // e.g., "rcal_Predecessor"
-
-
-
-                if (!string.IsNullOrEmpty(projId))
-
+                switch (GetFieldValue(row, indexes, FieldNames.CompletePctType).Trim().ToUpperInvariant())
                 {
-
-                    string compositeKey = CreateKey(rowData.SourceFilename, projId);
-
-                    lookup[compositeKey] = lagSetting;
-
+                    case "CP_PHYS":
+                        decimal? physical = ReadNumber(FieldNames.PhysCompletePct);
+                        return physical.HasValue ? Math.Clamp(physical.Value, 0m, 100m) : null;
+                    case "CP_UNITS":
+                        decimal? actual = ReadNumber(FieldNames.ActWorkQty, true) + ReadNumber("act_equip_qty", true);
+                        decimal? remaining = ReadNumber(FieldNames.RemainWorkQty, true) + ReadNumber("remain_equip_qty", true);
+                        if (!actual.HasValue || !remaining.HasValue) return null;
+                        decimal total = actual.Value + remaining.Value;
+                        return total == 0 ? 0m : Math.Clamp(actual.Value / total * 100m, 0m, 100m);
+                    case "CP_DRTN":
+                        decimal? target = ReadNumber(FieldNames.TargetDurationHrCnt);
+                        decimal? remainingDuration = ReadNumber(FieldNames.RemainDurationHrCnt);
+                        if (!target.HasValue || !remainingDuration.HasValue || target.Value == 0) return null;
+                        return Math.Clamp((1m - remainingDuration.Value / target.Value) * 100m, 0m, 100m);
+                    default: return null;
                 }
-
             }
-
-            return lookup;
-
+            catch (OverflowException) { return null; }
         }
-
-
-
-
 
         // Creates the Baseline table (04_XER_BASELINE) by finding the earliest MonthUpdate snapshot
 
@@ -3143,7 +1890,12 @@ namespace XerToCsvConverter;
 
 
 
-                if (!minMonthUpdate.HasValue) return null; // No valid dates found
+                if (!minMonthUpdate.HasValue)
+                {
+                    var empty = new XerTable(EnhancedTableNames.XerBaseline04);
+                    empty.SetHeaders(task01Table.Headers!.ToArray());
+                    return empty;
+                }
 
 
 
@@ -3191,182 +1943,68 @@ namespace XerToCsvConverter;
 
         public XerTable? Create03XerProjWbsTable()
         {
-
-            var projwbsTable = _dataStore.GetTable(TableNames.ProjWbs);
-
-            if (!IsTableValid(projwbsTable)) return null;
-
-
-
+            XerTable? source = _dataStore.GetTable(TableNames.ProjWbs);
+            if (!IsTableValid(source)) return null;
             try
-
             {
-
-                if (projwbsTable.Headers is not { } sourceHeaders)
+                var indexes = source.FieldIndexes;
+                var nodes = new Dictionary<(string Source, string Id), DataRow>();
+                foreach (DataRow row in source.Rows)
                 {
-                    return null;
+                    string id = GetFieldValue(row.Fields, indexes, FieldNames.WbsId).Trim();
+                    if (id.Length == 0 || !nodes.TryAdd((row.SourceToken, id), row))
+                        throw new InvalidDataException($"Source '{row.SourceToken}' has a blank or duplicate PROJWBS.wbs_id '{id}'.");
+                }
+                var parents = new Dictionary<(string Source, string Id), (string Source, string Id)>();
+                foreach (var pair in nodes)
+                {
+                    string parent = GetFieldValue(pair.Value.Fields, indexes, FieldNames.ParentWbsId).Trim();
+                    var parentKey = (pair.Key.Source, parent);
+                    if (parent.Length == 0 || !nodes.TryGetValue(parentKey, out DataRow parentRow)) continue;
+                    string project = GetFieldValue(pair.Value.Fields, indexes, FieldNames.ProjectId).Trim();
+                    string parentProject = GetFieldValue(parentRow.Fields, indexes, FieldNames.ProjectId).Trim();
+                    if (project != parentProject)
+                        throw new InvalidDataException($"Source '{pair.Key.Source}' WBS '{pair.Key.Id}' has a parent in another project.");
+                    parents.Add(pair.Key, parentKey);
+                }
+                var complete = new HashSet<(string Source, string Id)>();
+                foreach (var key in nodes.Keys)
+                {
+                    var path = new HashSet<(string Source, string Id)>();
+                    var current = key;
+                    while (!complete.Contains(current))
+                    {
+                        if (!path.Add(current))
+                            throw new InvalidDataException($"Source '{current.Source}' has a PROJWBS parent cycle at '{current.Id}'.");
+                        if (!parents.TryGetValue(current, out current)) break;
+                    }
+                    complete.UnionWith(path);
                 }
 
-                var idx = projwbsTable.FieldIndexes;
-                var finalHeadersList = sourceHeaders.ToList();
-
-                finalHeadersList.Add(FieldNames.WbsIdKey);
-
-                finalHeadersList.Add(FieldNames.ParentWbsIdKey);
-
-                finalHeadersList.Add(FieldNames.MonthUpdate);
-
-                string[] finalHeaders = finalHeadersList.Select(s => StringInternPool.Intern(s) ?? string.Empty).ToArray();
-
-
-
-                // PERFORMANCE OPTIMIZATION: Pre-calculate indexes
-
-                var finalIndexes = finalHeaders
-
-                    .Select((name, index) => new { name, index })
-
-                    .ToDictionary(item => item.name, item => item.index, StringComparer.OrdinalIgnoreCase);
-
-
-
-
-
-                var resultTable = new XerTable(EnhancedTableNames.XerProjWbs03, projwbsTable.RowCount);
-
-                resultTable.SetHeaders(finalHeaders);
-
-
-
-                // Track all valid WBS ID Keys to validate parent keys later
-
-                var allWbsIdKeys = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-
-                var transformedRowsBag = new ConcurrentBag<DataRow>();
-
-
-
-                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
-
-
-
-                Parallel.ForEach(projwbsTable.Rows, parallelOptions, sourceRow =>
-
+                string[] headers = source.Headers!.Concat(new[]
+                    { FieldNames.WbsIdKey, FieldNames.ParentWbsIdKey, FieldNames.MonthUpdate }).ToArray();
+                var result = new XerTable(EnhancedTableNames.XerProjWbs03, source.RowCount);
+                result.SetHeaders(headers);
+                foreach (DataRow row in source.Rows)
                 {
-
-                    var row = sourceRow.Fields;
-
-                    var transformed = new string[finalHeaders.Length];
-
-                    string originalFilename = sourceRow.SourceFilename;
-
-
-
-                    string wbsIdKey = CreateKey(originalFilename, GetFieldValue(row, idx, FieldNames.WbsId));
-
-                    string parentWbsIdKey = CreateKey(originalFilename, GetFieldValue(row, idx, FieldNames.ParentWbsId));
-
-
-
-                    allWbsIdKeys.TryAdd(wbsIdKey, 0); // Use ConcurrentDictionary as a ConcurrentHashSet
-
-
-
-                    // Copy existing fields
-
-                    int copyLength = Math.Min(row.Length, sourceHeaders.Length);
-
-                    Array.Copy(row, transformed, copyLength);
-
-                    // Initialize potentially missing fields if source row was shorter
-
-                    for (int i = copyLength; i < sourceHeaders.Length; i++)
-
-                    {
-
-                        transformed[i] = string.Empty;
-
-                    }
-
-
-
-                    // Set new key fields using optimized method
-
-                    SetTransformedField(transformed, finalIndexes, FieldNames.WbsIdKey, wbsIdKey);
-
-                    SetTransformedField(transformed, finalIndexes, FieldNames.ParentWbsIdKey, parentWbsIdKey);
-
-
-
-                    // Add MonthUpdate value
-
-                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
-
-
-
-                    // Intern strings
-
-                    for (int k = 0; k < transformed.Length; k++)
-
-                    {
-
-                        transformed[k] = StringInternPool.Intern(transformed[k] ?? string.Empty);
-
-                    }
-
-
-
-                    transformedRowsBag.Add(new DataRow(transformed, originalFilename));
-
-                });
-
-
-
-                // Post-processing: Validate ParentWbsIdKey
-
-                // If a parent key doesn't exist as a primary WbsIdKey in the dataset, it's invalid (e.g., reference to an external project WBS or orphaned node)
-
-                int parentKeyIndex = finalIndexes[FieldNames.ParentWbsIdKey];
-
-                foreach (var dataRow in transformedRowsBag)
-
-                {
-
-                    var fields = dataRow.Fields;
-
-                    string parentKey = fields[parentKeyIndex];
-
-                    if (!string.IsNullOrEmpty(parentKey) && !allWbsIdKeys.ContainsKey(parentKey))
-
-                    {
-
-                        fields[parentKeyIndex] = string.Empty; // Nullify invalid parent key
-
-                    }
-
-                    resultTable.AddRow(dataRow);
-
+                    string id = GetFieldValue(row.Fields, indexes, FieldNames.WbsId).Trim();
+                    string[] values = new string[headers.Length];
+                    Array.Copy(row.Fields, values, row.Fields.Length);
+                    values[^3] = CreateKey(row.SourceFilename, id);
+                    // Preserve legacy missing-parent clearing; present invalid ancestry fails.
+                    values[^2] = parents.TryGetValue((row.SourceToken, id), out var parent)
+                        ? CreateKey(row.SourceFilename, parent.Id) : "";
+                    values[^1] = ParseMonthUpdateFromFilename(row.OriginalSourceFilename);
+                    result.AddRow(row.WithFields(values));
                 }
-
-
-
-                return resultTable;
-
+                return result;
             }
-
-            catch (Exception ex)
-
+            catch (InvalidDataException ex)
             {
-
                 Console.WriteLine($"Error creating {EnhancedTableNames.XerProjWbs03}: {ex.Message}");
-
                 return null;
-
             }
-
         }
-
-
 
         // Generic method for creating simple enhanced tables that just add keys
 
@@ -3425,13 +2063,14 @@ namespace XerToCsvConverter;
 
                 var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
 
-                var transformedRowsBag = new ConcurrentBag<DataRow>();
+                var transformedRows = new DataRow[sourceTable.RowCount];
 
 
 
-                Parallel.ForEach(sourceTable.Rows, parallelOptions, sourceRow =>
+                Parallel.For(0, sourceTable.RowCount, parallelOptions, rowIndex =>
 
                 {
+                    DataRow sourceRow = sourceTable.Rows[rowIndex];
 
                     var row = sourceRow.Fields;
 
@@ -3477,7 +2116,7 @@ namespace XerToCsvConverter;
 
                     // Add MonthUpdate value
 
-                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(sourceRow.OriginalSourceFilename));
 
 
 
@@ -3493,13 +2132,13 @@ namespace XerToCsvConverter;
 
 
 
-                    transformedRowsBag.Add(new DataRow(transformed, originalFilename));
+                    transformedRows[rowIndex] = sourceRow.WithFields(transformed);
 
                 });
 
 
 
-                resultTable.AddRows(transformedRowsBag);
+                resultTable.AddRows(transformedRows);
 
                 return resultTable;
 
@@ -3541,9 +2180,9 @@ namespace XerToCsvConverter;
 
 
 
-            // We no longer read from 11_DETAILED_CALENDAR cache, 
+            // We no longer read from 11_DETAILED_CALENDAR cache,
 
-            // BuildCalendarCalculators now reads from the raw CALENDAR table.
+            // BuildRelationshipCalendars reads from the raw CALENDAR table.
 
 
 
@@ -3625,7 +2264,10 @@ namespace XerToCsvConverter;
 
                 var calendarHoursLookup = BuildCalendarHoursLookup(calendarTable); // Standard Hours/Day
 
-                var calendarCalculators = BuildCalendarCalculators(null); // Pass null, it now reads from raw CALENDAR
+                var relationshipCalendars = BuildRelationshipCalendars();
+
+                // Strict relationship-only inputs leave the shared task/display/resource lookups unchanged.
+                var relationshipTasks = BuildRelationshipTaskLookup(taskTable);
 
                 var schedOptionsLookup = BuildProjectScheduleOptionsLookup(schedOptionsTable);
 
@@ -3639,13 +2281,14 @@ namespace XerToCsvConverter;
 
                 var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
 
-                var transformedRowsBag = new ConcurrentBag<DataRow>();
+                var transformedRows = new DataRow[taskPredTable.RowCount];
 
 
 
-                Parallel.ForEach(taskPredTable.Rows, parallelOptions, sourceRow =>
+                Parallel.For(0, taskPredTable.RowCount, parallelOptions, rowIndex =>
 
                 {
+                    DataRow sourceRow = taskPredTable.Rows[rowIndex];
 
                     var row = sourceRow.Fields;
 
@@ -3669,9 +2312,13 @@ namespace XerToCsvConverter;
 
                     string predTaskId = GetFieldValue(row, sourceIndexes, FieldNames.PredTaskId);
 
-                    string taskIdKey = CreateKey(originalFilename, taskId);
-
-                    string predTaskIdKey = CreateKey(originalFilename, predTaskId);
+                    TaskData succTask = ResolveDisplayTask(taskLookup, sourceRow.SourceToken, taskId,
+                        GetFieldValue(row, sourceIndexes, FieldNames.ProjectId));
+                    TaskData predTask = ResolveDisplayTask(taskLookup, sourceRow.SourceToken, predTaskId,
+                        GetFieldValue(row, sourceIndexes, "pred_proj_id"));
+                    // An unresolved external/ambiguous endpoint is not a local activity.
+                    string taskIdKey = succTask.ProjectId is null ? "" : CreateKey(originalFilename, taskId);
+                    string predTaskIdKey = predTask.ProjectId is null ? "" : CreateKey(originalFilename, predTaskId);
 
 
 
@@ -3683,11 +2330,11 @@ namespace XerToCsvConverter;
 
                     // Lookup successor task data
 
-                    TaskData succTask = taskLookup.TryGetValue(taskIdKey, out var st) ? st : new TaskData();
+                    // Successor identity was resolved with its exported project context above.
 
                     // Lookup predecessor task data
 
-                    TaskData predTask = taskLookup.TryGetValue(predTaskIdKey, out var pt) ? pt : new TaskData();
+                    // Predecessor identity was resolved with its exported project context above.
 
 
 
@@ -3717,13 +2364,13 @@ namespace XerToCsvConverter;
 
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorTaskType, predTask.TaskType ?? string.Empty);
 
-                    SetTransformedField(transformed, finalIndexes, FieldNames.Start, DateParser.Format(succTask.EarlyStartDate));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.Start, DateParser.Format(succTask.DisplayStartDate));
 
-                    SetTransformedField(transformed, finalIndexes, FieldNames.Finish, DateParser.Format(succTask.EarlyEndDate));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.Finish, DateParser.Format(succTask.DisplayFinishDate));
 
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStart, DateParser.Format(predTask.EarlyStartDate));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorStart, DateParser.Format(predTask.DisplayStartDate));
 
-                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFinish, DateParser.Format(predTask.EarlyEndDate));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFinish, DateParser.Format(predTask.DisplayFinishDate));
 
 
 
@@ -3731,7 +2378,7 @@ namespace XerToCsvConverter;
 
                     decimal hoursPerDay = 0;
 
-                    if (!string.IsNullOrEmpty(predClndrIdKey) && calendarHoursLookup.TryGetValue(predClndrIdKey, out decimal hpd))
+                    if (!string.IsNullOrEmpty(predClndrIdKey) && calendarHoursLookup.TryGetValue((sourceRow.SourceToken, predTask.CalendarId ?? ""), out decimal hpd))
 
                     {
 
@@ -3747,23 +2394,18 @@ namespace XerToCsvConverter;
 
                     string lagHrCntStr = GetFieldValue(row, sourceIndexes, FieldNames.LagHrCnt);
 
-                    decimal.TryParse(lagHrCntStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal lagHours);
+                    decimal lagHours = 0m;
+                    bool validLag = string.IsNullOrWhiteSpace(lagHrCntStr)
+                        || decimal.TryParse(lagHrCntStr, NumberStyles.Float, CultureInfo.InvariantCulture, out lagHours);
 
 
 
                     // Calculate Lag in DAYS for the 'Lag' column
 
-                    decimal lagDays = 0;
+                    string lagDays = !validLag ? "" : lagHours == 0 ? "0"
+                        : FormatRelationshipDays(lagHours, hoursPerDay, "F2");
 
-                    if (lagHours != 0 && hoursPerDay > 0)
-
-                    {
-
-                        lagDays = lagHours / hoursPerDay;
-
-                    }
-
-                    SetTransformedField(transformed, finalIndexes, FieldNames.Lag, lagDays != 0 ? lagDays.ToString("F2", CultureInfo.InvariantCulture) : "0");
+                    SetTransformedField(transformed, finalIndexes, FieldNames.Lag, lagDays);
 
 
 
@@ -3771,7 +2413,7 @@ namespace XerToCsvConverter;
 
                     decimal hoursPerDayForSuccessor = 0;
 
-                    if (calendarHoursLookup.TryGetValue(succClndrIdKey, out decimal succHpd))
+                    if (calendarHoursLookup.TryGetValue((sourceRow.SourceToken, succTask.CalendarId ?? ""), out decimal succHpd))
 
                     {
 
@@ -3779,7 +2421,7 @@ namespace XerToCsvConverter;
 
                     }
 
-                    if (hoursPerDayForSuccessor <= 0) hoursPerDayForSuccessor = 8m; // Fallback
+                    // Unresolved conversion factors remain unknown; never invent an eight-hour day.
 
 
 
@@ -3787,25 +2429,8 @@ namespace XerToCsvConverter;
 
                     // Calculate Free Float (passing lag in HOURS)
 
-                    string freeFloatInDays = CalculateFreeFloat(
-
-                        row, sourceIndexes,
-
-                        succTask, predTask,
-
-                        lagHours, // Pass hours, not days
-
-                        predClndrIdKey,
-
-                        succClndrIdKey,
-
-                        calendarCalculators,
-
-                        schedOptionsLookup,
-
-                        hoursPerDayForSuccessor // Pass successor's HPD
-
-                    );
+                    string freeFloatInDays = CalculateFreeFloat(sourceRow, sourceIndexes,
+                        relationshipTasks, relationshipCalendars, schedOptionsLookup);
 
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloatInDays);
 
@@ -3819,7 +2444,7 @@ namespace XerToCsvConverter;
 
                     // Fallback to calculation if not found
 
-                    if (!string.Equals(succTask.StatusCode, "TK_Complete", StringComparison.OrdinalIgnoreCase) && 
+                    if (!string.Equals(succTask.StatusCode, "TK_Complete", StringComparison.OrdinalIgnoreCase) &&
 
                         !string.IsNullOrEmpty(succTask.TotalFloatHrCnt) && hoursPerDayForSuccessor > 0)
 
@@ -3829,7 +2454,7 @@ namespace XerToCsvConverter;
 
                          {
 
-                             totalFloatVal = (tfHours / hoursPerDayForSuccessor).ToString("F1", CultureInfo.InvariantCulture);
+                             totalFloatVal = FormatRelationshipDays(tfHours, hoursPerDayForSuccessor, "F1");
 
                          }
 
@@ -3843,7 +2468,7 @@ namespace XerToCsvConverter;
 
                     // Add MonthUpdate value
 
-                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
+                    SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(sourceRow.OriginalSourceFilename));
 
 
 
@@ -3859,13 +2484,13 @@ namespace XerToCsvConverter;
 
 
 
-                    transformedRowsBag.Add(new DataRow(transformed, originalFilename));
+                    transformedRows[rowIndex] = sourceRow.WithFields(transformed);
 
                 });
 
 
 
-                resultTable.AddRows(transformedRowsBag);
+                resultTable.AddRows(transformedRows);
 
                 return resultTable;
 
@@ -3885,786 +2510,57 @@ namespace XerToCsvConverter;
 
 
 
-        // Helper structure for task data used in predecessor calculations
-
         private struct TaskData
         {
-            public string? ProjIdKey;
+            public string? ProjectId;
+            public string? CalendarId;
             public string? ClndrIdKey;
             public string? StatusCode;
             public string? TaskType;
-            public string? TaskCode;
-
-            public DateTime? EarlyStartDate;
-
-            public DateTime? EarlyEndDate;
-
-            public DateTime? ActualStartDate;
-
-            public DateTime? ActualEndDate;
-
+            public DateTime? DisplayStartDate;
+            public DateTime? DisplayFinishDate;
             public string? TotalFloatHrCnt;
-
         }
 
-
-
-        // Builds a lookup dictionary for task data needed by predecessor table
-
-        private Dictionary<string, TaskData> BuildTaskLookupDictionary(XerTable? taskTable)
-
+        private Dictionary<(string Source, string Task), TaskData[]> BuildTaskLookupDictionary(XerTable? table)
         {
-
-            var lookup = new Dictionary<string, TaskData>(StringComparer.OrdinalIgnoreCase);
-
-            if (!IsTableValid(taskTable)) return lookup;
-
-
-
-            var indexes = taskTable.FieldIndexes;
-
-            foreach (var rowData in taskTable.Rows)
-
+            var result = new Dictionary<(string Source, string Task), TaskData[]>();
+            if (!IsTableValid(table)) return result;
+            foreach (var group in table.Rows.GroupBy(row => (row.SourceToken,
+                         GetFieldValue(row.Fields, table.FieldIndexes, FieldNames.TaskId).Trim())))
             {
-
-                var row = rowData.Fields;
-
-                string taskId = GetFieldValue(row, indexes, FieldNames.TaskId);
-
-                string clndrId = GetFieldValue(row, indexes, FieldNames.CalendarId);
-
-                string projId = GetFieldValue(row, indexes, FieldNames.ProjectId); // Get ProjId
-
-
-
-                string taskIdKey = CreateKey(rowData.SourceFilename, taskId);
-
-                string clndrIdKey = CreateKey(rowData.SourceFilename, clndrId);
-
-                string projIdKey = CreateKey(rowData.SourceFilename, projId); // Create ProjIdKey
-
-
-
-                var taskData = new TaskData
-
+                if (group.Key.Item2.Length == 0) continue;
+                result.Add(group.Key, group.Select(row =>
                 {
-
-                    ProjIdKey = projIdKey, // Store ProjIdKey
-
-                    ClndrIdKey = clndrIdKey,
-
-                    StatusCode = GetFieldValue(row, indexes, FieldNames.StatusCode),
-
-                    TaskType = GetFieldValue(row, indexes, FieldNames.TaskType),
-
-                    TaskCode = GetFieldValue(row, indexes, FieldNames.TaskCode),
-
-                    EarlyStartDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyStartDate)),
-
-                    EarlyEndDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.EarlyEndDate)),
-
-                    ActualStartDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActStartDate)),
-
-                    ActualEndDate = DateParser.TryParse(GetFieldValue(row, indexes, FieldNames.ActEndDate)),
-
-                    TotalFloatHrCnt = GetFieldValue(row, indexes, FieldNames.TotalFloatHrCnt)
-
-                };
-
-
-
-                lookup[taskIdKey] = taskData;
-
-            }
-
-            return lookup;
-
-        }
-
-
-
-        private Dictionary<string, WorkingDayCalculator> BuildCalendarCalculators(XerTable? calendarDetailedTable)
-
-        {
-
-            var calculators = new Dictionary<string, WorkingDayCalculator>(StringComparer.OrdinalIgnoreCase);
-
-
-
-            // This is the main method that reads the raw CALENDAR table.
-
-            Console.WriteLine("Building Calendar Calculators for Free Float...");
-
-            var calendarTable = _dataStore.GetTable(TableNames.Calendar);
-
-            if (!IsTableValid(calendarTable))
-
-            {
-
-                Console.WriteLine("Warning: Raw CALENDAR table not found. Free Float calculations may be incorrect.");
-
-                return calculators;
-
-            }
-
-
-
-            var calIndexes = calendarTable.FieldIndexes;
-
-            int rawClndrIdIdx = calIndexes.ContainsKey(FieldNames.ClndrId) ? calIndexes[FieldNames.ClndrId] : -1;
-
-            int rawDataIdx = calIndexes.ContainsKey(FieldNames.CalendarData) ? calIndexes[FieldNames.CalendarData] : -1;
-
-            int rawDayHrCntIdx = calIndexes.ContainsKey(FieldNames.DayHourCount) ? calIndexes[FieldNames.DayHourCount] : -1;
-
-
-
-            if (rawClndrIdIdx == -1 || rawDataIdx == -1 || rawDayHrCntIdx == -1)
-
-            {
-
-                Console.WriteLine("Warning: Raw CALENDAR table is missing required columns. Free Float calculations may be incorrect.");
-
-                return calculators;
-
-            }
-
-
-
-            // Regex for time slots (Main pattern)
-            var timeSlotRegex = new Regex(
-                @"\(([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})\)",
-                RegexOptions.Singleline | RegexOptions.Compiled);
-
-
-            // Parse the raw CALENDAR table for each calendar
-
-            foreach (var rowData in calendarTable.Rows)
-
-            {
-
-                var row = rowData.Fields;
-
-                string clndrId = XerTable.GetFieldValueSafe(rowData, rawClndrIdIdx);
-
-                string clndrIdKey = CreateKey(rowData.SourceFilename, clndrId);
-
-                string clndrData = XerTable.GetFieldValueSafe(rowData, rawDataIdx);
-
-                string defaultDayHrCntStr = XerTable.GetFieldValueSafe(rowData, rawDayHrCntIdx);
-
-
-
-                decimal.TryParse(defaultDayHrCntStr, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal defaultDayHours);
-
-                if (defaultDayHours <= 0) defaultDayHours = 8m; // Fallback
-
-
-
-                var exceptionHours = new Dictionary<DateTime, decimal>();
-
-                var exceptionTimeSlots = new Dictionary<DateTime, List<(TimeSpan, TimeSpan)>>();
-
-                var standardWeekHours = new decimal[7]; // 0=Sun ... 6=Sat
-
-                var standardWeekTimeSlots = new List<(TimeSpan, TimeSpan)>[7];
-
-                for (int i = 0; i < 7; i++) standardWeekTimeSlots[i] = new List<(TimeSpan, TimeSpan)>();
-
-
-
-                bool hasStandardWeekDefined = false;
-
-
-
-                // --- 1. Parse Standard Week ---
-
-                int daysStart = clndrData.IndexOf("DaysOfWeek");
-
-                if (daysStart > -1)
-
-                {
-
-                    int daysEnd = FindSectionEnd(clndrData, daysStart);
-
-                    string daysSection = clndrData.AsSpan(daysStart, daysEnd - daysStart).ToString();
-
-
-                    // Use dictionaries to store results from Regex matches
-
-                    var dayContents = new Dictionary<int, string>();
-
-                    var emptyDays = new HashSet<int>();
-
-
-
-                    // Match all occurrences using the static compiled Regex (dayPatternRegex)
-
-                    foreach (Match match in DayPatternRegex().Matches(daysSection))
+                    string Read(string field) => GetFieldValue(row.Fields, table.FieldIndexes, field);
+                    string status = Read(FieldNames.StatusCode).Trim();
+                    DateTime start = CalculateStartDate(row.Fields, table.FieldIndexes, status);
+                    DateTime finish = CalculateFinishDate(row.Fields, table.FieldIndexes, status);
+                    return new TaskData
                     {
-                        if (int.TryParse(match.Groups[1].Value, out int p6DayNum) && p6DayNum >= 1 && p6DayNum <= 7) // P6 Day (1-7)
-
-                        {
-
-                            dayContents[p6DayNum] = match.Groups[2].Value.Trim();
-
-                        }
-
-                    }
-
-
-
-                    // Match all occurrences using the static compiled Regex (emptyDayPatternRegex)
-
-                    foreach (Match match in EmptyDayPatternRegex().Matches(daysSection))
-                    {
-                        if (int.TryParse(match.Groups[1].Value, out int p6DayNum) && p6DayNum >= 1 && p6DayNum <= 7)
-
-                        {
-
-                            emptyDays.Add(p6DayNum);
-
-                            dayContents.Remove(p6DayNum); // Ensure it's not in both
-
-                        }
-
-                    }
-
-
-
-                    // Only proceed if we actually found standard week definitions
-
-                    if (dayContents.Count > 0 || emptyDays.Count > 0)
-
-                    {
-
-                        hasStandardWeekDefined = true;
-
-                        // Process the results for all 7 days
-
-                        for (int p6DayNum = 1; p6DayNum <= 7; p6DayNum++) // P6: 1=Sun, 2=Mon... 7=Sat
-
-                        {
-
-                            int dotNetDay = p6DayNum - 1; // .NET: 0=Sun, 1=Mon... 6=Sat
-
-
-
-                            if (dayContents.TryGetValue(p6DayNum, out string? dayContent) && !string.IsNullOrWhiteSpace(dayContent))
-
-                            {
-
-                                // Day has defined work hours
-
-                                standardWeekHours[dotNetDay] = ParseDayWorkHours(dayContent, timeSlotRegex, out var slots);
-
-                                standardWeekTimeSlots[dotNetDay] = slots;
-
-                            }
-
-                            else if (emptyDays.Contains(p6DayNum))
-
-                            {
-
-                                // Day is explicitly defined as non-working
-
-                                standardWeekHours[dotNetDay] = 0m;
-
-                            }
-
-                            else
-
-                            {
-
-                                // Defined in DaysOfWeek section but missing specific day content? 
-
-                                // P6 convention: 1 (Sun) and 7 (Sat) default to non-work; others default to standard.
-
-                                if (p6DayNum == 1 || p6DayNum == 7)
-
-                                {
-
-                                    standardWeekHours[dotNetDay] = 0m;
-
-                                }
-
-                                else
-
-                                {
-
-                                    // Weekday default
-
-                                    standardWeekHours[dotNetDay] = defaultDayHours;
-
-                                    // Add default time slots
-
-                                    AddDefaultTimeSlots(standardWeekTimeSlots[dotNetDay], defaultDayHours);
-
-                                }
-
-                            }
-
-                        }
-
-                    }
-
-                }
-
-
-
-                // --- FALLBACK: If no standard week defined, use Defaults (Mon-Fri) ---
-
-                // This fixes the issue where missing DaysOfWeek blocks resulted in 0 working days
-
-                if (!hasStandardWeekDefined)
-
-                {
-
-                    for (int p6DayNum = 1; p6DayNum <= 7; p6DayNum++)
-
-                    {
-
-                        int dotNetDay = p6DayNum - 1;
-
-                        if (p6DayNum == 1 || p6DayNum == 7) // Sun/Sat
-
-                        {
-
-                            standardWeekHours[dotNetDay] = 0m;
-
-                        }
-
-                        else // Mon-Fri
-
-                        {
-
-                            standardWeekHours[dotNetDay] = defaultDayHours;
-
-                            AddDefaultTimeSlots(standardWeekTimeSlots[dotNetDay], defaultDayHours);
-
-                        }
-
-                    }
-
-                }
-
-
-
-                // --- 2. Parse Exceptions ---
-
-                string[] exceptionSections = ["Exceptions", "HolidayOrExceptions", "HolidayOrException"];
-
-                foreach (var sectionName in exceptionSections)
-
-                {
-
-                    int excStart = clndrData.IndexOf(sectionName);
-
-                    if (excStart > -1)
-
-                    {
-
-                        int excEnd = FindSectionEnd(clndrData, excStart);
-
-                        ReadOnlySpan<char> excSpan = excEnd > excStart
-                            ? clndrData.AsSpan(excStart, excEnd - excStart)
-                            : clndrData.AsSpan(excStart);
-                        string excSection = excSpan.ToString();
-
-
-                        var excMatches = ExcPatternRegex().Matches(excSection);
-                        ParseAndStoreExceptions(excMatches, exceptionHours, exceptionTimeSlots, timeSlotRegex);
-
-                        excMatches = ExcPatternRegex2().Matches(excSection);
-                        ParseAndStoreExceptions(excMatches, exceptionHours, exceptionTimeSlots, timeSlotRegex);
-                    }
-
-                }
-
-
-
-                // --- 3. Create the Calculator ---
-
-                var calculator = new WorkingDayCalculator(exceptionHours, exceptionTimeSlots, standardWeekHours, standardWeekTimeSlots);
-
-                calculators[clndrIdKey] = calculator;
-
+                        ProjectId = Read(FieldNames.ProjectId).Trim(),
+                        CalendarId = Read(FieldNames.ClndrId).Trim(),
+                        ClndrIdKey = CreateKey(row.SourceFilename, Read(FieldNames.ClndrId)),
+                        StatusCode = status,
+                        TaskType = Read(FieldNames.TaskType),
+                        DisplayStartDate = start == DateTime.MinValue ? null : start,
+                        DisplayFinishDate = finish == DateTime.MinValue ? null : finish,
+                        TotalFloatHrCnt = Read(FieldNames.TotalFloatHrCnt)
+                    };
+                }).ToArray());
             }
-
-
-
-            Console.WriteLine($"Built {calculators.Count} hour-aware calendar calculators.");
-
-            return calculators;
-
+            return result;
         }
 
-        /// <summary>
-
-        /// Helper for BuildCalendarCalculators to parse exception data and store it
-
-        /// </summary>
-
-        private void ParseAndStoreExceptions(MatchCollection matches,
-
-            Dictionary<DateTime, decimal> exceptionHours,
-
-            Dictionary<DateTime, List<(TimeSpan, TimeSpan)>> exceptionTimeSlots,
-
-            Regex timeSlotRegex)
-
+        private static TaskData ResolveDisplayTask(Dictionary<(string Source, string Task), TaskData[]> lookup,
+            string source, string taskId, string projectId)
         {
-
-            foreach (Match excMatch in matches)
-
-            {
-
-                if (excMatch.Success && excMatch.Groups.Count >= 3)
-
-                {
-
-                    if (int.TryParse(excMatch.Groups[2].Value, out int dateSerial))
-
-                    {
-
-                        DateTime excDate = ConvertFromOleDate(dateSerial).Date;
-
-                        string workContent = excMatch.Groups.Count > 3 ? excMatch.Groups[3].Value.Trim() : "()";
-
-
-
-                        if (string.IsNullOrEmpty(workContent) || workContent == "()")
-
-                        {
-
-                            exceptionHours[excDate] = 0m; // Holiday
-
-                            exceptionTimeSlots[excDate] = new List<(TimeSpan, TimeSpan)>();
-
-                        }
-
-                        else
-
-                        {
-
-                            decimal hours = ParseDayWorkHours(workContent, timeSlotRegex, out var slots);
-
-                            exceptionHours[excDate] = hours;
-
-                            exceptionTimeSlots[excDate] = slots;
-
-                        }
-
-                    }
-
-                }
-
-            }
-
+            if (!lookup.TryGetValue((source, taskId.Trim()), out var rows) || rows.Length != 1) return new();
+            TaskData task = rows[0];
+            if (string.IsNullOrWhiteSpace(task.ProjectId)
+                || (!string.IsNullOrWhiteSpace(projectId) && task.ProjectId != projectId.Trim())) return new();
+            return task;
         }
-
-
-
-        /// <summary>
-
-        /// This is an OVERLOAD for the existing ParseDayWorkHours.
-
-        /// It is used by the new BuildCalendarCalculators.
-
-        /// Updated to include fallback regex patterns for robustness.
-
-        /// </summary>
-
-        private decimal ParseDayWorkHours(string content, Regex timeSlotRegex, out List<(TimeSpan Start, TimeSpan End)> slots)
-
-        {
-
-            slots = new List<(TimeSpan, TimeSpan)>();
-
-            if (string.IsNullOrWhiteSpace(content)) return 0;
-
-
-
-            decimal totalHours = 0;
-
-
-
-            // 1. Try Standard Pattern (with parentheses) - e.g. (s|08:00|f|17:00)
-
-            var matches = timeSlotRegex.Matches(content);
-
-
-
-            if (matches.Count > 0)
-
-            {
-
-                foreach (Match match in matches)
-
-                {
-
-                    ProcessTimeSlotMatch(match, slots, ref totalHours);
-
-                }
-
-                return totalHours;
-
-            }
-
-
-
-            // 2. Try Fallback Pattern (bare, no parentheses) - e.g. s|08:00|f|17:00
-
-            // This handles legacy/corrupted formats that the main pattern misses
-
-            var simpleRegex = new Regex(@"([sf])\|(\d{1,2}:\d{2})\|([sf])\|(\d{1,2}:\d{2})", RegexOptions.Singleline);
-
-            matches = simpleRegex.Matches(content);
-
-
-
-            if (matches.Count > 0)
-
-            {
-
-                var processedPairs = new HashSet<string>();
-
-                foreach (Match match in matches)
-
-                {
-
-                    // Prevent duplicates if regex overlaps
-
-                    string timeKey = $"{match.Groups[2].Value}-{match.Groups[4].Value}";
-
-                    if (processedPairs.Contains(timeKey)) continue;
-
-                    processedPairs.Add(timeKey);
-
-
-
-                    ProcessTimeSlotMatch(match, slots, ref totalHours);
-
-                }
-
-            }
-
-
-
-            return totalHours;
-
-        }
-
-
-
-        private void ProcessTimeSlotMatch(Match match, List<(TimeSpan Start, TimeSpan End)> slots, ref decimal totalHours)
-
-        {
-
-            if (match.Groups.Count >= 5)
-
-            {
-
-                if (TimeSpan.TryParse(match.Groups[2].Value, out TimeSpan time1) && TimeSpan.TryParse(match.Groups[4].Value, out TimeSpan time2))
-
-                {
-
-                    string type1 = match.Groups[1].Value;
-
-                    string type2 = match.Groups[3].Value;
-
-                    TimeSpan start, end;
-
-
-
-                    if (type1 == "s" && type2 == "f") { start = time1; end = time2; }
-
-                    else if (type1 == "f" && type2 == "s") { start = time2; end = time1; }
-
-                    else { start = time1 < time2 ? time1 : time2; end = time1 < time2 ? time2 : time1; }
-
-
-
-                    // Handle 24:00 as end of day
-
-                    // Case 1: (s|HH:MM|f|00:00) - work ends at midnight
-
-                    if (end == TimeSpan.Zero && start != TimeSpan.Zero)
-
-                    {
-
-                        end = new TimeSpan(24, 0, 0);
-
-                    }
-
-                    // Case 2: (s|00:00|f|00:00) - 24-hour workday (full day)
-
-                    else if (start == TimeSpan.Zero && end == TimeSpan.Zero)
-
-                    {
-
-                        end = new TimeSpan(24, 0, 0);
-
-                    }
-
-
-
-                    slots.Add((start, end));
-
-                    totalHours += CalculateHoursBetween(start, end);
-
-                }
-
-            }
-
-        }
-
-
-
-        private void AddDefaultTimeSlots(List<(TimeSpan, TimeSpan)> slots, decimal defaultDayHours)
-
-        {
-
-            if (defaultDayHours == 8m)
-
-            {
-
-                slots.Add((new TimeSpan(8, 0, 0), new TimeSpan(12, 0, 0)));
-
-                slots.Add((new TimeSpan(13, 0, 0), new TimeSpan(17, 0, 0)));
-
-            }
-
-            else if (defaultDayHours > 0)
-
-            {
-
-                slots.Add((new TimeSpan(8, 0, 0), new TimeSpan(8, 0, 0).Add(TimeSpan.FromHours((double)defaultDayHours))));
-
-            }
-
-        }
-
-    private string CalculateFreeFloat(
-        string[] predRow,
-        IReadOnlyDictionary<string, int> predIndexes,
-        TaskData succTask,
-        TaskData predTask,
-        decimal lagHours,
-        string predClndrIdKey,
-        string succClndrIdKey,
-        Dictionary<string, WorkingDayCalculator> calendarCalculators,
-        Dictionary<string, string> schedOptionsLookup,
-        decimal hoursPerDayForSuccessor)
-    {
-        const string Complete = "TK_Complete";
-        const string Active = "TK_Active";
-        const string LOE = "TT_LOE";
-        const string WBS = "TT_WBS";
-
-        // Rule 1: Exclude LOE and WBS Summary tasks (don't drive the programme)
-        if (succTask.TaskType == LOE || succTask.TaskType == WBS ||
-            predTask.TaskType == LOE || predTask.TaskType == WBS)
-        {
-            return "";
-        }
-
-        // Rule 2: Exclude completed predecessors (constraint is historical)
-        if (predTask.StatusCode == Complete)
-        {
-            return "";
-        }
-
-        // Get calendars
-        WorkingDayCalculator predCalendar = WorkingDayCalculator.Default;
-        if (!string.IsNullOrEmpty(predClndrIdKey) && calendarCalculators.TryGetValue(predClndrIdKey, out var predCal))
-        {
-            predCalendar = predCal;
-        }
-
-        WorkingDayCalculator succCalendar = WorkingDayCalculator.Default;
-        if (!string.IsNullOrEmpty(succClndrIdKey) && calendarCalculators.TryGetValue(succClndrIdKey, out var succCal))
-        {
-            succCalendar = succCal;
-        }
-
-        // Determine lag projection calendar based on project settings
-        string lagCalendarSetting = "rcal_Predecessor";
-        if (schedOptionsLookup != null && !string.IsNullOrEmpty(succTask.ProjIdKey) &&
-            schedOptionsLookup.TryGetValue(succTask.ProjIdKey, out string? setting))
-        {
-            if (!string.IsNullOrEmpty(setting))
-            {
-                lagCalendarSetting = setting;
-            }
-        }
-
-        WorkingDayCalculator lagProjectionCalendar =
-            (lagCalendarSetting == "rcal_Successor") ? succCalendar : predCalendar;
-
-        // Get the relationship type
-        string predType = GetFieldValue(predRow, predIndexes, FieldNames.PredType);
-
-        DateTime? predBaseDate = null;
-        DateTime? succTargetDate = null;
-
-        switch (predType)
-        {
-            case "PR_FS": // Finish-to-Start
-                predBaseDate = predTask.EarlyEndDate;
-                succTargetDate = succTask.EarlyStartDate;
-                break;
-
-            case "PR_SS": // Start-to-Start
-                          // When predecessor is Active, use Actual Start
-                predBaseDate = (predTask.StatusCode == Active)
-                    ? predTask.ActualStartDate ?? predTask.EarlyStartDate
-                    : predTask.EarlyStartDate;
-                succTargetDate = succTask.EarlyStartDate;
-                break;
-
-            case "PR_FF": // Finish-to-Finish
-                predBaseDate = predTask.EarlyEndDate;
-                succTargetDate = succTask.EarlyEndDate;
-                break;
-
-            case "PR_SF": // Start-to-Finish
-                          // When predecessor is Active, use Actual Start
-                predBaseDate = (predTask.StatusCode == Active)
-                    ? predTask.ActualStartDate ?? predTask.EarlyStartDate
-                    : predTask.EarlyStartDate;
-                succTargetDate = succTask.EarlyEndDate;
-                break;
-
-            default:
-                return "";
-        }
-
-        // Validate dates exist
-        if (!predBaseDate.HasValue || !succTargetDate.HasValue)
-        {
-            return "";
-        }
-
-        // Project constraint date by lag hours
-        DateTime projectedConstraintDate = lagProjectionCalendar.AddWorkingHours(predBaseDate.Value, lagHours);
-
-        // Calculate free float in working hours
-        decimal freeFloatInHours = succCalendar.CountWorkingHours(projectedConstraintDate, succTargetDate.Value);
-
-        // Convert to days
-        decimal freeFloatInDays = 0;
-        if (hoursPerDayForSuccessor > 0)
-        {
-            freeFloatInDays = freeFloatInHours / hoursPerDayForSuccessor;
-        }
-
-        // P6 clamps relationship free float to minimum 0
-        // Negative values mean the relationship isn't driving (constraint already satisfied or OOS)
-        freeFloatInDays = Math.Max(0, freeFloatInDays);
-
-        return freeFloatInDays.ToString("F2", CultureInfo.InvariantCulture);
-    }
 
     public XerTable? Create07XerActvType() => CreateSimpleKeyedTable(TableNames.ActvType, EnhancedTableNames.XerActvType07,
             new List<Tuple<string, string>> { Tuple.Create(FieldNames.ActvCodeTypeIdKey, FieldNames.ActvCodeTypeId) });
@@ -4727,1791 +2623,11 @@ namespace XerToCsvConverter;
 
 
 
-        // Creates the detailed calendar table (11_XER_CALENDAR_DETAILED) by parsing clndr_data
 
-        public XerTable? Create11XerCalendarDetailed()
-        {
 
-            var calendarTable = _dataStore.GetTable(TableNames.Calendar);
 
-            if (!IsTableValid(calendarTable)) return null;
-
-
-
-            try
-
-            {
-
-                var sourceIndexes = calendarTable.FieldIndexes;
-
-                string[] detailedColumns = {
-
-            FieldNames.ClndrId, FieldNames.CalendarName, FieldNames.CalendarType,
-
-            FieldNames.Date, FieldNames.DayOfWeek, FieldNames.WorkingDay,
-
-            FieldNames.WorkHours, FieldNames.ExceptionType, FieldNames.ClndrIdKey,
-
-            FieldNames.MonthUpdate, FieldNames.DayOfWeekNum, FieldNames.WorkingDayInt
-
-        };
-
-
-
-                // PERFORMANCE OPTIMIZATION: Pre-calculate indexes
-
-                var finalIndexes = detailedColumns
-
-                    .Select((name, index) => new { name, index })
-
-                    .ToDictionary(item => item.name, item => item.index, StringComparer.OrdinalIgnoreCase);
-
-
-
-
-
-                var resultTable = new XerTable(EnhancedTableNames.XerCalendarDetailed11);
-
-                resultTable.SetHeaders(detailedColumns.Select(s => StringInternPool.Intern(s) ?? string.Empty).ToArray());
-
-
-
-                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
-
-                var detailedRowsBag = new ConcurrentBag<DataRow>();
-
-
-
-                Parallel.ForEach(calendarTable.Rows, parallelOptions, sourceRow =>
-
-                {
-
-                    var row = sourceRow.Fields;
-
-                    string originalFilename = sourceRow.SourceFilename;
-
-                    string clndrId = GetFieldValue(row, sourceIndexes, FieldNames.ClndrId);
-
-                    string clndrData = GetFieldValue(row, sourceIndexes, FieldNames.CalendarData);
-
-                    string dayHrCnt = GetFieldValue(row, sourceIndexes, FieldNames.DayHourCount);
-
-                    string clndrIdKey = CreateKey(originalFilename, clndrId);
-
-
-
-                    // Parse the complex clndr_data field
-
-                    var calendarEntries = ParseCalendarData(clndrData, dayHrCnt);
-
-
-
-                    foreach (var entry in calendarEntries)
-
-                    {
-
-                        string[] detailedRow = new string[detailedColumns.Length];
-
-
-
-                        // Use optimized method
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.ClndrId, clndrId);
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.CalendarName, GetFieldValue(row, sourceIndexes, FieldNames.CalendarName));
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.CalendarType, GetFieldValue(row, sourceIndexes, FieldNames.CalendarType));
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.Date, entry.Date);
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.DayOfWeek, entry.DayOfWeek);
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.WorkingDay, entry.WorkingDay);
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.WorkHours, entry.WorkHours);
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.ExceptionType, entry.ExceptionType);
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.ClndrIdKey, clndrIdKey);
-
-
-
-                        // Add MonthUpdate value
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(originalFilename));
-
-
-
-                        // Add calculated columns: day_of_week_num and working_day_int
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.DayOfWeekNum, GetDayOfWeekNumber(entry.DayOfWeek));
-
-                        SetTransformedField(detailedRow, finalIndexes, FieldNames.WorkingDayInt, entry.WorkingDay == "Y" ? "1" : "0");
-
-
-
-                        // Intern strings
-
-                        for (int k = 0; k < detailedRow.Length; k++)
-
-                        {
-
-                            detailedRow[k] = StringInternPool.Intern(detailedRow[k] ?? string.Empty);
-
-                        }
-
-
-
-                        detailedRowsBag.Add(new DataRow(detailedRow, originalFilename));
-
-                    }
-
-                });
-
-
-
-                resultTable.AddRows(detailedRowsBag);
-
-                return resultTable;
-
-            }
-
-            catch (Exception ex)
-
-            {
-
-                Console.WriteLine($"Error creating {EnhancedTableNames.XerCalendarDetailed11}: {ex.Message}");
-
-                return null;
-
-            }
-
-        }
-
-
-
-        private sealed class CalendarEntry
-        {
-            public required string Date { get; init; }
-            public required string DayOfWeek { get; init; }
-            public required string WorkingDay { get; init; }
-            public required string WorkHours { get; init; }
-            public required string ExceptionType { get; init; }
-        }
-
-
-
-        private List<CalendarEntry> ParseCalendarData(string clndrData, string defaultDayHours)
-
-        {
-
-            if (string.IsNullOrWhiteSpace(clndrData))
-
-                return GetDefaultWorkWeek(defaultDayHours);
-
-
-
-            try
-
-            {
-
-                // Check for P6 structured data markers
-
-                bool hasStructuredData = clndrData.Contains("CalendarData") || clndrData.Contains("DaysOfWeek") || clndrData.Contains("(0||");
-
-
-
-                if (hasStructuredData)
-
-                {
-
-                    var result = ParseP6CalendarFormat(clndrData, defaultDayHours);
-
-                    if (result.Count > 0) return result;
-
-                }
-
-
-
-                // Fallback if structured data is present but parsing fails or yields no results
-
-                return GetDefaultWorkWeek(defaultDayHours);
-
-            }
-
-            catch (Exception ex)
-
-            {
-
-                Console.WriteLine($"Error parsing calendar data: {ex.Message}");
-
-                return GetDefaultWorkWeek(defaultDayHours);
-
-            }
-
-        }
-
-
-
-        // PERFORMANCE OPTIMIZATION: Refactored to use static compiled Regex patterns instead of dynamic Regex in a loop
-
-        private List<CalendarEntry> ParseP6CalendarFormat(string clndrData, string defaultDayHours)
-
-        {
-
-            var entries = new List<CalendarEntry>();
-
-            clndrData = CleanUnicodeData(clndrData);
-
-
-
-            // Parse DaysOfWeek section
-
-            int daysStart = clndrData.IndexOf("DaysOfWeek");
-
-            if (daysStart > -1)
-
-            {
-
-                int daysEnd = FindSectionEnd(clndrData, daysStart);
-
-                if (daysEnd > daysStart)
-
-                {
-
-                    string daysSection = clndrData.AsSpan(daysStart, daysEnd - daysStart).ToString();
-
-
-                    // Use dictionaries to store results from Regex matches
-
-                    var dayContents = new Dictionary<int, string>();
-
-                    var emptyDays = new HashSet<int>();
-
-
-
-                    // Match all occurrences using the static compiled Regex (DayPatternRegex)
-
-                    foreach (Match match in DayPatternRegex().Matches(daysSection))
-                    {
-                        if (int.TryParse(match.Groups[1].Value, out int dayNum) && dayNum >= 1 && dayNum <= 7)
-
-                        {
-
-                            dayContents[dayNum] = match.Groups[2].Value.Trim();
-
-                        }
-
-                    }
-
-
-
-                    // Match all occurrences using the static compiled Regex (EmptyDayPatternRegex)
-
-                    foreach (Match match in EmptyDayPatternRegex().Matches(daysSection))
-                    {
-                        if (int.TryParse(match.Groups[1].Value, out int dayNum) && dayNum >= 1 && dayNum <= 7)
-
-                        {
-
-                            emptyDays.Add(dayNum);
-
-                            // Ensure it's removed from dayContents if somehow matched by both
-
-                            dayContents.Remove(dayNum);
-
-                        }
-
-                    }
-
-
-
-                    // Process the results for all 7 days
-
-                    for (int dayNum = 1; dayNum <= 7; dayNum++)
-
-                    {
-
-                        string dayName = GetDayName(dayNum);
-
-                        decimal totalHours = 0;
-
-
-
-                        if (dayContents.TryGetValue(dayNum, out string? dayContent) && !string.IsNullOrWhiteSpace(dayContent))
-
-                        {
-
-                            // Day has defined work hours
-
-                            totalHours = ParseDayWorkHours(dayContent);
-
-                        }
-
-                        else if (emptyDays.Contains(dayNum))
-
-                        {
-
-                            // Day is explicitly defined as non-working
-
-                            totalHours = 0;
-
-                        }
-
-                        else
-
-                        {
-
-                            // Default P6 logic (if not explicitly defined in DaysOfWeek section)
-
-                            // Sunday (1) and Saturday (7) default to non-work; others use default hours.
-
-                            if (dayNum == 1 || dayNum == 7)
-
-                            {
-
-                                totalHours = 0;
-
-                            }
-
-                            else
-
-                            {
-
-                                if (decimal.TryParse(defaultDayHours, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal defHours))
-
-                                {
-
-                                    totalHours = defHours;
-
-                                }
-
-                                else
-
-                                {
-
-                                    totalHours = 8; // Standard fallback if defaultDayHours is invalid
-
-                                }
-
-                            }
-
-                        }
-
-
-
-                        entries.Add(new CalendarEntry
-
-                        {
-
-                            Date = "",
-
-                            DayOfWeek = dayName,
-
-                            WorkingDay = totalHours > 0 ? "Y" : "N",
-
-                            WorkHours = FormatHours(totalHours),
-
-                            ExceptionType = "Standard"
-
-                        });
-
-                    }
-
-                }
-
-            }
-
-
-
-            // If DaysOfWeek parsing failed to produce a full week, use the default week definition
-
-            if (entries.Count == 0)
-
-                entries.AddRange(GetDefaultWorkWeek(defaultDayHours));
-
-
-
-            // Parse Exceptions/Holidays (which overlay the standard week)
-
-            ParseExceptions(clndrData, entries);
-
-
-
-            return entries;
-
-        }
-
-
-
-        private void ParseExceptions(string clndrData, List<CalendarEntry> entries)
-
-        {
-
-            string[] exceptionSections = ["Exceptions", "HolidayOrExceptions", "HolidayOrException"];
-
-
-
-            foreach (var sectionName in exceptionSections)
-
-            {
-
-                int excStart = clndrData.IndexOf(sectionName);
-
-                if (excStart > -1)
-
-                {
-
-                    int excEnd = FindSectionEnd(clndrData, excStart);
-
-                    ReadOnlySpan<char> excSpan = excEnd > excStart
-                        ? clndrData.AsSpan(excStart, excEnd - excStart)
-                        : clndrData.AsSpan(excStart);
-                    string excSection = excSpan.ToString();
-
-
-                    // Use pre-compiled Regex patterns
-
-                    ParseExceptionMatches(ExcPatternRegex().Matches(excSection), entries);
-                    ParseExceptionMatches(ExcPatternRegex2().Matches(excSection), entries);
-                }
-
-            }
-
-        }
-
-
-
-        private void ParseExceptionMatches(MatchCollection matches, List<CalendarEntry> entries)
-
-        {
-
-            foreach (Match excMatch in matches)
-
-            {
-
-                if (excMatch.Success && excMatch.Groups.Count >= 3)
-
-                {
-
-                    // Group 2 contains the OLE date serial
-
-                    if (int.TryParse(excMatch.Groups[2].Value, out int dateSerial))
-
-                    {
-
-                        DateTime excDate = ConvertFromOleDate(dateSerial);
-
-                        int dayNum = (int)excDate.DayOfWeek; // .NET: 0=Sun, 1=Mon... 6=Sat
-
-                        if (dayNum == 0) dayNum = 7; // P6: 1=Sun... 7=Sat. We use 1=Mon... 7=Sun in our GetDayName/GetDayOfWeekNumber.
-
-                                                     // Let's stick to .NET's DayOfWeek and adjust GetDayName
-
-
-
-                        string dayName = excDate.DayOfWeek.ToString(); // e.g., "Monday"
-
-                        string p6DayName = GetDayName((int)excDate.DayOfWeek + 1); // Get P6 day name (1-7)
-
-
-
-                        // Find the standard entry for this day of the week to use as a template
-
-                        var standardDayEntry = entries.FirstOrDefault(e => e.DayOfWeek == p6DayName && string.IsNullOrEmpty(e.Date));
-
-
-
-                        if (standardDayEntry == null) continue; // Should not happen if standard week was parsed
-
-
-
-                        // Group 3 contains the work content (time slots)
-
-                        string workContent = excMatch.Groups.Count > 3 ? excMatch.Groups[3].Value.Trim() : "()";
-
-
-
-                        decimal hours;
-
-                        string entryType;
-
-
-
-                        if (string.IsNullOrEmpty(workContent) || workContent == "()")
-
-                        {
-
-                            // This is explicitly a non-working day (Holiday)
-
-                            hours = 0;
-
-                            entryType = "Exception - Non-Working";
-
-                        }
-
-                        else
-
-                        {
-
-                            // This is a working exception with its own hours
-
-                            hours = ParseDayWorkHours(workContent);
-
-                            entryType = "Exception - Working";
-
-                        }
-
-
-
-                        // Add a NEW entry for this specific date, using the standard day as a base
-
-                        // but overriding with exception data.
-
-                        entries.Add(new CalendarEntry
-
-                        {
-
-                            Date = excDate.ToString("yyyy-MM-dd"), // Specific date
-
-                            DayOfWeek = p6DayName,                 // Day name (e.g., "Monday")
-
-                            WorkingDay = hours > 0 ? "Y" : "N",    // Y/N based on exception hours
-
-                            WorkHours = FormatHours(hours),        // Exception hours
-
-                            ExceptionType = entryType              // "Exception - Working" or "Exception - Non-Working"
-
-                        });
-
-                    }
-
-                }
-
-            }
-
-        }
-
-
-
-        private string DetermineExceptionType(decimal hours)
-
-        {
-
-            if (hours > 0)
-
-                return "Exception - Working";
-
-            return "Holiday"; // Non-working exception
-
-        }
-
-
-
-        private int FindSectionEnd(string data, int sectionStart)
-
-        {
-
-            // Defines markers for subsequent sections in clndr_data
-
-            string[] nextSections = ["VIEW", "Exceptions", "HolidayOrExceptions", "Resources", "DaysOfWeek"];
-
-            int minEnd = data.Length;
-
-
-
-            foreach (var section in nextSections)
-
-            {
-
-                // Search for the next section marker after the current section start
-
-                // Ensure we don't find the same section marker again
-
-                int pos = data.IndexOf(section, sectionStart + 5);
-
-                if (pos > -1 && pos < minEnd && pos != sectionStart)
-
-                    minEnd = pos;
-
-            }
-
-            return minEnd;
-
-        }
-
-
-
-        // Cleans up potentially corrupted or Unicode characters in clndr_data
-
-        private string CleanUnicodeData(string data)
-
-        {
-
-            if (string.IsNullOrEmpty(data)) return data;
-
-
-
-            var cleaned = new StringBuilder(data.Length);
-
-            foreach (char c in data)
-
-            {
-
-                // Keep printable ASCII characters and common punctuation/symbols
-
-                if ((c >= 32 && c <= 126) || char.IsPunctuation(c) || char.IsSymbol(c))
-
-                {
-
-                    cleaned.Append(c);
-
-                }
-
-                // Replace control characters (like newlines, tabs) and others with spaces
-
-                else
-
-                {
-
-                    cleaned.Append(' ');
-
-                }
-
-            }
-
-
-
-            string result = cleaned.ToString();
-
-            // Use pre-compiled Regex to clean up spacing around delimiters
-
-            result = CleanRegex1().Replace(result, "$1");
-            result = CleanRegex2().Replace(result, "$1");
-            // .NET 8: Use source-generated regex for collapsing multiple spaces
-
-            result = MultiSpaceRegex().Replace(result, " ");
-
-
-
-            return result;
-
-        }
-
-
-
-        // Parses work hours from time slot definitions within clndr_data
-
-        // This logic handles various P6 time slot formats (s=start, f=finish)
-        // .NET 8: Uses GeneratedRegex for source-generated, compiled regex patterns
-
-        private decimal ParseDayWorkHours(string content)
-
-        {
-
-            if (string.IsNullOrWhiteSpace(content)) return 0;
-
-
-
-            decimal totalHours = 0;
-
-
-
-            // Pattern 1: (0||N (s|HH:MM|f|HH:MM) ()) - Most common format
-            // Uses source-generated regex for optimal performance
-
-            var matches = TimeSlotPattern1Regex().Matches(content);
-
-
-
-            if (matches.Count > 0)
-
-            {
-
-                foreach (Match match in matches)
-
-                {
-
-                    totalHours += ExtractHoursFromMatch(match);
-
-                }
-
-                return totalHours;
-
-            }
-
-
-
-            // Pattern 2: (s|HH:MM|f|HH:MM) - Alternative format
-
-            matches = TimeSlotPattern2Regex().Matches(content);
-
-
-
-            if (matches.Count > 0)
-
-            {
-
-                foreach (Match match in matches)
-
-                {
-
-                    totalHours += ExtractHoursFromMatch(match);
-
-                }
-
-                return totalHours;
-
-            }
-
-
-
-            // Pattern 3: s|HH:MM|f|HH:MM (Simplified format)
-
-            matches = TimeSlotPattern3Regex().Matches(content);
-
-
-
-            if (matches.Count > 0)
-
-            {
-
-                // Handle potential duplicates in simplified format parsing
-
-                var processedPairs = new HashSet<string>();
-
-                foreach (Match match in matches)
-
-                {
-
-                    string timeKey = $"{match.Groups[2].Value}-{match.Groups[4].Value}";
-
-                    if (processedPairs.Contains(timeKey)) continue;
-
-                    processedPairs.Add(timeKey);
-
-
-
-                    totalHours += ExtractHoursFromMatch(match);
-
-                }
-
-            }
-
-
-
-            return totalHours;
-
-        }
-
-
-
-        private decimal ExtractHoursFromMatch(Match match)
-
-        {
-
-            if (match.Groups.Count >= 5)
-
-            {
-
-                if (TimeSpan.TryParse(match.Groups[2].Value, out TimeSpan time1) && TimeSpan.TryParse(match.Groups[4].Value, out TimeSpan time2))
-
-                {
-
-                    string type1 = match.Groups[1].Value;
-
-                    string type2 = match.Groups[3].Value;
-
-                    TimeSpan start, end;
-
-
-
-                    // Determine start and end times based on 's' (start) and 'f' (finish) markers
-
-                    if (type1 == "s" && type2 == "f") { start = time1; end = time2; }
-
-                    else if (type1 == "f" && type2 == "s") { start = time2; end = time1; }
-
-                    else
-
-                    {
-
-                        // Handle ambiguous cases (e.g., both 's' or both 'f') by ordering them temporally
-
-                        start = time1 < time2 ? time1 : time2;
-
-                        end = time1 < time2 ? time2 : time1;
-
-                    }
-
-
-
-                    return CalculateHoursBetween(start, end);
-
-                }
-
-            }
-
-            return 0;
-
-        }
-
-
-
-
-
-        private decimal CalculateHoursBetween(TimeSpan start, TimeSpan end)
-
-        {
-
-            if (start == end)
-
-            {
-
-                // FIX: P6 uses (s|00:00|f|00:00) to represent a full 24-hour workday.
-
-                if (start == TimeSpan.Zero)
-
-                {
-
-                    return 24m;
-
-                }
-
-
-
-                // Any other identical time (e.g., s|08:00|f|08:00) is 0 hours.
-
-                return 0m;
-
-            }
-
-
-
-            if (end > start)
-
-            {
-
-                // Standard day shift (e.g., 08:00 to 17:00)
-
-                return (decimal)(end - start).TotalHours;
-
-            }
-
-            else
-
-            {
-
-                // Overnight shift (e.g., 22:00 to 06:00)
-
-                // This also handles (s|08:00|f|00:00), which is 16 hours.
-
-                return (decimal)(TimeSpan.FromHours(24) - start + end).TotalHours;
-
-            }
-
-        }
-
-
-
-        // Converts OLE Automation Date (used in P6 clndr_data) to DateTime
-
-        private DateTime ConvertFromOleDate(int oleDate)
-
-        {
-
-            try
-
-            {
-
-                // OLE Date base is December 30, 1899
-
-                DateTime baseDate = new DateTime(1899, 12, 30);
-
-
-
-                if (oleDate < 1) return new DateTime(1900, 1, 1); // Handle invalid dates
-
-
-
-                // Note: DateTime.FromOADate handles the conversion correctly, including the historical leap year intricacies.
-
-                // However, P6 XER files typically use integer OLE dates (days only).
-
-                return baseDate.AddDays(oleDate);
-
-
-
-            }
-
-            catch (Exception ex)
-
-            {
-
-                Console.WriteLine($"Error converting OLE date {oleDate}: {ex.Message}");
-
-                return new DateTime(2000, 1, 1); // Fallback date
-
-            }
-
-        }
-
-
-
-        private string GetDayName(int dayNumber)
-
-        {
-
-            // P6 convention: 1=Sunday, 2=Monday... 7=Saturday
-
-            switch (dayNumber)
-
-            {
-
-                case 1: return "Sunday";
-
-                case 2: return "Monday";
-
-                case 3: return "Tuesday";
-
-                case 4: return "Wednesday";
-
-                case 5: return "Thursday";
-
-                case 6: return "Friday";
-
-                case 7: return "Saturday";
-
-                default: return "Unknown";
-
-            }
-
-        }
-
-
-
-        private static string GetDayOfWeekNumber(string dayName)
-
-        {
-
-            // Converts day name to number (Monday=1, Sunday=7) for Power BI compatibility
-
-            switch (dayName)
-
-            {
-
-                case "Monday": return "1";
-
-                case "Tuesday": return "2";
-
-                case "Wednesday": return "3";
-
-                case "Thursday": return "4";
-
-                case "Friday": return "5";
-
-                case "Saturday": return "6";
-
-                case "Sunday": return "7";
-
-                default: return "";
-
-            }
-
-        }
-
-
-
-        private string FormatHours(decimal hours)
-
-        {
-
-            if (hours == 0) return "0";
-
-            if (hours == Math.Floor(hours)) return hours.ToString("0");
-
-            return hours.ToString("0.##"); // Format with up to 2 decimal places if needed
-
-        }
-
-
-
-        // Provides a default work week definition if parsing fails
-
-        private List<CalendarEntry> GetDefaultWorkWeek(string defaultDayHours)
-
-        {
-
-            decimal defaultHours = 8; // Standard fallback
-
-            if (!string.IsNullOrWhiteSpace(defaultDayHours))
-
-            {
-
-                if (decimal.TryParse(defaultDayHours, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal parsed))
-
-                    defaultHours = Math.Max(0, parsed);
-
-            }
-
-
-
-            // Heuristic to detect 24x7 calendars: if default hours are high (e.g., >= 12), assume weekends work too
-
-            bool is24x7 = defaultHours >= 12;
-
-
-
-            var days = new[]
-
-            {
-
-        ("Sunday", is24x7 ? "Y" : "N", is24x7 ? defaultHours : 0m),
-
-        ("Monday", "Y", defaultHours),
-
-        ("Tuesday", "Y", defaultHours),
-
-        ("Wednesday", "Y", defaultHours),
-
-        ("Thursday", "Y", defaultHours),
-
-        ("Friday", "Y", defaultHours),
-
-        ("Saturday", is24x7 ? "Y" : "N", is24x7 ? defaultHours : 0m)
-
-    };
-
-
-
-            return days.Select(d => new CalendarEntry
-
-            {
-
-                DayOfWeek = d.Item1,
-
-                WorkingDay = d.Item2,
-
-                WorkHours = FormatHours(d.Item3),
-
-                ExceptionType = "Standard",
-
-                Date = ""
-
-            }).ToList();
-
-        }
-
-
-
-        // Creates the Resource Distribution table (15_XER_RESOURCE_DISTRIBUTION)
-
-        public XerTable? Create15XerResourceDistribution()
-        {
-
-            var taskRsrcTable = _dataStore.GetTable(TableNames.TaskRsrc);
-
-            var taskTable = _dataStore.GetTable(TableNames.Task);
-
-            var rsrcTable = _dataStore.GetTable(TableNames.Rsrc);
-
-            var projectTable = _dataStore.GetTable(TableNames.Project);
-
-            var calendarTable = _dataStore.GetTable(TableNames.Calendar);
-
-            var umeasureTable = _dataStore.GetTable(TableNames.Umeasure);
-
-
-
-            if (!IsTableValid(taskRsrcTable) || !IsTableValid(taskTable) || !IsTableValid(projectTable)) return null;
-
-
-
-            try
-
-            {
-
-                // UPDATED: Column definitions with new hour-based fields
-
-                string[] distColumns = {
-
-            FieldNames.TaskIdKey, FieldNames.RsrcIdKey, FieldNames.ClndrIdKey, FieldNames.ProjIdKey,
-
-            FieldNames.DistributionMonth, FieldNames.MonthStartDate, FieldNames.MonthEndDate,
-
-            FieldNames.MonthlyQuantity, FieldNames.DistributionType,
-
-            
-
-            // PRIMARY DIAGNOSTIC COLUMNS (Hour-Based)
-
-            FieldNames.MonthWorkingHours,      // NEW: Actual working hours in month slice
-
-            FieldNames.TotalWorkingHours,      // NEW: Total working hours in full period
-
-            FieldNames.CalendarHoursPerDay,    // NEW: Calendar's standard hours per day
-
-            
-
-            // DERIVED COLUMNS (For backward compatibility)
-
-            FieldNames.MonthWorkingDays,       // Now calculated: hours / calendar_hpd
-
-            FieldNames.TotalWorkingDays,       // Now calculated: hours / calendar_hpd
-
-            FieldNames.MonthCalendarDays,
-
-            FieldNames.TotalCalendarDays,
-
-
-
-            FieldNames.Start, FieldNames.Finish,
-
-            FieldNames.IsActual, FieldNames.StatusCode,
-
-            FieldNames.Unit,
-
-
-
-            // Descriptive
-
-            FieldNames.TaskCode,
-
-            FieldNames.RsrcShortName, FieldNames.RsrcName, FieldNames.RsrcType,
-
-            FieldNames.MonthUpdate
-
-        };
-
-
-
-                var finalIndexes = distColumns
-
-                    .Select((name, index) => new { name, index })
-
-                    .ToDictionary(item => item.name, item => item.index, StringComparer.OrdinalIgnoreCase);
-
-
-
-                var resultTable = new XerTable(EnhancedTableNames.XerResourceDist15, taskRsrcTable.RowCount * 5);
-
-                resultTable.SetHeaders(distColumns.Select(s => StringInternPool.Intern(s) ?? string.Empty).ToArray());
-
-
-
-                // 1. Build Lookups
-
-                Console.WriteLine("Building lookups for Hour-Based Resource Distribution...");
-
-
-
-                var taskLookup = BuildTaskLookupDictionary(taskTable);
-
-                var projDataDates = BuildProjectDataDatesLookup(projectTable);
-
-
-
-                var projNameLookup = new Dictionary<string, string>();
-
-                var pIdx = projectTable.FieldIndexes;
-
-                foreach (var row in projectTable.Rows)
-
-                {
-
-                    string id = GetFieldValue(row.Fields, pIdx, FieldNames.ProjectId);
-
-                    string name = GetFieldValue(row.Fields, pIdx, "proj_short_name");
-
-                    if (string.IsNullOrEmpty(name)) name = id;
-
-                    if (!string.IsNullOrEmpty(id)) projNameLookup[CreateKey(row.SourceFilename, id)] = name;
-
-                }
-
-
-
-                var rsrcLookup = BuildResourceLookup(rsrcTable, umeasureTable);
-
-                var calendars = BuildCalendarCalculators(null);
-
-                var calendarHours = BuildCalendarHoursLookup(calendarTable);
-
-
-
-                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
-
-                var resultBag = new ConcurrentBag<DataRow>();
-
-                var trIdx = taskRsrcTable.FieldIndexes;
-
-
-
-                Parallel.ForEach(taskRsrcTable.Rows, parallelOptions, sourceRow =>
-
-                {
-
-                    var row = sourceRow.Fields;
-
-                    string filename = sourceRow.SourceFilename;
-
-
-
-                    // 2. Parse Quantities using Native Columns
-
-                    double.TryParse(GetFieldValue(row, trIdx, FieldNames.ActRegQty), NumberStyles.Any, CultureInfo.InvariantCulture, out double actReg);
-
-                    double.TryParse(GetFieldValue(row, trIdx, FieldNames.ActOtQty), NumberStyles.Any, CultureInfo.InvariantCulture, out double actOt);
-
-                    double actualQty = actReg + actOt;
-
-                    double.TryParse(GetFieldValue(row, trIdx, FieldNames.RemainQty), NumberStyles.Any, CultureInfo.InvariantCulture, out double remainQty);
-
-
-
-                    // 3. Get Keys
-
-                    string taskId = GetFieldValue(row, trIdx, FieldNames.TaskId);
-
-                    string rsrcId = GetFieldValue(row, trIdx, FieldNames.RsrcId);
-
-                    string taskIdKey = CreateKey(filename, taskId);
-
-                    string rsrcIdKey = CreateKey(filename, rsrcId);
-
-
-
-                    // 4. Lookups (Mimic RELATED())
-
-                    if (!taskLookup.TryGetValue(taskIdKey, out TaskData taskData)) taskData = new TaskData();
-
-
-
-                    string clndrIdKey = taskData.ClndrIdKey ?? string.Empty;
-
-                    string statusCode = taskData.StatusCode ?? string.Empty;
-
-                    string projIdKey = taskData.ProjIdKey ?? string.Empty;
-
-                    DateTime dataDate = projDataDates.TryGetValue(projIdKey, out var dd) ? dd : DateTime.MinValue;
-
-
-
-                    string rsrcName = "", rsrcShort = "", rsrcType = "", unitName = "";
-
-                    if (rsrcLookup.TryGetValue(rsrcIdKey, out var rInfo))
-
-                    {
-
-                        rsrcName = rInfo.Name;
-
-                        rsrcShort = rInfo.ShortName;
-
-                        rsrcType = rInfo.Type;
-
-                        unitName = rInfo.Unit;
-
-                    }
-
-
-
-                    // --- LOGIC BRANCH 1: ACTUALS ---
-
-                    if (actualQty > 0 && (statusCode == "TK_Complete" || statusCode == "TK_Active"))
-
-                    {
-
-                        DateTime rsrcActStart = DateParser.TryParse(GetFieldValue(row, trIdx, FieldNames.ActStartDate)) ?? DateTime.MinValue;
-
-                        DateTime rsrcActEnd = DateParser.TryParse(GetFieldValue(row, trIdx, FieldNames.ActEndDate)) ?? DateTime.MinValue;
-
-
-
-                        DateTime finalEndDate = (statusCode == "TK_Complete") ? rsrcActEnd : dataDate;
-
-
-
-                        if (rsrcActStart != DateTime.MinValue && finalEndDate != DateTime.MinValue && finalEndDate >= rsrcActStart)
-
-                        {
-
-                            GenerateDistributionRows(resultBag, filename, finalIndexes, taskIdKey, rsrcIdKey, clndrIdKey, projIdKey, rsrcActStart, finalEndDate, actualQty, true, statusCode, taskData.TaskType ?? string.Empty, taskData.TaskCode ?? string.Empty, row, trIdx, calendars, calendarHours, projNameLookup, rsrcName, rsrcShort, rsrcType, unitName);
-
-                        }
-
-                    }
-
-
-
-                    // --- LOGIC BRANCH 2: REMAINING ---
-
-                    if (remainQty > 0 && (statusCode == "TK_NotStart" || statusCode == "TK_Active"))
-
-                    {
-
-                        DateTime restartDate = DateParser.TryParse(GetFieldValue(row, trIdx, FieldNames.RestartDate)) ?? DateTime.MinValue;
-
-                        DateTime reendDate = DateParser.TryParse(GetFieldValue(row, trIdx, FieldNames.ReendDate)) ?? DateTime.MinValue;
-
-
-
-                        if (restartDate != DateTime.MinValue && reendDate != DateTime.MinValue && reendDate >= restartDate)
-
-                        {
-
-                            GenerateDistributionRows(resultBag, filename, finalIndexes, taskIdKey, rsrcIdKey, clndrIdKey, projIdKey, restartDate, reendDate, remainQty, false, statusCode, taskData.TaskType ?? string.Empty, taskData.TaskCode ?? string.Empty, row, trIdx, calendars, calendarHours, projNameLookup, rsrcName, rsrcShort, rsrcType, unitName);
-
-                        }
-
-                    }
-
-                });
-
-
-
-                resultTable.AddRows(resultBag);
-
-                Console.WriteLine($"Generated {resultTable.RowCount} hour-based resource distribution rows.");
-
-                return resultTable;
-
-            }
-
-            catch (Exception ex)
-
-            {
-
-                Console.WriteLine($"Error creating {EnhancedTableNames.XerResourceDist15}: {ex.Message}");
-
-                return null;
-
-            }
-
-        }
-
-        private Dictionary<string, (string ShortName, string Name, string Type, string Unit)> BuildResourceLookup(XerTable? rsrcTable, XerTable? umeasureTable)
-
-        {
-
-            var lookup = new Dictionary<string, (string, string, string, string)>();
-
-            if (!IsTableValid(rsrcTable)) return lookup;
-
-
-
-            var unitMap = new Dictionary<string, string>();
-
-            if (IsTableValid(umeasureTable))
-
-            {
-
-                var uIdx = umeasureTable.FieldIndexes;
-
-                foreach (var row in umeasureTable.Rows)
-
-                {
-
-                    string id = GetFieldValue(row.Fields, uIdx, FieldNames.UnitId);
-
-                    string name = GetFieldValue(row.Fields, uIdx, FieldNames.UnitAbbr);
-
-                    if (string.IsNullOrEmpty(name)) name = GetFieldValue(row.Fields, uIdx, FieldNames.UnitName);
-
-                    if (!string.IsNullOrEmpty(id)) unitMap[CreateKey(row.SourceFilename, id)] = name;
-
-                }
-
-            }
-
-
-
-            var rIdx = rsrcTable.FieldIndexes;
-
-            foreach (var row in rsrcTable.Rows)
-
-            {
-
-                string id = GetFieldValue(row.Fields, rIdx, FieldNames.RsrcId);
-
-                string shortName = GetFieldValue(row.Fields, rIdx, FieldNames.RsrcShortName);
-
-                string rName = GetFieldValue(row.Fields, rIdx, FieldNames.RsrcName);
-
-                string type = GetFieldValue(row.Fields, rIdx, FieldNames.RsrcType);
-
-                string unitId = GetFieldValue(row.Fields, rIdx, FieldNames.UnitId);
-
-                string unitName = string.Empty;
-
-                if (!string.IsNullOrEmpty(unitId))
-                {
-                    string unitKey = CreateKey(row.SourceFilename, unitId);
-                    if (unitMap.TryGetValue(unitKey, out string? unitLookup) && !string.IsNullOrEmpty(unitLookup))
-                    {
-                        unitName = unitLookup;
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(id))
-
-                {
-
-                    string key = CreateKey(row.SourceFilename, id);
-
-                    lookup[key] = (shortName, rName, type, unitName);
-
-                }
-
-            }
-
-            return lookup;
-
-        }
-
-        // Helper Method for Generating Rows (Strict Integer Day Logic)
-
-        private void GenerateDistributionRows(
-
-            ConcurrentBag<DataRow> bag,
-
-            string filename,
-
-            IReadOnlyDictionary<string, int> indexes,
-
-            string taskIdKey,
-
-            string rsrcIdKey,
-
-            string clndrIdKey,
-
-            string projIdKey,
-
-            DateTime startDate,
-
-            DateTime endDate,
-
-            double totalQty,
-
-            bool isActual,
-
-            string statusCode,
-
-            string taskType,
-
-            string taskCode,
-
-            string[] sourceRow,
-
-            IReadOnlyDictionary<string, int> sourceIdx,
-
-            Dictionary<string, WorkingDayCalculator> calendars,
-
-            Dictionary<string, decimal> calendarHoursLookup,
-
-            Dictionary<string, string> projNameLookup,
-
-            string rsrcName,
-
-            string rsrcShort,
-
-            string rsrcType,
-
-            string unitName)
-
-        {
-
-            // Get the calendar calculator
-
-            WorkingDayCalculator calculator = WorkingDayCalculator.Default;
-
-            if (!string.IsNullOrEmpty(clndrIdKey) && calendars.TryGetValue(clndrIdKey, out var cal))
-
-                calculator = cal;
-
-
-
-            // Get calendar hours per day for conversions
-
-            decimal calendarHoursPerDay = 8m;
-
-            if (!string.IsNullOrEmpty(clndrIdKey) && calendarHoursLookup.TryGetValue(clndrIdKey, out decimal hpd))
-
-                calendarHoursPerDay = hpd;
-
-            if (calendarHoursPerDay <= 0) calendarHoursPerDay = 8m; // Fallback
-
-
-
-            decimal totalWorkingHours = calculator.CountWorkingHours(startDate, endDate);
-
-
-
-            // Fallback to calendar days if no working hours exist (all holidays)
-
-            bool useWorkingHours = totalWorkingHours > 0;
-
-            decimal totalCalendarDays = 0;
-
-            if (!useWorkingHours)
-
-            {
-
-                totalCalendarDays = (decimal)(endDate.Date - startDate.Date).TotalDays + 1;
-
-            }
-
-
-
-            // Iterate through months
-
-            DateTime currentMonthStart = new DateTime(startDate.Year, startDate.Month, 1);
-
-            DateTime finalMonthStart = new DateTime(endDate.Year, endDate.Month, 1);
-
-
-
-            while (currentMonthStart <= finalMonthStart)
-
-            {
-
-                // Get last moment of the month (includes full last day)
-
-                DateTime currentMonthEnd = currentMonthStart.AddMonths(1).AddDays(-1).Date
-
-                    .AddHours(23).AddMinutes(59).AddSeconds(59);
-
-
-
-                // Determine intersection with activity period
-
-                DateTime periodStart = (startDate > currentMonthStart) ? startDate : currentMonthStart;
-
-                DateTime periodEnd = (endDate < currentMonthEnd) ? endDate : currentMonthEnd;
-
-
-
-                if (periodStart <= periodEnd)
-
-                {
-
-                    double distributedQty = 0;
-
-                    decimal periodWorkingHours = 0;
-
-                    decimal periodCalendarDays = 0;
-
-
-
-                    if (useWorkingHours)
-
-                    {
-
-                        // *** HOUR-BASED LOGIC: Count working hours in this month slice ***
-
-                        // This replaces the day-counting loop with hour-accurate calculation
-
-                        periodWorkingHours = calculator.CountWorkingHours(periodStart, periodEnd);
-
-
-
-                        // Proportional distribution by hours (not days)
-
-                        if (totalWorkingHours > 0)
-
-                        {
-
-                            distributedQty = totalQty * (double)(periodWorkingHours / totalWorkingHours);
-
-                        }
-
-                    }
-
-                    else
-
-                    {
-
-                        // Fallback: Calendar day distribution (when no working hours exist)
-
-                        periodCalendarDays = (decimal)(periodEnd.Date - periodStart.Date).TotalDays + 1;
-
-                        if (totalCalendarDays > 0)
-
-                        {
-
-                            distributedQty = totalQty * (double)(periodCalendarDays / totalCalendarDays);
-
-                        }
-
-                    }
-
-
-
-                    // Add Row if Qty > 0 OR it is Actuals (preserve data integrity)
-
-                    if (distributedQty > 0 || isActual)
-
-                    {
-
-                        string[] newRow = new string[indexes.Count];
-
-
-
-                        // Keys
-
-                        SetTransformedField(newRow, indexes, FieldNames.TaskIdKey, taskIdKey);
-
-                        SetTransformedField(newRow, indexes, FieldNames.RsrcIdKey, rsrcIdKey);
-
-                        SetTransformedField(newRow, indexes, FieldNames.ClndrIdKey, clndrIdKey);
-
-                        SetTransformedField(newRow, indexes, FieldNames.ProjIdKey, projIdKey);
-
-
-
-                        // Distribution Data
-
-                        SetTransformedField(newRow, indexes, FieldNames.DistributionMonth,
-
-                            currentMonthStart.ToString("yyyy-MM-dd"));
-
-                        SetTransformedField(newRow, indexes, FieldNames.MonthStartDate,
-
-                            periodStart.ToString("yyyy-MM-dd HH:mm:ss"));  // Keep time precision
-
-                        SetTransformedField(newRow, indexes, FieldNames.MonthEndDate,
-
-                            periodEnd.ToString("yyyy-MM-dd HH:mm:ss"));    // Keep time precision
-
-                        SetTransformedField(newRow, indexes, FieldNames.MonthlyQuantity,
-
-                            distributedQty.ToString("F4", CultureInfo.InvariantCulture));
-
-                        SetTransformedField(newRow, indexes, FieldNames.DistributionType,
-
-                            useWorkingHours ? "Working Hours" : "Calendar Days");
-
-
-
-                        // *** PRIMARY DIAGNOSTIC FIELDS (Hour-Based) ***
-
-                        SetTransformedField(newRow, indexes, FieldNames.MonthWorkingHours,
-
-                            periodWorkingHours.ToString("F2", CultureInfo.InvariantCulture));
-
-                        SetTransformedField(newRow, indexes, FieldNames.TotalWorkingHours,
-
-                            totalWorkingHours.ToString("F2", CultureInfo.InvariantCulture));
-
-                        SetTransformedField(newRow, indexes, FieldNames.CalendarHoursPerDay,
-
-                            calendarHoursPerDay.ToString("F2", CultureInfo.InvariantCulture));
-
-
-
-                        // *** DERIVED FIELDS (Backward Compatibility) ***
-
-                        // Convert hours to days using calendar's standard hours per day
-
-                        decimal periodWorkingDays = periodWorkingHours / calendarHoursPerDay;
-
-                        decimal totalWorkingDays = totalWorkingHours / calendarHoursPerDay;
-
-
-
-                        SetTransformedField(newRow, indexes, FieldNames.MonthWorkingDays,
-
-                            periodWorkingDays.ToString("F2", CultureInfo.InvariantCulture));
-
-                        SetTransformedField(newRow, indexes, FieldNames.TotalWorkingDays,
-
-                            totalWorkingDays.ToString("F2", CultureInfo.InvariantCulture));
-
-
-
-                        // Calendar days (for reference)
-
-                        if (periodCalendarDays == 0)
-
-                            periodCalendarDays = (decimal)(periodEnd.Date - periodStart.Date).TotalDays + 1;
-
-
-
-                        SetTransformedField(newRow, indexes, FieldNames.MonthCalendarDays,
-
-                            periodCalendarDays.ToString("F0", CultureInfo.InvariantCulture));
-
-                        SetTransformedField(newRow, indexes, FieldNames.TotalCalendarDays,
-
-                            totalCalendarDays.ToString("F0", CultureInfo.InvariantCulture));
-
-
-
-                        // Metadata (keep time precision for better accuracy)
-
-                        SetTransformedField(newRow, indexes, FieldNames.Start,
-
-                            startDate.ToString("yyyy-MM-dd HH:mm:ss"));
-
-                        SetTransformedField(newRow, indexes, FieldNames.Finish,
-
-                            endDate.ToString("yyyy-MM-dd HH:mm:ss"));
-
-                        SetTransformedField(newRow, indexes, FieldNames.IsActual, isActual ? "1" : "0");
-
-                        SetTransformedField(newRow, indexes, FieldNames.StatusCode, statusCode);
-
-                        SetTransformedField(newRow, indexes, FieldNames.TaskCode, taskCode);
-
-                        SetTransformedField(newRow, indexes, FieldNames.RsrcShortName, rsrcShort);
-
-                        SetTransformedField(newRow, indexes, FieldNames.RsrcName, rsrcName);
-
-                        SetTransformedField(newRow, indexes, FieldNames.RsrcType, rsrcType);
-
-
-
-                        // Conditional Unit logic: If resource type is NOT material, use "unit/time"
-
-                        string finalUnit = (rsrcType != "RT_Mat") ? "unit/time" : unitName;
-
-                        SetTransformedField(newRow, indexes, FieldNames.Unit, finalUnit);
-
-
-
-                        SetTransformedField(newRow, indexes, FieldNames.MonthUpdate,
-
-                            ParseMonthUpdateFromFilename(filename));
-
-
-
-                        // String intern for memory efficiency
-
-                        for (int k = 0; k < newRow.Length; k++)
-
-                            newRow[k] = StringInternPool.Intern(newRow[k] ?? string.Empty);
-
-
-
-                        bag.Add(new DataRow(newRow, filename));
-
-                    }
-
-                }
-
-
-
-                currentMonthStart = currentMonthStart.AddMonths(1);
-
-            }
-
-        }
-
+        // Resource distribution is implemented in XerTransformer.ResourceDistribution.cs.
     }
-
-
-
-
-
     // Orchestrates the overall processing workflow (Parsing, Transformation, Exporting)
 
     public class ProcessingService
@@ -6546,235 +2662,93 @@ namespace XerToCsvConverter;
             public string? FilePath;
             public string? FileStatus;
             public string? StatusColor;
+            public int? InputIndex;
+            public string? SourceToken;
         }
 
 
 
 
-        // UI/UX OPTIMIZATION: Added CancellationToken and detailed progress reporting
+        // Allocate occurrence identity before parallel work, then merge in caller input order.
         public async Task<XerDataStore> ParseMultipleXerFilesAsync(List<string> filePaths, IProgress<DetailedProgress>? progress, CancellationToken cancellationToken)
         {
-            // Clear caches before starting a new batch
+            ArgumentNullException.ThrowIfNull(filePaths);
             StringInternPool.Clear();
             DateParser.ClearCache();
-
-            int fileCount = filePaths.Count;
-            // Configure parallel options including the CancellationToken
-            var parallelOptions = new ParallelOptions
+            string[] orderedPaths = filePaths.ToArray();
+            int count = orderedPaths.Length;
+            if (count == 0) return new XerDataStore();
+            XerSourceIdentity[] identities = XerSourceIdentity.CreateOrdered(
+                orderedPaths.Select(path => Path.GetFileName(path)).ToArray());
+            var stores = new XerDataStore[count];
+            var options = new ParallelOptions
             {
-                MaxDegreeOfParallelism = Math.Min(PerformanceConfig.MaxParallelFiles, fileCount),
+                MaxDegreeOfParallelism = Math.Max(1, Math.Min(PerformanceConfig.MaxParallelFiles, count)),
                 CancellationToken = cancellationToken
             };
-
-            int fileIndex = 0;
-            var intermediateStores = new ConcurrentBag<XerDataStore>();
-
-            try
+            await Parallel.ForEachAsync(Enumerable.Range(0, count), options, (index, ct) =>
             {
-                await Parallel.ForEachAsync(filePaths, parallelOptions, (file, ct) =>
+                string path = orderedPaths[index];
+                string name = identities[index].OriginalFilename;
+                ct.ThrowIfCancellationRequested();
+                progress?.Report(new DetailedProgress
                 {
-                    ct.ThrowIfCancellationRequested();
-
-                    int currentIndex = Interlocked.Increment(ref fileIndex);
-                    string shortFileName = Path.GetFileName(file);
-
-                    // Report starting status for the file visualization
-                    progress?.Report(new DetailedProgress { Percent = (currentIndex - 1) * 100 / fileCount, Message = $"Starting: {shortFileName}", FilePath = file, FileStatus = "Processing", StatusColor = "Blue" });
-
-                    try
-                    {
-                        if (!File.Exists(file))
-                        {
-                            progress?.Report(new DetailedProgress { Percent = currentIndex * 100 / fileCount, Message = $"Skipped (Missing): {shortFileName}", FilePath = file, FileStatus = "Skipped", StatusColor = "Orange" });
-                            return ValueTask.CompletedTask;
-                        }
-
-                        // Define the progress callback for the parser
-                        Action<int, string> parserProgressCallback = (p, s) =>
-                        {
-                            // Calculate overall progress based on file progress
-                            int overallProgress = ((currentIndex - 1) * 100 + p) / fileCount;
-                            // Report detailed progress without changing file visualization status yet
-                            progress?.Report(new DetailedProgress { Percent = overallProgress, Message = s });
-                        };
-
-                        // Parse the file, passing the cancellation token down
-                        var singleFileStore = _parser.ParseXerFile(file, parserProgressCallback, ct);
-                        intermediateStores.Add(singleFileStore);
-
-                        // Report success status for the file visualization
-                        progress?.Report(new DetailedProgress { Percent = currentIndex * 100 / fileCount, Message = $"Completed: {shortFileName}", FilePath = file, FileStatus = "Success", StatusColor = "DarkGreen" });
-                    }
-                    catch (Exception ex)
-                    {
-                        if (ex is OperationCanceledException) throw; // Propagate cancellation immediately
-
-                        // Report failure status for the file visualization
-                        progress?.Report(new DetailedProgress { Percent = currentIndex * 100 / fileCount, Message = $"Failed: {shortFileName}", FilePath = file, FileStatus = "Error", StatusColor = "Red" });
-
-                        // If a file fails fundamentally (e.g., I/O error, corrupted format), throw an exception to stop the process
-                        // This maintains the behavior of the original code where one failure stops the batch.
-                        throw new Exception($"Failed to parse file '{shortFileName}': {ex.Message}", ex);
-                    }
-
-                    return ValueTask.CompletedTask;
-                }).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                progress?.Report(new DetailedProgress { Percent = 0, Message = "Parsing canceled by user." });
-                // Return whatever data was successfully parsed before cancellation
-                var canceledStore = new XerDataStore();
-                foreach (var store in intermediateStores)
+                    Percent = index * 100 / count, Message = $"Starting: {name}",
+                    FilePath = path, FileStatus = "Processing", StatusColor = "Blue",
+                    InputIndex = index, SourceToken = identities[index].SourceToken
+                });
+                try
                 {
-                    canceledStore.MergeStore(store);
+                    if (!File.Exists(path))
+                        throw new FileNotFoundException("A requested XER input does not exist.", path);
+                    XerDataStore parsed = _parser.ParseXerFile(path, (percent, message) =>
+                        progress?.Report(new DetailedProgress
+                        {
+                            Percent = (index * 100 + percent) / count, Message = message,
+                            FilePath = path, FileStatus = "Processing", StatusColor = "Blue",
+                            InputIndex = index, SourceToken = identities[index].SourceToken
+                        }), ct);
+                    stores[index] = identities[index].ApplyTo(parsed);
+                    progress?.Report(new DetailedProgress
+                    {
+                        Percent = (index + 1) * 100 / count, Message = $"Completed: {name}",
+                        FilePath = path, FileStatus = "Success", StatusColor = "DarkGreen",
+                        InputIndex = index, SourceToken = identities[index].SourceToken
+                    });
                 }
-                return canceledStore;
-            }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    progress?.Report(new DetailedProgress
+                    {
+                        Percent = (index + 1) * 100 / count, Message = $"Failed: {name}",
+                        FilePath = path, FileStatus = "Error", StatusColor = "Red",
+                        InputIndex = index, SourceToken = identities[index].SourceToken
+                    });
+                    throw new InvalidDataException($"Failed to parse file '{name}': {ex.Message}", ex);
+                }
+                return ValueTask.CompletedTask;
+            }).ConfigureAwait(false);
 
-            // Merge results (if not canceled)
-            progress?.Report(new DetailedProgress { Percent = 100, Message = "Merging parsed data..." });
-            var storeToReturn = new XerDataStore();
-            foreach (var store in intermediateStores)
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = new XerDataStore();
+            foreach (XerDataStore store in stores)
             {
-                storeToReturn.MergeStore(store);
+                cancellationToken.ThrowIfCancellationRequested();
+                result.MergeStore(store);
             }
-            return storeToReturn;
+            progress?.Report(new DetailedProgress { Percent = 100, Message = "Merged all requested inputs." });
+            return result;
         }
 
 
-        // UI/UX OPTIMIZATION: Added CancellationToken
-
-        public async Task<List<string>> ExportTablesAsync(XerDataStore dataStore, List<string> tablesToExport, string outputDirectory, IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
+        public async Task<List<string>> ExportTablesAsync(XerDataStore dataStore, List<string> tablesToExport,
+            string outputDirectory, IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
         {
-            var exportedFiles = new ConcurrentBag<string>();
-            var transformer = new XerTransformer(dataStore);
-            // Cache for generated enhanced tables
-            var enhancedCache = new ConcurrentDictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
-
-            // Configure parallel options including the CancellationToken
-            var parallelOptions = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = PerformanceConfig.MaxParallelFiles,
-                CancellationToken = cancellationToken
-            };
-
-            progress?.Report((0, "Generating enhanced tables..."));
-
-            // Identify enhanced tables requested for export (those not already in the raw data store)
-            var enhancedTablesToGenerate = tablesToExport.Where(t => !dataStore.ContainsTable(t)).Distinct().ToList();
-
-            if (enhancedTablesToGenerate.Count > 0)
-
-            {
-
-                try
-
-                {
-
-                    // Dependency Management: Pre-generate TASK01 if needed by others (e.g., BASELINE04), as it cannot be generated in the parallel loop if others depend on it.
-
-                    bool needsTask01 = enhancedTablesToGenerate.Contains(EnhancedTableNames.XerTask01) || enhancedTablesToGenerate.Contains(EnhancedTableNames.XerBaseline04);
-                    if (needsTask01)
-                    {
-                        // Check dependencies for TASK01
-                        if (dataStore.ContainsTable(TableNames.Task) && dataStore.ContainsTable(TableNames.Calendar) && dataStore.ContainsTable(TableNames.Project))
-                        {
-                            var task01Data = transformer.Create01XerTaskTable();
-                            if (task01Data != null) enhancedCache.TryAdd(EnhancedTableNames.XerTask01, task01Data);
-                        }
-                    }
-
-                    // Dependency Management: Pre-generate CALENDAR_DETAILED11 if needed by PREDECESSOR06
-                    bool needsCalendarDetailed = enhancedTablesToGenerate.Contains(EnhancedTableNames.XerCalendarDetailed11) || enhancedTablesToGenerate.Contains(EnhancedTableNames.XerPredecessor06);
-                    if (needsCalendarDetailed && !enhancedCache.ContainsKey(EnhancedTableNames.XerCalendarDetailed11))
-                    {
-                        // Check dependencies for CALENDAR_DETAILED11
-                        if (dataStore.ContainsTable(TableNames.Calendar))
-                        {
-                            var calendarDetailedData = transformer.Create11XerCalendarDetailed();
-                            if (calendarDetailedData != null) enhancedCache.TryAdd(EnhancedTableNames.XerCalendarDetailed11, calendarDetailedData);
-                        }
-                    }
-
-                    // Generate other enhanced tables in parallel
-                    await Parallel.ForEachAsync(enhancedTablesToGenerate, parallelOptions, (tableName, ct) =>
-                    {
-                        ct.ThrowIfCancellationRequested();
-
-                        if (enhancedCache.ContainsKey(tableName)) return ValueTask.CompletedTask; // Already generated (e.g., TASK01)
-
-                        var generatedTable = GenerateEnhancedTable(transformer, tableName, enhancedCache);
-                        if (generatedTable != null)
-                        {
-                            enhancedCache.TryAdd(tableName, generatedTable);
-                        }
-
-                        return ValueTask.CompletedTask;
-                    }).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    progress?.Report((0, "Enhanced table generation canceled."));
-                    return exportedFiles.ToList();
-                }
-            }
-
-            // If canceled during generation, stop the export process
-            if (cancellationToken.IsCancellationRequested)
-            {
-                return exportedFiles.ToList();
-            }
-
-            progress?.Report((80, "Exporting tables to CSV..."));
-            var exportProgress = new ProgressCounter(tablesToExport.Count, progress);
-
-            try
-            {
-                await Parallel.ForEachAsync(tablesToExport.OrderBy(n => n), parallelOptions, (tableName, ct) =>
-                {
-                    // Check for cancellation before starting export of the table
-                    ct.ThrowIfCancellationRequested();
-
-                    exportProgress.UpdateStatus($"Exporting: {tableName}");
-
-                    XerTable? tableToExport = null;
-                    try
-                    {
-                        // Determine source of the table (raw data or enhanced cache)
-                        if (dataStore.ContainsTable(tableName))
-                        {
-                            tableToExport = dataStore.GetTable(tableName);
-                        }
-                        else if (enhancedCache.TryGetValue(tableName, out XerTable? cachedTable))
-                        {
-                            tableToExport = cachedTable;
-                        }
-
-                        // Export if table exists and is not empty
-                        if (tableToExport != null && !tableToExport.IsEmpty)
-                        {
-                            string csvFilePath = Path.Combine(outputDirectory, $"{tableName}.csv");
-                            _exporter.WriteTableToCsv(tableToExport, csvFilePath);
-                            exportedFiles.Add(csvFilePath);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        // If an export fails, throw an exception to stop the parallel loop
-                        throw new Exception($"Error exporting table '{tableName}': {ex.Message}", ex);
-                    }
-
-                    exportProgress.Increment($"Exported: {tableName}");
-                    return ValueTask.CompletedTask;
-                }).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                progress?.Report((0, "Export canceled by user."));
-            }
-
-            return exportedFiles.ToList();
+            ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+            XerTable[] tables = await ResolveRequestedTablesAsync(dataStore, tablesToExport, progress, cancellationToken);
+            return await Task.Run(() => StandardExportPublication.Write(
+                tables, outputDirectory, _exporter, progress, cancellationToken), cancellationToken).ConfigureAwait(false);
         }
 
         // Parse XER from streams (for Blazor WASM / in-memory scenarios)
@@ -6788,6 +2762,8 @@ namespace XerToCsvConverter;
 
             var fileList = files.ToList();
             int fileCount = fileList.Count;
+            XerSourceIdentity[] identities = XerSourceIdentity.CreateOrdered(
+                fileList.Select(file => file.fileName).ToArray());
             var masterStore = new XerDataStore();
 
             for (int i = 0; i < fileCount; i++)
@@ -6800,6 +2776,8 @@ namespace XerToCsvConverter;
                 {
                     Percent = i * 100 / fileCount,
                     Message = $"Parsing: {fileName}",
+                    InputIndex = i,
+                    SourceToken = identities[i].SourceToken,
                     FilePath = fileName,
                     FileStatus = "Processing",
                     StatusColor = "Blue"
@@ -6815,6 +2793,8 @@ namespace XerToCsvConverter;
                         {
                             Percent = overall,
                             Message = message,
+                            InputIndex = fileIndex,
+                            SourceToken = identities[fileIndex].SourceToken,
                             FilePath = fileName,
                             FileStatus = "Processing",
                             StatusColor = "Blue"
@@ -6822,12 +2802,14 @@ namespace XerToCsvConverter;
                     };
                     var singleStore = await _parser.ParseXerStreamAsync(
                         stream, fileName, parserProgress, cancellationToken);
-                    masterStore.MergeStore(singleStore);
+                    masterStore.MergeStore(identities[i].ApplyTo(singleStore));
 
                     progress?.Report(new DetailedProgress
                     {
                         Percent = (i + 1) * 100 / fileCount,
                         Message = $"Completed: {fileName}",
+                        InputIndex = i,
+                        SourceToken = identities[i].SourceToken,
                         FilePath = fileName,
                         FileStatus = "Success",
                         StatusColor = "DarkGreen"
@@ -6840,6 +2822,8 @@ namespace XerToCsvConverter;
                     {
                         Percent = (i + 1) * 100 / fileCount,
                         Message = $"Failed: {fileName}",
+                        InputIndex = i,
+                        SourceToken = identities[i].SourceToken,
                         FilePath = fileName,
                         FileStatus = "Error",
                         StatusColor = "Red"
@@ -6851,75 +2835,98 @@ namespace XerToCsvConverter;
             return masterStore;
         }
 
-        // Export tables to a dictionary of name -> CSV bytes (for Blazor WASM / in-memory scenarios)
+        // Output names are unique by table, while input occurrences remain an ordered sequence.
         public async Task<Dictionary<string, byte[]>> ExportTablesToMemoryAsync(
-            XerDataStore dataStore,
-            List<string> tablesToExport,
-            IProgress<(int percent, string message)>? progress,
-            CancellationToken cancellationToken)
+            XerDataStore dataStore, List<string> tablesToExport,
+            IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
         {
+            XerTable[] tables = await ResolveRequestedTablesAsync(dataStore, tablesToExport, progress, cancellationToken);
             var result = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-            var transformer = new XerTransformer(dataStore);
-            var enhancedCache = new ConcurrentDictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
-
-            progress?.Report((0, "Generating enhanced tables..."));
-
-            var enhancedTablesToGenerate = tablesToExport.Where(t => !dataStore.ContainsTable(t)).Distinct().ToList();
-
-            if (enhancedTablesToGenerate.Count > 0)
+            for (int i = 0; i < tables.Length; i++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                bool needsTask01 = enhancedTablesToGenerate.Contains(EnhancedTableNames.XerTask01) || enhancedTablesToGenerate.Contains(EnhancedTableNames.XerBaseline04);
-                if (needsTask01 && dataStore.ContainsTable(TableNames.Task) && dataStore.ContainsTable(TableNames.Calendar) && dataStore.ContainsTable(TableNames.Project))
-                {
-                    var task01Data = transformer.Create01XerTaskTable();
-                    if (task01Data != null) enhancedCache.TryAdd(EnhancedTableNames.XerTask01, task01Data);
-                }
-
-                bool needsCalendarDetailed = enhancedTablesToGenerate.Contains(EnhancedTableNames.XerCalendarDetailed11) || enhancedTablesToGenerate.Contains(EnhancedTableNames.XerPredecessor06);
-                if (needsCalendarDetailed && !enhancedCache.ContainsKey(EnhancedTableNames.XerCalendarDetailed11) && dataStore.ContainsTable(TableNames.Calendar))
-                {
-                    var calendarDetailedData = transformer.Create11XerCalendarDetailed();
-                    if (calendarDetailedData != null) enhancedCache.TryAdd(EnhancedTableNames.XerCalendarDetailed11, calendarDetailedData);
-                }
-
-                foreach (var tableName in enhancedTablesToGenerate)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (enhancedCache.ContainsKey(tableName)) continue;
-                    var generatedTable = GenerateEnhancedTable(transformer, tableName, enhancedCache);
-                    if (generatedTable != null) enhancedCache.TryAdd(tableName, generatedTable);
-                }
+                await Task.Delay(1, cancellationToken);
+                using var stream = new MemoryStream();
+                _exporter.WriteTableToStream(tables[i], stream);
+                result.Add(tables[i].Name, stream.ToArray());
+                progress?.Report((80 + (i + 1) * 20 / Math.Max(1, tables.Length), $"Exported: {tables[i].Name} ({i + 1}/{tables.Length})"));
             }
-
-            progress?.Report((80, "Exporting tables to CSV..."));
-            int total = tablesToExport.Count;
-            int count = 0;
-
-            foreach (var tableName in tablesToExport.OrderBy(n => n))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                XerTable? tableToExport = null;
-                if (dataStore.ContainsTable(tableName))
-                    tableToExport = dataStore.GetTable(tableName);
-                else if (enhancedCache.TryGetValue(tableName, out XerTable? cachedTable))
-                    tableToExport = cachedTable;
-
-                if (tableToExport != null && !tableToExport.IsEmpty)
-                {
-                    using var ms = new MemoryStream();
-                    _exporter.WriteTableToStream(tableToExport, ms);
-                    result[tableName] = ms.ToArray();
-                }
-
-                count++;
-                int percent = 80 + (int)((double)count / total * 20);
-                progress?.Report((percent, $"Exported: {tableName} ({count}/{total})"));
-            }
-
+            cancellationToken.ThrowIfCancellationRequested();
             return result;
+        }
+
+        private static async Task<XerTable[]> ResolveRequestedTablesAsync(
+            XerDataStore dataStore, IEnumerable<string> requested,
+            IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(dataStore);
+            ArgumentNullException.ThrowIfNull(requested);
+            string[] names = requested.Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(name => name, StringComparer.Ordinal).ToArray();
+            foreach (string name in names) StandardExportPublication.ValidateTableName(name);
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (string tableName in dataStore.TableNames)
+                XerSourceSchema.ValidateHeaders(tableName, dataStore.GetTable(tableName)!.Headers);
+            // This is validation of source metadata, not a filename-keyed input collection.
+            // Separate independently parsed batches must not silently alias public reporting keys.
+            var sourcePairs = dataStore.TableNames.SelectMany(name => dataStore.GetTable(name)!.Rows)
+                .Select(row => (Namespace: row.SourceFilename.Trim(), row.SourceToken)).Distinct();
+            foreach (var scope in sourcePairs.GroupBy(source => source.Namespace, StringComparer.OrdinalIgnoreCase))
+                if (scope.Select(source => source.SourceToken).Distinct(StringComparer.Ordinal).Skip(1).Any())
+                    throw new InvalidDataException($"Standard public source namespace '{scope.Key}' belongs to multiple input occurrences. Parse the sources together in one ordered batch so repeated filenames receive distinct public keys. No CSV files have been published by this export.");
+            progress?.Report((0, "Generating and validating every requested table..."));
+            var transformer = new XerTransformer(dataStore);
+            var cache = new ConcurrentDictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
+            var result = new List<XerTable>(names.Length);
+
+            foreach (string requestedName in names)
+            {
+                await Task.Delay(1, cancellationToken);
+                XerTable? table = dataStore.GetTable(requestedName);
+                if (table is null)
+                {
+                    string name = requestedName.ToUpperInvariant();
+                    string? sourceName = StandardExportSchema.SourceTable(name);
+                    if (sourceName is null)
+                        throw Missing(requestedName, "the requested raw table is absent or the enhanced table is unsupported");
+                    if (dataStore.GetTable(sourceName)?.Headers is null)
+                        throw Missing(requestedName, $"required source table '{sourceName}' or its headers are absent");
+
+                    if (name is EnhancedTableNames.XerTask01 or EnhancedTableNames.XerBaseline04)
+                    {
+                        foreach (string dependency in new[] { TableNames.Task, TableNames.Calendar, TableNames.Project })
+                            if (dataStore.GetTable(dependency)?.Headers is null)
+                                throw Missing(requestedName, $"required source table '{dependency}' or its headers are absent");
+                        if (!cache.ContainsKey(EnhancedTableNames.XerTask01))
+                        {
+                            XerTable? tasks = StandardExportSchema.CreateIfSourceEmpty(dataStore, EnhancedTableNames.XerTask01)
+                                ?? transformer.Create01XerTaskTable();
+                            if (tasks is null)
+                                throw Missing(requestedName, "required activity-table calculation failed");
+                            cache.TryAdd(EnhancedTableNames.XerTask01, tasks);
+                        }
+                    }
+
+                    if (!cache.TryGetValue(name, out table))
+                    {
+                        table = StandardExportSchema.CreateIfSourceEmpty(dataStore, name)
+                            ?? GenerateEnhancedTable(transformer, name, cache);
+                        if (table is not null) cache.TryAdd(name, table);
+                    }
+                }
+                if (table?.Headers is not { Length: > 0 })
+                    throw Missing(requestedName, "generation failed or no valid output schema is available");
+                if (table.Headers.Any(string.IsNullOrWhiteSpace)
+                    || table.Headers.Distinct(StringComparer.OrdinalIgnoreCase).Count() != table.Headers.Length
+                    || table.Headers.Contains(FieldNames.FileName, StringComparer.OrdinalIgnoreCase))
+                    throw Missing(requestedName, "the output schema contains blank or ambiguous duplicate column names");
+                StandardExportPublication.ValidateTableName(table.Name);
+                result.Add(table);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return result.ToArray();
+
+            static InvalidDataException Missing(string name, string detail) =>
+                new($"Cannot export '{name}': {detail}. No CSV files have been published by this export.");
         }
 
         private static XerTable? GenerateEnhancedTable(XerTransformer transformer, string tableName, ConcurrentDictionary<string, XerTable> cache)

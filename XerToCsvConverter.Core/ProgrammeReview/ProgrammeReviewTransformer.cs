@@ -28,15 +28,18 @@ internal sealed class ProgrammeReviewTransformer
     private readonly IReadOnlyDictionary<string, ResolvedProgrammeReviewSnapshot> _snapshotByOriginal;
     private readonly Dictionary<string, string> _projectNativeIdBySource = new(StringComparer.OrdinalIgnoreCase);
 
-    internal ProgrammeReviewTransformer(XerDataStore dataStore, ResolvedProgrammeReviewRequest request)
+    internal ProgrammeReviewTransformer(XerDataStore dataStore, ResolvedProgrammeReviewRequest request,
+        CancellationToken cancellationToken = default)
     {
-        _dataStore = dataStore ?? throw new ArgumentNullException(nameof(dataStore));
+        ArgumentNullException.ThrowIfNull(dataStore);
         _request = request ?? throw new ArgumentNullException(nameof(request));
         _snapshotByOriginal = request.Snapshots.ToDictionary(s => s.OriginalXerFilename, StringComparer.OrdinalIgnoreCase);
+        _dataStore = CreateRetainedDataStore(dataStore, cancellationToken);
     }
 
     internal IReadOnlyList<ProgrammeReviewOutputTable> Build(CancellationToken cancellationToken)
     {
+        ValidateRawRelationshipEndpoints(cancellationToken);
         var transformer = new XerTransformer(_dataStore);
         var enhanced = new Dictionary<string, XerTable?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -77,6 +80,103 @@ internal sealed class ProgrammeReviewTransformer
         ValidateRequiredSnapshotCoverage(result);
         ValidateKeysAndRelationships(result);
         return result;
+    }
+
+    // Parsed-data callers can supply snapshots which naming resolution discarded.
+    // Filter before any shared calculation (including calendars and resource curves),
+    // exactly as the file/byte entrypoints do, without mutating caller-owned rows.
+    private XerDataStore CreateRetainedDataStore(XerDataStore source, CancellationToken cancellationToken)
+    {
+        bool hasDiscardedRows = false;
+        foreach (string tableName in source.TableNames)
+        {
+            foreach (DataRow row in source.GetTable(tableName)!.Rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_snapshotByOriginal.ContainsKey(row.SourceFilename))
+                {
+                    hasDiscardedRows = true;
+                    break;
+                }
+            }
+            if (hasDiscardedRows) break;
+        }
+        // File/byte paths already parse only retained sources. Avoid duplicating
+        // their complete row arrays, particularly in a browser's limited heap.
+        if (!hasDiscardedRows) return source;
+
+        var retained = new XerDataStore();
+        foreach (string tableName in source.TableNames)
+        {
+            XerTable original = source.GetTable(tableName)!;
+            var table = new XerTable(original.Name);
+            if (original.Headers is not null) table.SetHeaders((string[])original.Headers.Clone());
+            foreach (DataRow row in original.Rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_snapshotByOriginal.ContainsKey(row.SourceFilename))
+                    table.AddRow(row with { Fields = (string[])row.Fields.Clone() });
+            }
+            // A table belonging exclusively to discarded inputs is not part of
+            // the retained schema either (its headers may be incomplete/invalid).
+            if (table.Rows.Count > 0 || original.Rows.Count == 0) retained.AddTable(table);
+        }
+        return retained;
+    }
+
+    private void ValidateRawRelationshipEndpoints(CancellationToken cancellationToken)
+    {
+        XerTable? relationships = _dataStore.GetTable(TableNames.TaskPred);
+        if (relationships?.Headers is null || relationships.Rows.Count == 0) return;
+        XerTable? tasks = _dataStore.GetTable(TableNames.Task);
+        if (tasks?.Headers is null)
+            throw new ProgrammeReviewValidationException("TASKPRED relationships require raw TASK endpoint data.");
+
+        var taskProjects = new Dictionary<(string Source, string TaskId), string>();
+        foreach (DataRow row in tasks.Rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ResolvedProgrammeReviewSnapshot snapshot = _snapshotByOriginal[row.SourceFilename];
+            var reader = new EnhancedRowReader(tasks, row);
+            string taskId = reader.Get(FieldNames.TaskId).Trim();
+            if (taskId.Length == 0 || !taskProjects.TryAdd(
+                (snapshot.OriginalXerFilename, taskId), reader.Get(FieldNames.ProjectId).Trim()))
+                throw new ProgrammeReviewValidationException(
+                    $"{snapshot.OriginalXerFilename}: duplicate or blank TASK.task_id '{taskId}' prevents unambiguous relationship resolution.");
+        }
+
+        foreach (DataRow row in relationships.Rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ResolvedProgrammeReviewSnapshot snapshot = _snapshotByOriginal[row.SourceFilename];
+            var reader = new EnhancedRowReader(relationships, row);
+            string relationshipId = reader.Get("task_pred_id").Trim();
+            string context = $"06_XER_PREDECESSOR/{snapshot.OriginalXerFilename}/TASKPRED '{relationshipId}'";
+            string successorProject = RequireEndpoint(FieldNames.TaskId, FieldNames.ProjectId);
+            string predecessorProject = RequireEndpoint(FieldNames.PredTaskId, "pred_proj_id");
+            if (!string.Equals(successorProject, predecessorProject, StringComparison.OrdinalIgnoreCase))
+                throw new ProgrammeReviewValidationException(
+                    $"{context}: external relationship endpoints belong to different projects ('{predecessorProject}' -> '{successorProject}'); a Programme bundle supports one project per snapshot.");
+
+            string RequireEndpoint(string taskField, string projectField)
+            {
+                string taskId = reader.Get(taskField).Trim();
+                if (taskId.Length == 0 || !taskProjects.TryGetValue(
+                    (snapshot.OriginalXerFilename, taskId), out string? projectId)
+                    || projectId.Length == 0)
+                    throw new ProgrammeReviewValidationException(
+                        $"{context}: {taskField} '{taskId}' is an unresolved required relationship endpoint with project context.");
+                string declaredProject = reader.Get(projectField).Trim();
+                // Older exports can omit project fields. Only an unambiguous
+                // source-local task supplies that missing context; explicit external
+                // metadata must never be reassigned to a same-ID local activity.
+                if (declaredProject.Length > 0 && !string.Equals(
+                    declaredProject, projectId, StringComparison.OrdinalIgnoreCase))
+                    throw new ProgrammeReviewValidationException(
+                        $"{context}: {projectField} '{declaredProject}' does not match TASK.proj_id '{projectId}' for {taskField} '{taskId}'. The external endpoint is unresolved.");
+                return projectId;
+            }
+        }
     }
 
     private XerTable RequireEnhancedTable(
@@ -157,6 +257,10 @@ internal sealed class ProgrammeReviewTransformer
         ProgrammeReviewTableContract contract,
         CancellationToken cancellationToken)
     {
+        // No raw value is projected from an empty table. Its partial header set
+        // must not prevent the fixed header-only optional output; required-table
+        // coverage remains enforced after projection.
+        if (source.Rows.Count == 0) return Array.Empty<ProgrammeReviewOutputRow>();
         RequireHeaders(source, contract.Columns.Where(c => c.Name is not ("ProjectCode" or "monthupdate" or "last_recalc_date")));
         var rows = new List<ProgrammeReviewOutputRow>();
 

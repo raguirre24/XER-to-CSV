@@ -73,6 +73,7 @@ public partial class MainForm
             btnSelectOutput,
             btnPbiDetails,
             btnExportProgrammeReview,
+            btnExportTenderReview,
             btnExportPowerBi,
             btnExportAll,
             btnExportSelected,
@@ -91,6 +92,7 @@ public partial class MainForm
             int[] actionHeights =
             [
                 btnExportProgrammeReview.Height,
+                btnExportTenderReview.Height,
                 btnExportPowerBi.Height,
                 btnExportAll.Height,
                 btnExportSelected.Height
@@ -470,6 +472,20 @@ public partial class MainForm
                 _closeAfterProgrammeReviewCancellation = true;
                 UpdateStatus("Cancelling Programme Review operation before closing...");
                 LogActivity("Window close requested; waiting for Programme Review cancellation cleanup.");
+                _cancellationTokenSource?.Cancel();
+                btnCancelOperation.Enabled = false;
+            }
+            return;
+        }
+
+        if (_tenderReviewOperationActive)
+        {
+            e.Cancel = true;
+            if (!_closeAfterTenderReviewCancellation)
+            {
+                _closeAfterTenderReviewCancellation = true;
+                UpdateStatus("Cancelling Tender Review operation before closing...");
+                LogActivity("Window close requested; waiting for Tender Review cancellation cleanup.");
                 _cancellationTokenSource?.Cancel();
                 btnCancelOperation.Enabled = false;
             }

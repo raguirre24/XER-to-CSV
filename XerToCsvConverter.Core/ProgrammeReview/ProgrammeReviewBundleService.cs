@@ -243,7 +243,7 @@ public sealed class ProgrammeReviewBundleService
 
         try
         {
-            var transformer = new ProgrammeReviewTransformer(dataStore, request);
+            var transformer = new ProgrammeReviewTransformer(dataStore, request, cancellationToken);
             IReadOnlyList<ProgrammeReviewOutputTable> tables = transformer.Build(cancellationToken);
             var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -303,7 +303,7 @@ public sealed class ProgrammeReviewBundleService
     {
         cancellationToken.ThrowIfCancellationRequested();
         await Task.Delay(1, cancellationToken).ConfigureAwait(false);
-        var transformer = new ProgrammeReviewTransformer(dataStore, request);
+        var transformer = new ProgrammeReviewTransformer(dataStore, request, cancellationToken);
         IReadOnlyList<ProgrammeReviewOutputTable> tables = transformer.Build(cancellationToken);
         await Task.Delay(1, cancellationToken).ConfigureAwait(false);
         var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);

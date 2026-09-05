@@ -218,7 +218,9 @@ public partial class MainForm : Form
 
 	private bool _startupLayoutApplied;
 
-	private bool IsOperationActive => _cancellationTokenSource is not null || _programmeReviewOperationActive;
+	private bool IsOperationActive => _cancellationTokenSource is not null
+		|| _programmeReviewOperationActive
+		|| _tenderReviewOperationActive;
 
 	private readonly Font _uiFont;
 
@@ -359,11 +361,15 @@ public partial class MainForm : Form
 
 		InitializeProgrammeReviewUi();
 
+		InitializeTenderReviewUi();
+
 		ApplyTheme();
 
 		ApplyModernLayout();
 
 		AttachProgrammeReviewButtonToActionPanel();
+
+		AttachTenderReviewButtonToActionPanel();
 
 		InitializeUIState();
 
@@ -1128,7 +1134,7 @@ public partial class MainForm : Form
 
 		lblExportGuidance = new Label
 		{
-			Text = "Programme Review works directly from XER files. Standard exports unlock after Parse.",
+			Text = "Programme and Tender Review work directly from XER files. Standard exports unlock after Parse.",
 			AutoSize = false,
 			AutoEllipsis = true,
 			Dock = DockStyle.Fill,
@@ -1163,15 +1169,15 @@ public partial class MainForm : Form
 		ConfigureExportActionButton(btnExportAll, "Export &all tables");
 		ConfigureExportActionButton(btnExportSelected, "Export &selected tables");
 		btnExportPowerBi.TabIndex = 1;
-		btnExportAll.TabIndex = 2;
-		btnExportSelected.TabIndex = 3;
+		btnExportAll.TabIndex = 3;
+		btnExportSelected.TabIndex = 4;
 		btnCancelOperation.TabIndex = 0;
 
 		exportActionsLayout = new TableLayoutPanel
 		{
 			Name = "exportActionsLayout",
 			ColumnCount = 2,
-			RowCount = 4,
+			RowCount = 5,
 			Dock = DockStyle.Fill,
 			AutoSize = false,
 			BackColor = Color.Transparent,
@@ -1184,18 +1190,19 @@ public partial class MainForm : Form
 		exportActionsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));
 		exportActionsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
 		exportActionsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+		exportActionsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
 		exportActionsLayout.Controls.Add(exportHeading, 0, 0);
 		exportActionsLayout.Controls.Add(cancelHost, 1, 0);
 		exportActionsLayout.Controls.Add(lblExportGuidance, 0, 1);
 		exportActionsLayout.SetColumnSpan(lblExportGuidance, 2);
 		exportActionsLayout.Controls.Add(btnExportPowerBi, 1, 2);
-		exportActionsLayout.Controls.Add(btnExportAll, 0, 3);
-		exportActionsLayout.Controls.Add(btnExportSelected, 1, 3);
+		exportActionsLayout.Controls.Add(btnExportAll, 0, 4);
+		exportActionsLayout.Controls.Add(btnExportSelected, 1, 4);
 
 		panelExportActions.Controls.Clear();
 		panelExportActions.Padding = new Padding(6);
 		panelExportActions.AutoSize = false;
-		panelExportActions.Height = 174;
+		panelExportActions.Height = 218;
 		panelExportActions.Dock = DockStyle.Fill;
 		panelExportActions.Controls.Add(exportActionsLayout);
 
@@ -1222,7 +1229,7 @@ public partial class MainForm : Form
 
 		rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
-		rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 174f));
+		rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 218f));
 
 
 		splitContainerResults.Dock = DockStyle.Fill;
@@ -3402,6 +3409,8 @@ public partial class MainForm : Form
 
 		UpdateProgrammeReviewButtonState();
 
+		UpdateTenderReviewButtonState();
+
 	}
 
 
@@ -3553,6 +3562,8 @@ public partial class MainForm : Form
 			btnExportPowerBi.Enabled = false;
 
 			SetProgrammeReviewButtonAvailability(enabled: false);
+
+			SetTenderReviewButtonAvailability(enabled: false);
 
 			btnAddFile.Enabled = false;
 

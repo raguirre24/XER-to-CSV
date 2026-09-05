@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Convert Primavera P6 XER schedules to standard, Enhanced Power BI, or validated Programme Review CSV bundles." />
+    <meta name="description" content="Convert Primavera P6 XER schedules to standard, Enhanced Power BI, Programme Review, or Tender Review CSV bundles." />
     <meta name="theme-color" content="#1666aa" />
     <meta name="application-version" content="__APP_VERSION__" />
     <title>XER to CSV Converter</title>
@@ -24,21 +24,10 @@
         <a class="dismiss" aria-label="Dismiss error">Dismiss</a>
     </div>
 
+    <script src="js/browserLocalDate.js?v=__APP_VERSION__"></script>
+    <script src="js/downloads.js?v=__APP_VERSION__"></script>
     <script src="_framework/blazor.webassembly.js?v=__APP_VERSION__"></script>
     <script>
-        window.downloadFileFromStream = async (filename, contentType, contentStreamReference) => {
-            const arrayBuffer = await contentStreamReference.arrayBuffer();
-            const blob = new Blob([arrayBuffer], { type: contentType });
-            const objectUrl = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = objectUrl;
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-        };
-
         window.scrollToBottom = (element) => {
             if (element) {
                 element.scrollTop = element.scrollHeight;
