@@ -66,7 +66,7 @@ public static class TenderReviewCliApplication
                     cancellation.Token);
                 if (result.WarningCount > 0)
                     Console.Error.WriteLine($"Tender Review bundle completed with warnings: {result.WarningCount} data-quality issue(s). " +
-                                            "See XER_DATA_QUALITY.csv in the bundle for unallocated actuals and original source values.");
+                                            "See XER_DATA_QUALITY.csv in the bundle for affected tables and fields, original source values, and any unallocated actual or remaining quantities.");
                 Console.WriteLine(result.BundlePath);
                 return 0;
             }

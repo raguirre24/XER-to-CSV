@@ -24,6 +24,13 @@ internal static class StandardExportSchema
         string? sourceName = SourceTable(name);
         if (sourceName is null || store.GetTable(sourceName) is not { Headers: not null, IsEmpty: true } source)
             return null;
+        return CreateEmpty(store, name);
+    }
+
+    internal static XerTable CreateEmpty(XerDataStore store, string name)
+    {
+        string sourceName = SourceTable(name) ?? throw new InvalidDataException($"Unknown Enhanced table '{name}'.");
+        var source = store.GetTable(sourceName);
         string[] headers = name.ToUpperInvariant() switch
         {
             EnhancedTableNames.XerTask01 or EnhancedTableNames.XerBaseline04 => XerTransformer.TaskColumns01,
@@ -35,14 +42,31 @@ internal static class StandardExportSchema
                 FieldNames.DayOfWeekNum, FieldNames.WorkingDayInt
             ],
             EnhancedTableNames.XerResourceDist15 => XerTransformer.ResourceDistributionColumns,
-            _ => source.Headers.Concat(AddedFields(name)).ToArray()
+            _ => CreateHeaders(source?.Headers ?? [], AddedFields(name))
         };
         var result = new XerTable(name);
         result.SetHeaders(headers.ToArray());
         return result;
     }
 
-    private static string[] AddedFields(string name) => name.ToUpperInvariant() switch
+    internal static string[] CreateHeaders(string[] sourceHeaders, string[] derived)
+    {
+        derived = derived.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var reserved = new HashSet<string>(derived.Append(FieldNames.FileName), StringComparer.OrdinalIgnoreCase);
+        var occupied = new HashSet<string>(sourceHeaders.Concat(reserved), StringComparer.OrdinalIgnoreCase);
+        string[] headers = sourceHeaders.ToArray();
+        for (int index = 0; index < headers.Length; index++)
+        {
+            if (!reserved.Contains(headers[index])) continue;
+            string original = headers[index], replacement = "raw_" + original;
+            int suffix = 2;
+            while (!occupied.Add(replacement)) replacement = "raw_" + original + "_" + suffix++;
+            headers[index] = replacement;
+        }
+        return headers.Concat(derived).ToArray();
+    }
+
+    internal static string[] AddedFields(string name) => name.ToUpperInvariant() switch
     {
         EnhancedTableNames.XerProject02 => [FieldNames.ProjIdKey, FieldNames.MonthUpdate],
         EnhancedTableNames.XerProjWbs03 => [FieldNames.WbsIdKey, FieldNames.ParentWbsIdKey, FieldNames.MonthUpdate],

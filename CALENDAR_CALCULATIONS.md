@@ -4,6 +4,119 @@ The shared Core parser supplies calendar calculations to Standard Enhanced,
 Programme Review and Tender Review exports. No BI report measures or Programme
 history/weekday-variance rules are changed by this correction.
 
+## Resilient Enhanced exports (2026-09-06)
+
+Every selected Enhanced numbered table exports its available source data even
+when individual source rows, lookup dependencies or calculated fields are invalid.
+Valid rows and calculations are retained; untrustworthy derived values remain
+blank, with original source evidence in `XER_DATA_QUALITY.csv`. A malformed
+calendar does not discard other calendars, and an invalid WBS identity does not
+discard other WBS rows or block unrelated numbered outputs. Missing primary
+sources can produce a declared header-only output with a warning; this must not be
+interpreted as proof of zero source data.
+
+The companion now has independent schema **1.2**, preserving all 30 prior data
+columns and adding `source_table`, `column_name`, `raw_value` and `raw_row_json`
+before the final writer `FileName`: **35 CSV columns**. It accompanies every
+Standard Enhanced selection, not only table 15, and all review bundles. Raw-only
+exports are unchanged. General warnings need not have an `allocation_portion`;
+their row ordinal belongs to the named source table. Original strings and source
+header/value evidence remain available without exposing internal source tokens.
+
+Windows and Web offer Enhanced tables whenever their primary source is present,
+even if a lookup source is absent. All export surfaces consume shared Core
+calculations and report completion with warnings. Review numbered schemas and
+manifest columns remain unchanged. Bad source keys/orphans may still need source
+correction before a report can establish one-to-many joins. Programme ambiguous
+history remains blank; Tender retains separate contributions with a warning when
+their normal aggregate cannot be represented or grouped labels conflict.
+
+This is source-data resilience, not permission to fabricate governed review
+PROJECT/snapshot/stage metadata, ignore unreadable input, bypass unsafe paths or
+claim successful publication after cancellation or I/O failure. A recoverable
+transformation failure with usable schema/source evidence emits
+`TABLE_GENERATION_FAILED`, preserving raw rows/evidence without claiming the failed
+calculation succeeded. Unrecoverable schema/runtime failures remain errors. See [resilient export validation](review/RESILIENT_ENHANCED_EXPORTS.md).
+This policy supersedes earlier fail-fast numbered-table statements in the
+historical checkpoints below; calendar, relationship and resource formulas remain
+the existing supported formulas.
+
+## Non-blocking resource allocation policy (2026-09-06)
+
+Source-quality and unsupported-allocation issues in table 15 are warnings, not
+whole-table or whole-export failures. Each assignment's actual and remaining
+portions are evaluated independently. Valid portions keep the existing calendar,
+curve and cumulative four-decimal monthly arithmetic. A portion without a
+justified allocation has no invented monthly row: its unchanged source evidence
+and known signed quantity are retained in `XER_DATA_QUALITY.csv`. Malformed or
+overflowing amounts remain raw text with a blank numeric total, never zero.
+
+This covers invalid quantities/status, ambiguous or missing required identities,
+unusable calendars, missing/reversed periods, remaining units on completed
+activities, and unsupported/invalid remaining curves. It does not reschedule the
+source, zero completed remaining work, stretch a curve or assume a missing month.
+Unexpected allocator failures are not labelled ordinary scheduling malpractices.
+The outer Enhanced recovery boundary can retain schema/source evidence with
+`TABLE_GENERATION_FAILED`; cancellation, I/O and unrecoverable failures remain errors.
+Programme/Tender governed request metadata remains required. An unrepresentable
+Tender aggregate retains its individually valid contributions with a general
+warning; no clamped aggregate or new review metric is introduced.
+
+The allocation evidence fields introduced in companion 1.1 remain in 1.2:
+`allocation_portion`, `restart_date`, `reend_date`, `remain_qty`, `curv_id`,
+`remain_crv` and `unallocated_remaining_quantity`. Four general evidence fields
+now follow them, before writer `FileName`.
+One unsuccessful portion generates one warning; an assignment can have both
+Actual and Remaining warnings. Reconcile distributed plus known unallocated
+quantity separately for each portion, retaining individually rounded source
+contributions and counting unknown amounts separately. Do not add unallocated
+quantities to a monthly chart as though their month were known.
+
+This supersedes the earlier actual-date-only warning scope. Numbered columns,
+Programme 3.0/Tender 1.0 versions, file counts, manifest columns and calendar/06
+arithmetic are unchanged. See the [allocation warning validation](review/NONBLOCKING_RESOURCE_WARNINGS.md)
+and the portable [table dictionary](skills/p6-numbered-xer-reporting/references/table-dictionary.md).
+
+## Relationship assessments and progressed work (2026-09-06)
+
+`XerTransformer.AssessRelationships()` assesses every raw TASKPRED row using the
+same calculation that supplies `06.free_float`. A result distinguishes
+`Calculated`, `Ignored`, `Historical`, `Unsupported`, `MissingData` and `InvalidData`,
+with a reason code, selected endpoint and scheduling bases, and raw input evidence.
+Only `Calculated` serializes a number into the existing free-float column. A
+calculated zero remains distinct from every blank result.
+
+The supported progressed cases use the existing signed inverse of the lag
+operation, denominated in predecessor working hours and positive predecessor HPD.
+They do not move actual events, reschedule the project or certify P6 driving status.
+
+| Predecessor -> successor | Relationship/settings | Remaining assessment |
+| --- | --- | --- |
+| Not started -> not started | FS/SS/FF/SF | Existing remaining endpoint calculation. |
+| Active -> not started | FS/FF | Predecessor explicit remaining finish. |
+| Active -> not started | SS/SF | Unsupported fixed predecessor start. |
+| Not started or active -> active | Retained Logic FS | Predecessor remaining finish to successor explicit remaining restart. |
+| Not started or active -> active | Retained Logic FF | Remaining finish to remaining finish. |
+| Not started or active -> active | SS/SF | Unsupported progressed start relationship. |
+| Not started or active -> active | Progress Override FS, zero lag | Ignored when valid successor actual start is on/before project Data Date. |
+| Not started or active -> active | Other Progress Override, or Actual Dates | Unsupported by this displacement model. |
+| Any completed endpoint | Any | Historical fixed actual event. |
+
+Required missing or invalid exported settings are classified accordingly. Raw
+evidence distinguishes an absent source header, an omitted row cell, an explicit
+blank and a supplied value; typed interpretation also identifies malformed values.
+Schema union and row copies retain those distinctions across repeated ordered
+inputs. An absent scheduling field must not acquire a blank-field default merely
+because another input supplied that column.
+
+The optional `XerToCsvConverter.RelationshipAudit.Cli` accepts repeated `--input` arguments and an
+explicit `--output`, with `--overwrite` for an existing audit target. It provides
+relationship diagnostics on demand. Normal numbered schemas and file envelopes,
+Programme 3.0 and Tender 1.0 remain unchanged; the generalized companion is described above.
+See the portable [relationship assessment reference](skills/p6-numbered-xer-reporting/references/relationship-audit.md)
+for interpretation and [integration validation](review/RELATIONSHIP_ASSESSMENT_VALIDATION.md)
+for commands and their evidence limits.
+
 ## Real-XER compatibility correction (2026-09-06)
 
 The calendar reader now accepts P6's unnamed structured-text containers and ISO
@@ -20,8 +133,8 @@ without requiring its unknown intramonth phase. Cross-month restrictions remain.
 Generated-table failures retain original causes and input/calendar/assignment
 context across Standard, Programme and Tender. Corrected syntax does not make
 inconsistent source dates valid. The approved non-blocking policy now preserves
-unresolvable actual periods in `XER_DATA_QUALITY.csv`, while valid actual/remaining
-allocations continue. See [current warning validation](review/NONBLOCKING_ACTUAL_WARNINGS.md)
+unresolvable allocation portions in `XER_DATA_QUALITY.csv`, while valid actual/remaining
+allocations continue. See [the earlier actual-date checkpoint](review/NONBLOCKING_ACTUAL_WARNINGS.md)
 and the [earlier calendar checkpoint](review/REAL_XER_VALIDATION.md) for the two
 supplied schedules and the distinction between real-file checks, synthetic
 regressions and native P6 parity.
@@ -43,7 +156,7 @@ the earlier validation counts below are historical checkpoints.
   case-insensitive raw headers are rejected before parsing/merging calculations.
   Source and derived output order no longer depends on parallel task completion.
 - In shared 01 and 06 display dates, unstarted work uses remaining dates, falling
-  back to early dates only when the remaining value is absent. Active work retains
+  back to early dates only when the remaining value is empty or whitespace. Active work retains
   its actual start and forecast finish; completed work uses actual endpoints.
   A malformed preferred value, missing actual endpoint or unknown status stays
   blank. Late dates never silently substitute for these display dates. The stricter
@@ -101,10 +214,10 @@ consumer must replace a standard weekday with its dated exception, not add them.
 Missing/malformed workweeks never become invented eight-hour or 24-hour schedules.
 Calendar parsing gives contextual errors. Table 11 cannot be generated from an
 invalid calendar. Table 06 retains the relationship with blank free float when a
-required calendar is unresolved; table 15 cannot distribute on an unresolved
-calendar. Positive hours-per-day without shifts do not establish availability.
-Requested calendar-dependent tables that fail generation cause an explicit export
-error before CSV writing, rather than being silently omitted from a successful export.
+required calendar is unresolved; table 15 records an unallocated warning when it
+cannot distribute on an unresolved calendar. Positive hours-per-day without shifts
+do not establish availability. A requested table 11 that cannot be generated still
+produces a definition-specific warning in table 11 without discarding other usable calendars.
 
 Working-time addition/subtraction uses exact shift endpoints, excludes breaks,
 preserves the direction of intervals, supports cancellation, and has a bounded
@@ -144,7 +257,8 @@ The table 15 correction:
   by row order. Public keys and all CSV headers remain unchanged.
 - Parses nonnegative quantities as invariant decimals. Blank optional quantities
   retain their zero convention; nonblank malformed, nonfinite, negative or
-  overflowing values cause an explicit failed export, not a silently lost row.
+  overflowing values produce an unallocated warning, not a silently lost row or
+  a guessed numeric zero. Known signed quantities remain visible.
 - Uses assignment actual/remaining dates, not wider activity dates. For actuals,
   an explicit valid assignment actual finish is used even while the activity is
   active; only a genuinely absent finish on an active activity uses its project's
@@ -157,16 +271,18 @@ The table 15 correction:
   Neither exception permits malformed calendars or repairs reversed dates.
   Missing/malformed required actual dates and reversed actual periods (including
   fallback Data Date before actual start) instead produce reportable unallocated
-  actual warnings. Valid remaining work on the same assignment continues.
-  Unrecoverable failures still discard the complete table and prevent publication.
+  actual warnings. Valid remaining work on the same assignment continues, and
+  invalid remaining work is independently reported as an unallocated warning.
+  An outer recoverable transformation failure can preserve source evidence with
+  `TABLE_GENERATION_FAILED`; I/O and unrecoverable failures prevent publication.
 - Slices periods as adjacent half-open intervals `[start, finish)`, including
   midnight/overnight work. Calendar-day diagnostics count occupied civil dates:
   January 31 00:00 -> February 2 00:00 occupies **two**, not three, calendar days.
 - Calculates cumulative proportional quantities from exact working ticks and
   subtracts successive four-decimal rounded cumulative amounts. Monthly rows
   therefore sum to the distributed assignment portion at existing four-decimal
-  export precision. Distributed actual plus companion unallocated actual equals
-  rounded source actual; remaining units reconcile entirely to monthly rows.
+  export precision. Distributed plus known companion unallocated quantity equals
+  rounded source quantity, separately for actual and remaining portions.
   In working-time mode a zero-work month
   receives no remainder. The actual-only elapsed fallback uses the same cumulative
   rounding rule with elapsed rather than working ticks.
@@ -183,26 +299,27 @@ aggregates them at its existing task/resource/actual/month grain. Contract versi
 remain Programme **3.0** and Tender **1.0**. Table 06's relationship calculation and
 LongestPathVisual are not changed by this table 10/11/15 work.
 
-### Supplemental actual-date diagnostics
+### Supplemental allocation diagnostics
 
-Every selected table 15 export includes `XER_DATA_QUALITY.csv`, header-only when
+Every selected Enhanced export includes `XER_DATA_QUALITY.csv`, header-only when
 clean. This avoids leaving stale warnings after a clean rerun. It contains original
 assignment dates/quantity strings, raw project Data Date, source-qualified project,
 task, resource and assignment keys, per-source assignment row ordinal, known rounded
-unallocated actual quantity and the issue reason. Internal source tokens correlate
+unallocated actual/remaining quantity and the issue reason. Internal source tokens correlate
 rows but are not exported; public namespaces preserve repeated-file independence.
 
-No invalid actual period is silently dropped, assigned to a guessed month, zeroed
-or repaired using activity dates. The monthly numbered schema remains unchanged.
-Only actual-date validation is recoverable; invalid quantities, ambiguous required
-identities/calendars and unsupported or invalid remaining allocations retain their
-existing failure rules. This is not an exhaustive scheduling-quality audit.
+No invalid allocation portion is silently dropped, assigned to a guessed month,
+zeroed or repaired using activity dates. The monthly numbered schema remains
+unchanged. Source quantity, identity, calendar, state, period and curve issues now
+produce portion-specific warnings. This is not an exhaustive scheduling-quality
+audit; `TABLE_GENERATION_FAILED` separately identifies last-resort recovery after
+an unsuccessful transformation, rather than mislabelling it a scheduling defect.
 
 Review bundles contain ten numbered tables, companion and manifest (twelve files).
 Manifests retain their columns and publication-complete literals; each source gains
 one `XER_DATA_QUALITY` manifest row with warning count and companion hash. Numbered
 schema versions stay Programme 3.0 / Tender 1.0; the companion is independently
-versioned 1.0. Windows, Web and CLI display completed-with-warnings when its row count
+versioned 1.2 with 35 columns including FileName. Windows, Web and CLI display completed-with-warnings when its row count
 is nonzero. CLI warnings use stderr and successful publication still returns zero.
 Consumers with a hard-coded eleven-file review envelope must allow this approved
 supplemental file; report/visual repositories were not changed.
@@ -236,8 +353,8 @@ A progressed nonlinear curve whose complete remaining interval fits one calendar
 month has an exact total in that bucket, independently of its unknown curve phase.
 This includes an exclusive finish at next month's midnight; curve/calendar
 validation still applies and no intramonth shape is inferred. Across monthly
-buckets, a progressed nonlinear curve without explicit `remain_crv` fails with
-source/assignment/curve context: we do not restart its entire shape over the
+buckets, a progressed nonlinear curve without explicit `remain_crv` remains
+unallocated with source/assignment/curve context: we do not restart its entire shape over the
 remaining period or infer a P6 curve phase from activity percent complete.
 Manual curve ID 9 without `remain_crv` is also rejected. Opaque `RSRCCURV.curv_data`
 alone is not decoded or substituted for the required numeric definition.
@@ -246,7 +363,7 @@ Manual-profile quantities must be nonnegative and periods strictly positive and
 representable in whole working ticks. Periods must sum exactly to the assignment's
 remaining calendar working duration; quantities must sum to `remain_qty` at the
 existing four-decimal export precision. Inconsistent, malformed or unsupported
-profiles fail rather than being stretched, truncated or replaced by a named curve.
+profiles remain unallocated rather than being stretched, truncated or replaced by a named curve.
 Accepted sub-export-precision quantity differences reconcile to `remain_qty`.
 
 Each month receives the difference between successive cumulative curve/profile
@@ -266,8 +383,9 @@ labeled off-calendar/recorded-date cases above, even when `curv_id` or `actual_c
 exists. `target_crv` does not substitute for remaining
 or actual units. Tables 06, 10, 11 and LongestPathVisual are unchanged.
 
-Curve errors propagate with table/source/assignment context through Standard,
-Programme Review and Tender Review, preventing partial requested-table exports.
+Curve issues appear with table/source/assignment context through Standard,
+Programme Review and Tender Review as unallocated-remaining warnings. Valid actual
+portions and other assignments continue without publishing partial failed portions.
 Unused curve definitions and actual-only assignments do not require a valid
 remaining curve. Selecting unrelated raw tables does not invoke this calculation.
 
@@ -292,9 +410,11 @@ For a supported relationship:
 
 1. Select Finish->Start for FS, Start->Start for SS, Finish->Finish for FF and
    Start->Finish for SF. Prefer remaining early dates (`restart_date`/`reend_date`).
-   A missing remaining date can fall back to a valid early date for an unstarted
+   An empty or whitespace remaining date can fall back to a valid early date for an unstarted
    activity; a malformed nonblank remaining date cannot. An active predecessor's
-   finish must have an explicit valid `reend_date`.
+   finish must have an explicit valid `reend_date`. An active successor under
+   Retained Logic uses explicit `restart_date` for FS or `reend_date` for FF,
+   independently of the actual dates used by the display columns.
 2. Find the latest predecessor endpoint whose signed lag, applied on the configured
    lag calendar, does not exceed the unchanged successor endpoint. The inverse
    includes nonworking plateaus and signed-lag discontinuities: merely subtracting
@@ -346,13 +466,14 @@ Tender now follows the same denomination.
   separate concern; its distribution corrections are documented above.
 - Duplicate/ambiguous task or scheduling identities, mismatched project endpoints,
   contradictory effective task date ranges or incompatible actual/status inputs.
-- An active successor, whose incoming relationship may be retained, overridden or
-  out of sequence.
+- An active successor whose exported mode/type is outside the supported matrix
+  above. An ignored Progress Override edge remains blank, not a calculated zero.
 - An active predecessor on SS/SF. Original lag and actual start alone do not
   establish remaining relationship lag and P6's internal early-start constraint.
 
 An active predecessor on FS/FF can use its remaining finish with an unstarted
-successor. Raw `aref/arls` are not used as universal internal relationship dates:
+successor or a supported active successor under Retained Logic. Raw `aref/arls`
+are not used as universal internal relationship dates:
 Oracle defines them as adjusted external-relationship values with type-dependent
 semantics. This parser is not a replacement P6 scheduling engine.
 

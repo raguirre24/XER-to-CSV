@@ -27,6 +27,8 @@ internal sealed class ProgrammeReviewTransformer
     private readonly ResolvedProgrammeReviewRequest _request;
     private readonly IReadOnlyDictionary<string, ResolvedProgrammeReviewSnapshot> _snapshotByOriginal;
     private readonly Dictionary<string, string> _projectNativeIdBySource = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ReviewDataQualityCollector _quality;
+    private readonly Dictionary<IReadOnlyDictionary<string, string>, ReviewRowEvidence> _outputEvidence = new(ReferenceEqualityComparer.Instance);
 
     internal XerTable DataQualityTable { get; private set; } = null!;
 
@@ -37,11 +39,12 @@ internal sealed class ProgrammeReviewTransformer
         _request = request ?? throw new ArgumentNullException(nameof(request));
         _snapshotByOriginal = request.Snapshots.ToDictionary(s => s.OriginalXerFilename, StringComparer.OrdinalIgnoreCase);
         _dataStore = CreateRetainedDataStore(dataStore, cancellationToken);
+        _quality = new ReviewDataQualityCollector(_dataStore);
     }
 
     internal IReadOnlyList<ProgrammeReviewOutputTable> Build(CancellationToken cancellationToken)
     {
-        ValidateRawRelationshipEndpoints(cancellationToken);
+        ValidateSingleProjectPerSnapshot();
         var transformer = new XerTransformer(_dataStore);
         var enhanced = new Dictionary<string, XerTable?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -57,7 +60,6 @@ internal sealed class ProgrammeReviewTransformer
             [EnhancedTableNames.XerResourceDist15] = transformer.Create15XerResourceDistribution()
         };
         ValidateTransformOutcomes(enhanced, transformer);
-        DataQualityTable = BuildDataQualityTable(transformer.CreateDataQualityTable(), cancellationToken);
 
         ProgrammeReviewTableContract taskContract = ProgrammeReviewContract.GetTable("01_XER_TASK");
         IReadOnlyList<ProgrammeReviewOutputRow> taskRows = BuildTaskRows(
@@ -71,9 +73,6 @@ internal sealed class ProgrammeReviewTransformer
         {
             cancellationToken.ThrowIfCancellationRequested();
             enhanced.TryGetValue(contract.EnhancedTableName, out XerTable? source);
-            if (contract.SourceRequired && source is null)
-                throw new ProgrammeReviewValidationException(
-                    $"Required enhanced source table '{contract.EnhancedTableName}' could not be generated.");
             IReadOnlyList<ProgrammeReviewOutputRow> rows = source is null
                 ? Array.Empty<ProgrammeReviewOutputRow>()
                 : BuildProjectedRows(source, contract, cancellationToken);
@@ -82,6 +81,9 @@ internal sealed class ProgrammeReviewTransformer
 
         ValidateRequiredSnapshotCoverage(result);
         ValidateKeysAndRelationships(result);
+        XerTable warnings = transformer.CreateDataQualityTable();
+        warnings.AddRows(_quality.Rows);
+        DataQualityTable = BuildDataQualityTable(warnings, cancellationToken);
         return result;
     }
 
@@ -114,7 +116,15 @@ internal sealed class ProgrammeReviewTransformer
                 throw new ProgrammeReviewValidationException("A data-quality row has an unresolved retained source occurrence.");
             string[] values = row.Fields.ToArray();
             foreach (string key in new[] { "proj_id_key", "task_id_key", "rsrc_id_key", "taskrsrc_id_key" })
-                values[source.FieldIndexes[key]] = Namespace(values[source.FieldIndexes[key]], snapshot, key);
+            {
+                string raw = values[source.FieldIndexes[key]];
+                try { values[source.FieldIndexes[key]] = Namespace(raw, snapshot, key); }
+                catch (ProgrammeReviewValidationException)
+                {
+                    values[source.FieldIndexes[key]] = string.Empty;
+                    values[source.FieldIndexes["message"]] += $" Diagnostic key '{key}' cannot be namespaced and remains blank; raw value: '{raw}'.";
+                }
+            }
             values[source.FieldIndexes["source_namespace"]] = ProgrammeReviewNaming.NamespacePrefix(
                 _request.ProjectCode, _request.ProgrammeType, snapshot.SnapshotTag).TrimEnd(':');
             result.AddRow(row with { Fields = values, OriginalSourceFilename = snapshot.OriginalXerFilename });
@@ -164,61 +174,6 @@ internal sealed class ProgrammeReviewTransformer
         return retained;
     }
 
-    private void ValidateRawRelationshipEndpoints(CancellationToken cancellationToken)
-    {
-        XerTable? relationships = _dataStore.GetTable(TableNames.TaskPred);
-        if (relationships?.Headers is null || relationships.Rows.Count == 0) return;
-        XerTable? tasks = _dataStore.GetTable(TableNames.Task);
-        if (tasks?.Headers is null)
-            throw new ProgrammeReviewValidationException("TASKPRED relationships require raw TASK endpoint data.");
-
-        var taskProjects = new Dictionary<(string Source, string TaskId), string>();
-        foreach (DataRow row in tasks.Rows)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ResolvedProgrammeReviewSnapshot snapshot = _snapshotByOriginal[row.SourceFilename];
-            var reader = new EnhancedRowReader(tasks, row);
-            string taskId = reader.Get(FieldNames.TaskId).Trim();
-            if (taskId.Length == 0 || !taskProjects.TryAdd(
-                (snapshot.OriginalXerFilename, taskId), reader.Get(FieldNames.ProjectId).Trim()))
-                throw new ProgrammeReviewValidationException(
-                    $"{snapshot.OriginalXerFilename}: duplicate or blank TASK.task_id '{taskId}' prevents unambiguous relationship resolution.");
-        }
-
-        foreach (DataRow row in relationships.Rows)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ResolvedProgrammeReviewSnapshot snapshot = _snapshotByOriginal[row.SourceFilename];
-            var reader = new EnhancedRowReader(relationships, row);
-            string relationshipId = reader.Get("task_pred_id").Trim();
-            string context = $"06_XER_PREDECESSOR/{snapshot.OriginalXerFilename}/TASKPRED '{relationshipId}'";
-            string successorProject = RequireEndpoint(FieldNames.TaskId, FieldNames.ProjectId);
-            string predecessorProject = RequireEndpoint(FieldNames.PredTaskId, "pred_proj_id");
-            if (!string.Equals(successorProject, predecessorProject, StringComparison.OrdinalIgnoreCase))
-                throw new ProgrammeReviewValidationException(
-                    $"{context}: external relationship endpoints belong to different projects ('{predecessorProject}' -> '{successorProject}'); a Programme bundle supports one project per snapshot.");
-
-            string RequireEndpoint(string taskField, string projectField)
-            {
-                string taskId = reader.Get(taskField).Trim();
-                if (taskId.Length == 0 || !taskProjects.TryGetValue(
-                    (snapshot.OriginalXerFilename, taskId), out string? projectId)
-                    || projectId.Length == 0)
-                    throw new ProgrammeReviewValidationException(
-                        $"{context}: {taskField} '{taskId}' is an unresolved required relationship endpoint with project context.");
-                string declaredProject = reader.Get(projectField).Trim();
-                // Older exports can omit project fields. Only an unambiguous
-                // source-local task supplies that missing context; explicit external
-                // metadata must never be reassigned to a same-ID local activity.
-                if (declaredProject.Length > 0 && !string.Equals(
-                    declaredProject, projectId, StringComparison.OrdinalIgnoreCase))
-                    throw new ProgrammeReviewValidationException(
-                        $"{context}: {projectField} '{declaredProject}' does not match TASK.proj_id '{projectId}' for {taskField} '{taskId}'. The external endpoint is unresolved.");
-                return projectId;
-            }
-        }
-    }
-
     private XerTable RequireEnhancedTable(
         IReadOnlyDictionary<string, XerTable?> enhanced,
         ProgrammeReviewTableContract contract)
@@ -234,10 +189,6 @@ internal sealed class ProgrammeReviewTransformer
         ProgrammeReviewTableContract contract,
         CancellationToken cancellationToken)
     {
-        RequireHeaders(source, contract.Columns
-            .Where(c => !TaskHistoryColumns.Contains(c.Name)
-                && c.Name is not ("filename" or "ProjectCode" or "ProjectName" or "UpdateDate" or "monthupdate")));
-
         var rows = new List<TaskRow>();
         foreach (DataRow dataRow in source.Rows)
         {
@@ -246,6 +197,7 @@ internal sealed class ProgrammeReviewTransformer
                 continue;
 
             var reader = new EnhancedRowReader(source, dataRow);
+            ReviewRowEvidence evidence = _quality.ForRow(source, dataRow);
             string context = $"{contract.TableName}/{snapshot.OriginalXerFilename}";
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -253,41 +205,35 @@ internal sealed class ProgrammeReviewTransformer
             {
                 if (TaskHistoryColumns.Contains(column.Name)) continue;
 
-                string raw = column.Name switch
+                string raw = reader.Get(column);
+                values[column.Name] = _quality.Evaluate(evidence, column.Name, raw, () =>
                 {
-                    "filename" => snapshot.CanonicalXerFilename,
-                    "ProjectCode" => _request.ProjectCode,
-                    "ProjectName" => _request.ProjectName,
-                    "UpdateDate" => Iso(snapshot.EffectiveUpdateDate),
-                    "monthupdate" => Iso(snapshot.MonthUpdate),
-                    "data_date" => Iso(snapshot.DataDate),
-                    _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(reader.Get(column), snapshot, column.Name),
-                    _ => reader.Get(column)
-                };
-                values[column.Name] = ProgrammeReviewCsv.Normalize(raw, column, context);
+                    string selected = column.Name switch
+                    {
+                        "filename" => snapshot.CanonicalXerFilename,
+                        "ProjectCode" => _request.ProjectCode,
+                        "ProjectName" => _request.ProjectName,
+                        "UpdateDate" => Iso(snapshot.EffectiveUpdateDate),
+                        "monthupdate" => Iso(snapshot.MonthUpdate),
+                        "data_date" => Iso(snapshot.DataDate),
+                        _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(reader.Get(column), snapshot, column.Name),
+                        _ => reader.Get(column)
+                    };
+                    return ProgrammeReviewCsv.Normalize(selected, column, context);
+                });
             }
 
-            ValidateDataDate(reader, snapshot, context);
-            string nativeProjectId = ExtractNativeId(reader.Get("proj_id_key"), snapshot.OriginalXerFilename, "proj_id_key");
-            if (nativeProjectId.Length == 0)
-                throw new ProgrammeReviewValidationException($"{context}: project key has no native identifier.");
-            if (_projectNativeIdBySource.TryGetValue(snapshot.OriginalXerFilename, out string? existingProject)
-                && !string.Equals(existingProject, nativeProjectId, StringComparison.OrdinalIgnoreCase))
-                throw new ProgrammeReviewValidationException(
-                    $"{context}: the XER contains tasks from more than one project. Split multi-project exports before publication.");
-            _projectNativeIdBySource[snapshot.OriginalXerFilename] = nativeProjectId;
+            string nativeProjectId = _quality.Evaluate(evidence, "proj_id_key", reader.Get("proj_id_key"),
+                () => ExtractNativeId(reader.Get("proj_id_key"), snapshot.OriginalXerFilename, "proj_id_key"));
+            if (!_projectNativeIdBySource.TryGetValue(snapshot.OriginalXerFilename, out string? existingProject)
+                || !string.Equals(existingProject, nativeProjectId, StringComparison.OrdinalIgnoreCase))
+                _quality.Warn(evidence, "REVIEW_PROJECT_REFERENCE_INVALID",
+                    $"TASK proj_id '{nativeProjectId}' does not match the governed source PROJECT identity.", "proj_id_key", reader.Get("proj_id_key"));
 
             rows.Add(new TaskRow(snapshot, values));
+            _outputEvidence[values] = evidence;
         }
 
-        foreach (ResolvedProgrammeReviewSnapshot snapshot in _request.Snapshots)
-        {
-            if (!rows.Any(r => ReferenceEquals(r.Snapshot, snapshot)))
-                throw new ProgrammeReviewValidationException($"No TASK rows were found for '{snapshot.OriginalXerFilename}'.");
-        }
-
-        ValidateSingleProjectPerSnapshot();
-        ValidateTaskUniqueness(rows);
         PopulateHistory(rows);
         return rows.Select(row => new ProgrammeReviewOutputRow(row.Snapshot, Finalize(contract, row.Values))).ToArray();
     }
@@ -301,7 +247,6 @@ internal sealed class ProgrammeReviewTransformer
         // must not prevent the fixed header-only optional output; required-table
         // coverage remains enforced after projection.
         if (source.Rows.Count == 0) return Array.Empty<ProgrammeReviewOutputRow>();
-        RequireHeaders(source, contract.Columns.Where(c => c.Name is not ("ProjectCode" or "monthupdate" or "last_recalc_date")));
         var rows = new List<ProgrammeReviewOutputRow>();
 
         foreach (DataRow dataRow in source.Rows)
@@ -310,31 +255,41 @@ internal sealed class ProgrammeReviewTransformer
             if (!_snapshotByOriginal.TryGetValue(dataRow.SourceFilename, out ResolvedProgrammeReviewSnapshot? snapshot))
                 continue;
             var reader = new EnhancedRowReader(source, dataRow);
-            if (!BelongsToSelectedProject(reader, snapshot)) continue;
+            ReviewRowEvidence evidence = _quality.ForRow(source, dataRow);
 
             string context = $"{contract.TableName}/{snapshot.OriginalXerFilename}";
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (ProgrammeReviewColumn column in contract.Columns)
             {
-                string raw = column.Name switch
+                string original = reader.Get(column);
+                if (column.Name is not ("ProjectCode" or "monthupdate" or "last_recalc_date")
+                    && !source.FieldIndexes.ContainsKey(column.Name)
+                    && !column.SourceAliases.Any(source.FieldIndexes.ContainsKey))
+                    _quality.Warn(evidence, "REVIEW_SOURCE_COLUMN_MISSING",
+                        "The source column is unavailable; the row is preserved with a blank projected cell.", column.Name);
+                values[column.Name] = _quality.Evaluate(evidence, column.Name, original, () =>
                 {
-                    "ProjectCode" => _request.ProjectCode,
-                    "monthupdate" => Iso(snapshot.MonthUpdate),
-                    "last_recalc_date" => Iso(snapshot.DataDate),
-                    _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(reader.Get(column), snapshot, column.Name),
-                    _ => reader.Get(column)
-                };
+                    string raw = column.Name switch
+                    {
+                        "ProjectCode" => _request.ProjectCode,
+                        "monthupdate" => Iso(snapshot.MonthUpdate),
+                        "last_recalc_date" => Iso(snapshot.DataDate),
+                        _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(reader.Get(column), snapshot, column.Name),
+                        _ => reader.Get(column)
+                    };
 
-                if (contract.TableName == "15_XER_RESOURCE_DISTRIBUTION"
-                    && column.Name == "unit"
-                    && string.Equals(reader.Get("rsrc_type"), "RT_Labor", StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(raw, "unit/time", StringComparison.OrdinalIgnoreCase))
-                    raw = "hours";
+                    if (contract.TableName == "15_XER_RESOURCE_DISTRIBUTION"
+                        && column.Name == "unit"
+                        && string.Equals(reader.Get("rsrc_type"), "RT_Labor", StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(raw, "unit/time", StringComparison.OrdinalIgnoreCase))
+                        raw = "hours";
 
-                values[column.Name] = ProgrammeReviewCsv.Normalize(raw, column, context);
+                    return ProgrammeReviewCsv.Normalize(raw, column, context);
+                });
             }
 
             if (contract.TableName == "02_XER_PROJECT") ValidateDataDate(reader, snapshot, context, "last_recalc_date");
+            _outputEvidence[values] = evidence;
             rows.Add(new ProgrammeReviewOutputRow(snapshot, Finalize(contract, values)));
         }
         return rows;
@@ -342,10 +297,35 @@ internal sealed class ProgrammeReviewTransformer
 
     private void PopulateHistory(IReadOnlyList<TaskRow> rows)
     {
-        DateOnly baselineUpdate = _request.Snapshots.Min(s => s.EffectiveUpdateDate);
+        if (rows.Count == 0) return;
         DateOnly projectFirstMonth = rows.Min(r => r.Snapshot.MonthUpdate);
-        DateOnly[] updateDates = _request.Snapshots.Select(s => s.EffectiveUpdateDate).Distinct().Order().ToArray();
         DateOnly[] dataDates = rows.Select(DataDate).Distinct().Order().ToArray();
+        var ambiguousCodes = rows.GroupBy(r => (r.Snapshot.EffectiveUpdateDate, r["task_code"]))
+            .Where(g => string.IsNullOrWhiteSpace(g.Key.Item2) || g.Count() > 1)
+            .Select(g => g.Key.Item2).ToHashSet(StringComparer.Ordinal);
+        var duplicateIds = rows.GroupBy(r => r["task_id_key"], StringComparer.Ordinal)
+            .Where(g => string.IsNullOrWhiteSpace(g.Key) || g.Count() > 1)
+            .SelectMany(g => g.Select(r => r["task_code"]));
+        ambiguousCodes.UnionWith(duplicateIds);
+        var invalidHistoryCodes = rows.Where(r => _quality.HasInvalidColumn(_outputEvidence[r.Values],
+            "Start", "Finish", "early_start_date", "early_end_date", "late_end_date", "remaining_duration", "status_code")
+                || r["status_code"] is not ("Not Started" or "In Progress" or "Complete")
+                || Number(r, "remaining_duration") is < 0m)
+            .Select(r => r["task_code"]).ToHashSet(StringComparer.Ordinal);
+        foreach (TaskRow row in rows.Where(r => ambiguousCodes.Contains(r["task_code"]) || invalidHistoryCodes.Contains(r["task_code"])))
+        {
+            foreach (string column in TaskHistoryColumns) row[column] = string.Empty;
+            bool ambiguous = ambiguousCodes.Contains(row["task_code"]);
+            _quality.Warn(_outputEvidence[row.Values], ambiguous ? "REVIEW_HISTORY_AMBIGUOUS" : "REVIEW_HISTORY_INPUT_INVALID",
+                ambiguous
+                    ? "History is blank because activity business identity or native task identity is blank or duplicated in a snapshot; no occurrence was selected or discarded."
+                    : "History is blank because a source endpoint or other required history input is invalid in this activity's snapshot chain; invalid evidence is not treated as zero variance.",
+                "task_code", row["task_code"]);
+        }
+        rows = rows.Where(r => !ambiguousCodes.Contains(r["task_code"]) && !invalidHistoryCodes.Contains(r["task_code"])).ToArray();
+        if (rows.Count == 0) return;
+        DateOnly baselineUpdate = _request.Snapshots.Min(s => s.EffectiveUpdateDate);
+        DateOnly[] updateDates = _request.Snapshots.Select(s => s.EffectiveUpdateDate).Distinct().Order().ToArray();
 
         var byTask = rows.GroupBy(r => r["task_code"], StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.OrderBy(r => r.Snapshot.EffectiveUpdateDate).ToArray(), StringComparer.Ordinal);
@@ -467,42 +447,23 @@ internal sealed class ProgrammeReviewTransformer
             foreach (ResolvedProgrammeReviewSnapshot snapshot in _request.Snapshots)
             {
                 if (!table.Rows.Any(r => ReferenceEquals(r.Snapshot, snapshot)))
-                    throw new ProgrammeReviewValidationException(
-                        $"Required table '{table.Contract.TableName}' has no rows for '{snapshot.OriginalXerFilename}'.");
+                    WarnMissingSource(table.Contract.TableName, snapshot);
             }
         }
     }
 
-    private void ValidateTransformOutcomes(IReadOnlyDictionary<string, XerTable?> enhanced,
+    private void ValidateTransformOutcomes(IDictionary<string, XerTable?> enhanced,
         XerTransformer transformer)
     {
-        // Null can mean a genuinely absent optional source or a rejected
-        // calculation. Preserve the latter's actionable cause in every profile.
-        foreach (var pair in enhanced)
+        foreach (var pair in enhanced.ToArray())
         {
-            if (pair.Value is null && transformer.GetGenerationFailure(pair.Key) is { } failure)
-                throw new ProgrammeReviewValidationException(
-                    $"Enhanced transformation '{pair.Key}' failed: {failure.Message}", failure);
-        }
-
-        var rawSourceByEnhanced = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            [EnhancedTableNames.XerPredecessor06] = TableNames.TaskPred,
-            [EnhancedTableNames.XerActvType07] = TableNames.ActvType,
-            [EnhancedTableNames.XerActvCode08] = TableNames.ActvCode,
-            [EnhancedTableNames.XerTaskActv09] = TableNames.TaskActv,
-            [EnhancedTableNames.XerRsrc12] = TableNames.Rsrc,
-            [EnhancedTableNames.XerResourceDist15] = TableNames.TaskRsrc
-        };
-
-        foreach ((string enhancedName, string rawName) in rawSourceByEnhanced)
-        {
-            if (enhanced.TryGetValue(enhancedName, out XerTable? transformed) && transformed is not null) continue;
-            XerTable? raw = _dataStore.GetTable(rawName);
-            bool retainedRawRows = raw?.Rows.Any(r => _snapshotByOriginal.ContainsKey(r.SourceFilename)) == true;
-            if (retainedRawRows)
-                throw new ProgrammeReviewValidationException(
-                    $"Enhanced transformation '{enhancedName}' failed even though raw table '{rawName}' contains retained rows.");
+            if (pair.Value is not null) continue;
+            bool required = ProgrammeReviewContract.Tables.Any(t => t.EnhancedTableName == pair.Key && t.SourceRequired);
+            // Optional absence is a normal header-only contract. A required or
+            // failed transformation is recovered through the shared row-preserving
+            // Core recovery path, with original source evidence in its warnings.
+            if (required || transformer.GetGenerationFailure(pair.Key) is not null)
+                enhanced[pair.Key] = transformer.RecoverEnhancedTable(pair.Key);
         }
     }
 
@@ -523,17 +484,8 @@ internal sealed class ProgrammeReviewTransformer
             if (projectIds.Length != 1)
                 throw new ProgrammeReviewValidationException(
                     $"{snapshot.OriginalXerFilename}: expected exactly one native PROJECT/proj_id, found {projectIds.Length}. Split multi-project exports before publication.");
-            if (!_projectNativeIdBySource.TryGetValue(snapshot.OriginalXerFilename, out string? taskProject)
-                || !string.Equals(taskProject, projectIds[0], StringComparison.OrdinalIgnoreCase))
-                throw new ProgrammeReviewValidationException(
-                    $"{snapshot.OriginalXerFilename}: TASK proj_id '{taskProject}' does not match PROJECT proj_id '{projectIds[0]}'.");
+            _projectNativeIdBySource[snapshot.OriginalXerFilename] = projectIds[0];
         }
-    }
-
-    private static void ValidateTaskUniqueness(IReadOnlyList<TaskRow> rows)
-    {
-        EnsureUnique(rows.Select(r => r["task_id_key"]), "01_XER_TASK.task_id_key");
-        EnsureUnique(rows.Select(r => $"{r["filename"]}\u001f{r["task_code"]}"), "01_XER_TASK.(filename,task_code)");
     }
 
     private void ValidateKeysAndRelationships(IReadOnlyList<ProgrammeReviewOutputTable> tables)
@@ -542,8 +494,7 @@ internal sealed class ProgrammeReviewTransformer
         foreach (ProgrammeReviewOutputTable table in tables)
         {
             if (table.Contract.KeyColumns.Count > 0)
-                EnsureUnique(table.Rows.Select(r => string.Join("\u001f", table.Contract.KeyColumns.Select(c => r.Values[c]))),
-                    $"{table.Contract.TableName}.({string.Join(',', table.Contract.KeyColumns)})");
+                WarnDuplicateKeys(table, table.Contract.KeyColumns);
 
             foreach (ProgrammeReviewOutputRow row in table.Rows)
             {
@@ -586,7 +537,7 @@ internal sealed class ProgrammeReviewTransformer
         RequireReferences(byName["15_XER_RESOURCE_DISTRIBUTION"], "rsrc_id_key", resources);
     }
 
-    private static void RequireReferences(
+    private void RequireReferences(
         ProgrammeReviewOutputTable table,
         string column,
         HashSet<string> valid,
@@ -597,32 +548,13 @@ internal sealed class ProgrammeReviewTransformer
             string value = row.Values[column];
             if (allowBlank && value.Length == 0) continue;
             if (!valid.Contains(value))
-                throw new ProgrammeReviewValidationException(
-                    $"{table.Contract.TableName}.{column} contains an orphan key '{value}'.");
+                _quality.Warn(_outputEvidence[row.Values], "REVIEW_REFERENCE_UNRESOLVED",
+                    $"{table.Contract.TableName}.{column} contains an orphan or blank key '{value}'; the row is preserved.", column, value);
         }
     }
 
     private static HashSet<string> Values(ProgrammeReviewOutputTable table, string column) =>
         table.Rows.Select(r => r.Values[column]).Where(v => v.Length > 0).ToHashSet(StringComparer.Ordinal);
-
-    private static void EnsureUnique(IEnumerable<string> values, string context)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (string value in values)
-        {
-            if (value.Length == 0 || !seen.Add(value))
-                throw new ProgrammeReviewValidationException($"Duplicate or blank key detected for {context}: '{value}'.");
-        }
-    }
-
-    private bool BelongsToSelectedProject(EnhancedRowReader reader, ResolvedProgrammeReviewSnapshot snapshot)
-    {
-        if (!_projectNativeIdBySource.TryGetValue(snapshot.OriginalXerFilename, out string? projectId)) return true;
-        string raw = reader.GetOptional("proj_id_key", "proj_id");
-        if (raw.Length == 0) return true;
-        return string.Equals(ExtractNativeId(raw, snapshot.OriginalXerFilename, "proj_id"), projectId,
-            StringComparison.OrdinalIgnoreCase);
-    }
 
     private string Namespace(string raw, ResolvedProgrammeReviewSnapshot snapshot, string columnName)
     {
@@ -654,27 +586,41 @@ internal sealed class ProgrammeReviewTransformer
             $"{originalFilename}: '{columnName}' key '{value}' has an unexpected source prefix.");
     }
 
-    private static void RequireHeaders(XerTable table, IEnumerable<ProgrammeReviewColumn> columns)
-    {
-        foreach (ProgrammeReviewColumn column in columns)
-        {
-            if (table.FieldIndexes.ContainsKey(column.Name)) continue;
-            if (column.SourceAliases.Any(table.FieldIndexes.ContainsKey)) continue;
-            throw new ProgrammeReviewValidationException(
-                $"Enhanced table '{table.Name}' is missing required source column '{column.Name}' (aliases: {string.Join(", ", column.SourceAliases)}).");
-        }
-    }
-
-    private static IReadOnlyDictionary<string, string> Finalize(
+    private IReadOnlyDictionary<string, string> Finalize(
         ProgrammeReviewTableContract contract,
         Dictionary<string, string> values)
     {
         foreach (ProgrammeReviewColumn column in contract.Columns)
         {
             values.TryGetValue(column.Name, out string? raw);
-            values[column.Name] = ProgrammeReviewCsv.Normalize(raw, column, contract.TableName);
+            // Cells were assessed before projection. A blank rejected cell must
+            // not be rejected again by the fixed contract's required-cell rule.
+            values[column.Name] = string.IsNullOrWhiteSpace(raw) ? string.Empty
+                : _quality.Evaluate(_outputEvidence[values], column.Name, raw,
+                    () => ProgrammeReviewCsv.Normalize(raw, column, contract.TableName));
         }
         return values;
+    }
+
+    private void WarnDuplicateKeys(ProgrammeReviewOutputTable table, IReadOnlyList<string> columns)
+    {
+        foreach (var group in table.Rows.GroupBy(r => string.Join("\u001f", columns.Select(c => r.Values[c])), StringComparer.Ordinal))
+        {
+            bool missing = group.Any(r => columns.Any(c => string.IsNullOrWhiteSpace(r.Values[c])));
+            if (!missing && group.Count() == 1) continue;
+            foreach (ProgrammeReviewOutputRow row in group)
+                _quality.Warn(_outputEvidence[row.Values], "REVIEW_KEY_AMBIGUOUS",
+                    "The review key is blank or duplicated; every source occurrence is preserved. Consumer key uniqueness must be repaired upstream.",
+                    string.Join(',', columns), group.Key);
+        }
+    }
+
+    private void WarnMissingSource(string tableName, ResolvedProgrammeReviewSnapshot snapshot)
+    {
+        XerTable projects = _dataStore.GetTable(TableNames.Project)!;
+        DataRow anchor = projects.Rows.First(r => string.Equals(r.SourceFilename, snapshot.OriginalXerFilename, StringComparison.OrdinalIgnoreCase));
+        _quality.Rows.Add(XerDataQuality.CreateWarning(tableName, "REVIEW_SOURCE_UNAVAILABLE",
+            $"No available rows for '{tableName}' in this snapshot; the numbered CSV retains its header.", anchor, 0));
     }
 
     internal static IReadOnlyList<ProgrammeReviewOutputRow> Sort(

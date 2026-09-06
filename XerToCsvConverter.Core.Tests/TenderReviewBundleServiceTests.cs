@@ -313,16 +313,14 @@ public sealed class TenderReviewBundleServiceTests
     }
 
     [Fact]
-    public async Task Unknown_task_status_fails_raw_date_derivation()
+    public async Task Unknown_task_status_preserves_row_with_blank_dates_and_warnings()
     {
         TenderReviewSource source = TenderReviewNamingTests.Source(0, "stage.xer", "2026-09-05");
         XerDataStore store = BuildDataStore(new Stage(source, "2026-08-31", null, "8"));
         XerTable task = store.GetTable("TASK")!;
         task.Rows[0].Fields[task.FieldIndexes["status_code"]] = "TK_Unknown";
 
-        TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
-                store, TenderReviewNamingTests.Request(new[] { source })));
+        var error = await BuildWithWarnings(store, source);
         Assert.Contains("not a recognised P6 activity status", error.Message,
             StringComparison.OrdinalIgnoreCase);
     }
@@ -377,15 +375,15 @@ public sealed class TenderReviewBundleServiceTests
         AddSecondTaskAndRelationship(
             store, source.SourceToken, successorCalendarHours: "8", lagSetting: setting);
 
-        TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
-                store, TenderReviewNamingTests.Request(new[] { source })));
-        Assert.Contains("sched_calendar_on_relationship_lag", error.Message,
-            StringComparison.OrdinalIgnoreCase);
+        var error = await BuildWithWarnings(store, source);
+        Assert.Contains("RELATIONSHIP_UnresolvedLagCalendarSetting", error.Message, StringComparison.Ordinal);
+        var relationships = ReadCsv(error.Result.Files["06_XER_PREDECESSOR.csv"]);
+        Assert.Equal("", Row(relationships[0], Assert.Single(relationships.Skip(1)))["free_float"]);
+        Assert.Equal("2", Row(relationships[0], relationships[1])["lag"]);
     }
 
     [Fact]
-    public async Task Zero_lag_allows_absent_setting_but_rejects_unknown_nonblank_setting()
+    public async Task Zero_lag_does_not_require_an_applicable_lag_calendar_setting()
     {
         TenderReviewSource source = TenderReviewNamingTests.Source(0, "stage.xer", "2026-09-05");
         TenderReviewBundleRequest request = TenderReviewNamingTests.Request(new[] { source });
@@ -402,14 +400,15 @@ public sealed class TenderReviewBundleServiceTests
         AddSecondTaskAndRelationship(
             unknown, source.SourceToken, successorCalendarHours: "8",
             lagSetting: "rcal_Unknown", lagHours: "0");
-        await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(unknown, request));
+        var unknownResult = await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(unknown, request);
+        var unknownCsv = ReadCsv(unknownResult.Files["06_XER_PREDECESSOR.csv"]);
+        Assert.Equal("0", Row(unknownCsv[0], unknownCsv[1])["lag"]);
     }
 
     [Theory]
     [InlineData("rcal_Predecessor", "0", "8")]
     [InlineData("rcal_Successor", "0", "8")]
-    public async Task Relationship_lag_day_conversion_rejects_invalid_predecessor_hours(
+    public async Task Relationship_lag_day_conversion_warns_for_invalid_predecessor_hours(
         string setting,
         string predecessorHours,
         string successorHours)
@@ -422,9 +421,7 @@ public sealed class TenderReviewBundleServiceTests
             store, source.SourceToken, successorCalendarHours: successorHours,
             lagSetting: setting, blankSuccessorHours: true);
 
-        TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
-                store, TenderReviewNamingTests.Request(new[] { source })));
+        var error = await BuildWithWarnings(store, source);
         Assert.Contains("finite positive CALENDAR.day_hr_cnt", error.Message,
             StringComparison.OrdinalIgnoreCase);
     }
@@ -461,24 +458,20 @@ public sealed class TenderReviewBundleServiceTests
         XerDataStore store = BuildDataStore(
             new Stage(source, "2026-08-31", null, calendarHours));
 
-        TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
-                store, TenderReviewNamingTests.Request(new[] { source })));
+        var error = await BuildWithWarnings(store, source);
         Assert.Contains("finite positive CALENDAR.day_hr_cnt", error.Message,
             StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task Missing_calendar_hours_header_fails_nonblank_task_hour_conversion()
+    public async Task Missing_calendar_hours_header_blanks_nonblank_task_hour_conversion()
     {
         TenderReviewSource source = TenderReviewNamingTests.Source(0, "stage.xer", "2026-09-05");
         XerDataStore store = BuildDataStore(
             new[] { new Stage(source, "2026-08-31", null, "8") },
             includeCalendarHoursHeader: false);
 
-        TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
-                store, TenderReviewNamingTests.Request(new[] { source })));
+        var error = await BuildWithWarnings(store, source);
         Assert.Contains("finite positive CALENDAR.day_hr_cnt", error.Message,
             StringComparison.OrdinalIgnoreCase);
     }
@@ -521,11 +514,9 @@ public sealed class TenderReviewBundleServiceTests
             new[] { new Stage(source, "2026-08-31", null, "0") },
             blankTaskHours: true);
         AddResourceAssignments(invalid, source.SourceToken, "2");
-        TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(invalid, request));
-        Assert.Contains("resource distribution", error.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("finite positive CALENDAR.day_hr_cnt", error.Message,
-            StringComparison.OrdinalIgnoreCase);
+        var withoutDayFactor = await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(invalid, request);
+        var validUnits = ReadCsv(withoutDayFactor.Files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
+        Assert.Equal("2", Row(validUnits[0], validUnits[1])["monthly_quantity"]);
     }
 
     [Fact]
@@ -560,10 +551,39 @@ public sealed class TenderReviewBundleServiceTests
         Assert.Equal(3, result.ManifestRows.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
     }
 
+    [Fact]
+    public async Task Resource_aggregate_overflow_preserves_every_assignment_contribution_and_its_source_ordinal()
+    {
+        const string quantity = "50000000000000000000000000000";
+        TenderReviewSource source = TenderReviewNamingTests.Source(0, "overflow.xer", "2026-09-05");
+        XerDataStore store = BuildDataStore(new Stage(source, "2026-08-31", null, "8"));
+        AddResourceAssignments(store, source.SourceToken, quantity, quantity);
+        var result = await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
+            store, TenderReviewNamingTests.Request(new[] { source }));
+        Assert.Equal(12, result.Files.Count);
+        var csv = ReadCsv(result.Files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
+        Assert.Equal(3, csv.Count);
+        Assert.All(csv.Skip(1), row => Assert.Equal(decimal.Parse(quantity, CultureInfo.InvariantCulture),
+            decimal.Parse(Row(csv[0], row)["monthly_quantity"], CultureInfo.InvariantCulture)));
+        var diagnostics = ReadCsv(result.Files[XerDataQuality.FileName]);
+        var aggregation = diagnostics.Skip(1).Select(row => Row(diagnostics[0], row))
+            .Where(row => row["issue_code"] == "REVIEW_AGGREGATION_UNAVAILABLE").ToArray();
+        Assert.Equal(2, aggregation.Length);
+        Assert.Equal(new[] { "1", "2" }, aggregation.Select(row => row["source_row_number"]).Order().ToArray());
+        Assert.All(aggregation, row =>
+        {
+            Assert.Equal("TASKRSRC", row["source_table"]);
+            Assert.Contains("taskrsrc_id", row["raw_row_json"], StringComparison.Ordinal);
+            Assert.Equal("", row["allocation_portion"]);
+            Assert.Equal("", row["unallocated_remaining_quantity"]);
+        });
+        Assert.DoesNotContain(source.SourceToken, Encoding.UTF8.GetString(result.Files[XerDataQuality.FileName]), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Invalid_positive_resource_assignment_rejects_partial_tender_output(bool toDisk)
+    public async Task Invalid_positive_resource_assignment_warns_without_dropping_valid_tender_output(bool toDisk)
     {
         string root = NewTempDirectory();
         try
@@ -576,14 +596,30 @@ public sealed class TenderReviewBundleServiceTests
             TenderReviewBundleRequest request = TenderReviewNamingTests.Request(new[] { source });
             var service = new TenderReviewBundleService();
 
-            TenderReviewValidationException error = toDisk
-                ? await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-                    service.BuildFromParsedDataAsync(store, request, root))
-                : await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-                    service.BuildFromParsedDataToMemoryAsync(store, request));
-
-            Assert.Contains("15_XER_RESOURCE_DISTRIBUTION", error.Message, StringComparison.Ordinal);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+            IReadOnlyDictionary<string, byte[]> files;
+            if (toDisk)
+            {
+                var result = await service.BuildFromParsedDataAsync(store, request, root);
+                Assert.Equal(1, result.WarningCount);
+                files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
+            }
+            else
+            {
+                var result = await service.BuildFromParsedDataToMemoryAsync(store, request);
+                Assert.Equal(1, result.WarningCount);
+                files = result.Files;
+            }
+            Assert.Equal(12, files.Count);
+            var csv = ReadCsv(files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
+            Assert.Equal(1m, csv.Skip(1).Select(values => Row(csv[0], values))
+                .Sum(row => decimal.Parse(row["monthly_quantity"], CultureInfo.InvariantCulture)));
+            var diagnosticCsv = ReadCsv(files[XerDataQuality.FileName]);
+            var warning = Row(diagnosticCsv[0], Assert.Single(diagnosticCsv.Skip(1)));
+            Assert.Equal("REMAINING_PERIOD_INVALID", warning["issue_code"]);
+            Assert.Equal("A2", warning["taskrsrc_id"]);
+            Assert.Equal("not-a-date", warning["restart_date"]);
+            Assert.Equal("2", warning["remain_qty"]);
+            Assert.Equal("2.0000", warning["unallocated_remaining_quantity"]);
         }
         finally
         {
@@ -610,19 +646,11 @@ public sealed class TenderReviewBundleServiceTests
         resource.Rows[0].Fields[resource.FieldIndexes["clndr_id"]] = "RESOURCE";
         var request = TenderReviewNamingTests.Request(new[] { source });
 
-        if (succeeds)
-        {
-            var result = await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(store, request);
-            var csv = ReadCsv(result.Files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
-            Assert.Equal("2", Row(csv[0], Assert.Single(csv.Skip(1)))["monthly_quantity"]);
-        }
-        else
-        {
-            var error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-                new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(store, request));
-            Assert.Contains("RESOURCE", error.Message, StringComparison.Ordinal);
-            Assert.Contains("finite positive CALENDAR.day_hr_cnt", error.Message, StringComparison.OrdinalIgnoreCase);
-        }
+        // Availability can allocate units without a day-conversion factor.
+        Assert.Equal(resourceHours == "24", succeeds);
+        var result = await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(store, request);
+        var csv = ReadCsv(result.Files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
+        Assert.Equal("2", Row(csv[0], Assert.Single(csv.Skip(1)))["monthly_quantity"]);
     }
 
     [Fact]
@@ -672,16 +700,14 @@ public sealed class TenderReviewBundleServiceTests
         XerTable assignments = store.GetTable("TASKRSRC")!;
         assignments.Rows[0].Fields[assignments.FieldIndexes["task_id"]] = "MISSING";
 
-        TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
-                store, TenderReviewNamingTests.Request(new[] { source })));
-        Assert.Contains("TASKRSRC.task_id 'MISSING'", error.Message,
+        var error = await BuildWithWarnings(store, source);
+        Assert.Contains("MISSING", error.Message,
             StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("same source", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ASSIGNMENT_CONTEXT_INVALID", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Unresolved_required_relationship_fails_and_removes_atomic_staging_output()
+    public async Task Unresolved_required_calendar_reference_preserves_the_bundle_with_warnings()
     {
         string root = NewTempDirectory();
         TenderReviewSource source = TenderReviewNamingTests.Source(0, "stage.xer", "2026-09-05");
@@ -689,12 +715,11 @@ public sealed class TenderReviewBundleServiceTests
             new Stage(source, "2026-08-31", null, "8", CalendarIdInCalendarTable: "OTHER"));
         try
         {
-            TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-                new TenderReviewBundleService().BuildFromParsedDataAsync(
-                    store, TenderReviewNamingTests.Request(new[] { source }), root));
-
-            Assert.Contains("CALENDAR 'C1' is missing", error.Message, StringComparison.OrdinalIgnoreCase);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+            var result = await new TenderReviewBundleService().BuildFromParsedDataAsync(
+                store, TenderReviewNamingTests.Request(new[] { source }), root);
+            Assert.True(result.WarningCount > 0);
+            Assert.Equal(12, Directory.EnumerateFiles(result.BundlePath).Count());
+            Assert.Contains("C1", File.ReadAllText(Path.Combine(result.BundlePath, XerDataQuality.FileName)), StringComparison.Ordinal);
         }
         finally
         {
@@ -813,14 +838,24 @@ public sealed class TenderReviewBundleServiceTests
         AddSecondTaskAndRelationship(store, source.SourceToken, "24", "rcal_Project", lagHours: "8");
         XerTable project = store.GetTable("PROJECT")!;
         project.Rows[0].Fields[project.FieldIndexes["clndr_id"]] = "missing";
-        TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(store,
-                TenderReviewNamingTests.Request(new[] { source })));
-        Assert.Contains("invalid relationship lag calendar", error.Message);
+        var error = await BuildWithWarnings(store, source);
+        Assert.Contains("RELATIONSHIP_UnresolvedLagCalendar", error.Message, StringComparison.Ordinal);
+        var relationships = ReadCsv(error.Result.Files["06_XER_PREDECESSOR.csv"]);
+        Assert.Equal("", Row(relationships[0], Assert.Single(relationships.Skip(1)))["free_float"]);
     }
 
     private static XerDataStore BuildDataStore(params Stage[] stages) =>
         BuildDataStore(stages, includeAddDateHeader: true);
+
+    private static async Task<(string Message, TenderReviewInMemoryBundleResult Result)> BuildWithWarnings(
+        XerDataStore store, TenderReviewSource source)
+    {
+        var result = await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
+            store, TenderReviewNamingTests.Request(new[] { source }));
+        Assert.Equal(12, result.Files.Count);
+        Assert.True(result.WarningCount > 0);
+        return (Encoding.UTF8.GetString(result.Files[XerDataQuality.FileName]), result);
+    }
 
     private static XerDataStore BuildDataStore(
         IReadOnlyList<Stage> stages,
@@ -940,10 +975,10 @@ public sealed class TenderReviewBundleServiceTests
             task.Rows[0].Fields[task.FieldIndexes[field]] = "2026-03-02 00:00";
 
         XerTable original = store.GetTable("TASKRSRC")!;
-        var assignments = NewTable("TASKRSRC", original.Headers!.Concat(new[] { "taskrsrc_id", "proj_id" }).ToArray());
+        var assignments = NewTable("TASKRSRC", original.Headers!);
         for (int index = 0; index < original.Rows.Count; index++)
         {
-            string[] fields = original.Rows[index].Fields.Concat(new[] { $"A{index + 1}", "P1" }).ToArray();
+            string[] fields = original.Rows[index].Fields.ToArray();
             fields[assignments.FieldIndexes["restart_date"]] = "2026-01-31 00:00";
             fields[assignments.FieldIndexes["reend_date"]] = "2026-03-02 00:00";
             assignments.AddRow(new DataRow(fields, sourceToken));
@@ -970,13 +1005,13 @@ public sealed class TenderReviewBundleServiceTests
         var assignments = NewTable("TASKRSRC", new[]
         {
             "task_id", "rsrc_id", "act_reg_qty", "act_ot_qty", "remain_qty",
-            "act_start_date", "act_end_date", "restart_date", "reend_date"
+            "act_start_date", "act_end_date", "restart_date", "reend_date", "taskrsrc_id", "proj_id"
         });
         foreach (string quantity in remainingQuantities)
         {
             assignments.AddRow(new DataRow(new[]
             {
-                "T1", "R1", "", "", quantity, "", "", "2026-09-07", "2026-09-11"
+                "T1", "R1", "", "", quantity, "", "", "2026-09-07", "2026-09-11", $"A{assignments.Rows.Count + 1}", "P1"
             }, sourceToken));
         }
         store.AddTable(assignments);

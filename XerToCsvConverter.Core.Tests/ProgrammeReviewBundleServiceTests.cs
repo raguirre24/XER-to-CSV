@@ -343,15 +343,15 @@ public sealed class ProgrammeReviewBundleServiceTests
                 "base.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-30");
             ProgrammeReviewBundleRequest request = ProgrammeReviewNamingTests.Request(new[] { baseline });
             XerDataStore store = BuildDataStore((baseline, "2026-02-02", "2026-02-06"));
-            // This deliberate duplicate of a generated output header makes the legacy 06 transformer fail and return null.
+            // A partial source row must remain visible despite its missing native endpoints.
             XerTable malformed = NewTable("TASKPRED", new[] { "task_id_key" });
             malformed.AddRow(new DataRow(new[] { "broken" }, baseline.OriginalXerFilename));
             store.AddTable(malformed);
 
-            ProgrammeReviewValidationException error = await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
-                new ProgrammeReviewBundleService().BuildFromParsedDataAsync(store, request, root));
-            Assert.Contains("06_XER_PREDECESSOR", error.Message, StringComparison.Ordinal);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+            var result = await new ProgrammeReviewBundleService().BuildFromParsedDataAsync(store, request, root);
+            Assert.True(result.WarningCount > 0);
+            Assert.Single(File.ReadLines(Path.Combine(result.BundlePath, "06_XER_PREDECESSOR.csv")).Skip(1));
+            Assert.Contains("06_XER_PREDECESSOR", File.ReadAllText(Path.Combine(result.BundlePath, XerDataQuality.FileName)), StringComparison.Ordinal);
         }
         finally
         {
@@ -382,7 +382,7 @@ public sealed class ProgrammeReviewBundleServiceTests
     }
 
     [Fact]
-    public async Task Missing_required_native_field_fails_without_publishing()
+    public async Task Missing_required_native_field_preserves_available_rows_with_warnings()
     {
         string root = NewTempDirectory();
         try
@@ -392,11 +392,11 @@ public sealed class ProgrammeReviewBundleServiceTests
             XerDataStore store = BuildDataStore((baseline, "2026-02-02", "2026-02-06"));
             RemoveColumn(store, "TASK", "clndr_id");
 
-            ProgrammeReviewValidationException error = await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
-                new ProgrammeReviewBundleService().BuildFromParsedDataAsync(
-                    store, ProgrammeReviewNamingTests.Request(new[] { baseline }), root));
-            Assert.Contains("calendar_id_key", error.Message, StringComparison.Ordinal);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+            var result = await new ProgrammeReviewBundleService().BuildFromParsedDataAsync(
+                store, ProgrammeReviewNamingTests.Request(new[] { baseline }), root);
+            Assert.True(result.WarningCount > 0);
+            Assert.Single(File.ReadLines(Path.Combine(result.BundlePath, "01_XER_TASK.csv")).Skip(1));
+            Assert.Contains("calendar_id_key", File.ReadAllText(Path.Combine(result.BundlePath, XerDataQuality.FileName)), StringComparison.Ordinal);
         }
         finally
         {
@@ -548,7 +548,7 @@ public sealed class ProgrammeReviewBundleServiceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Invalid_positive_resource_assignment_rejects_partial_profile_output(bool toDisk)
+    public async Task Invalid_positive_resource_assignment_publishes_other_allocations_and_a_manifested_warning(bool toDisk)
     {
         string root = NewTempDirectory();
         try
@@ -562,14 +562,42 @@ public sealed class ProgrammeReviewBundleServiceTests
             ProgrammeReviewBundleRequest request = ProgrammeReviewNamingTests.Request(new[] { baseline });
             var service = new ProgrammeReviewBundleService();
 
-            ProgrammeReviewValidationException error = toDisk
-                ? await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
-                    service.BuildFromParsedDataAsync(store, request, root))
-                : await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
-                    service.BuildFromParsedDataToMemoryAsync(store, request));
-
-            Assert.Contains("15_XER_RESOURCE_DISTRIBUTION", error.Message, StringComparison.Ordinal);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+            IReadOnlyDictionary<string, byte[]> files;
+            IReadOnlyList<ProgrammeReviewManifestRow> manifest;
+            if (toDisk)
+            {
+                ProgrammeReviewBundleResult result = await service.BuildFromParsedDataAsync(store, request, root);
+                Assert.Equal(1, result.WarningCount);
+                files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path)!, File.ReadAllBytes);
+                manifest = result.ManifestRows;
+            }
+            else
+            {
+                ProgrammeReviewInMemoryBundleResult result = await service.BuildFromParsedDataToMemoryAsync(store, request);
+                Assert.Equal(1, result.WarningCount);
+                files = result.Files;
+                manifest = result.ManifestRows;
+                Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+            }
+            Assert.Equal(12, files.Count);
+            IReadOnlyList<string[]> allocations = ReadCsv(files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
+            int quantityIndex = Array.IndexOf(allocations[0], "monthly_quantity");
+            Assert.Equal(3, allocations.Count - 1);
+            Assert.Equal(1m, allocations.Skip(1).Sum(row => decimal.Parse(row[quantityIndex], CultureInfo.InvariantCulture)));
+            IReadOnlyList<string[]> quality = ReadCsv(files[XerDataQuality.FileName]);
+            Dictionary<string, string> warning = quality[0].Zip(Assert.Single(quality.Skip(1)))
+                .ToDictionary(pair => pair.First, pair => pair.Second);
+            Assert.Equal("REMAINING_PERIOD_INVALID", warning["issue_code"]);
+            Assert.Equal("Remaining", warning["allocation_portion"]);
+            Assert.Equal("A2", warning["taskrsrc_id"]);
+            Assert.Equal("2", warning["source_row_number"]);
+            Assert.Equal("not-a-date", warning["restart_date"]);
+            Assert.Equal("", warning["unallocated_actual_quantity"]);
+            Assert.Equal(2m, decimal.Parse(warning["unallocated_remaining_quantity"], CultureInfo.InvariantCulture));
+            Assert.Equal("not-a-date", assignments.Rows[1].Fields[assignments.FieldIndexes["restart_date"]]);
+            Assert.Equal(1, manifest.Single(row => row.TableName == XerDataQuality.TableName).RowCount);
+            Assert.Equal(3, manifest.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
+            Assert.All(manifest, row => Assert.Equal("complete", row.BundleStatus));
         }
         finally
         {

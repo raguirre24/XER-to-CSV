@@ -16,11 +16,11 @@ public sealed class ReviewExportDiagnosticTests
     [InlineData("programme", true, true)]
     [InlineData("tender", false, true)]
     [InlineData("tender", true, true)]
-    public async Task Failed_15_preserves_calendar_or_assignment_details_and_publishes_no_bundle(
+    public async Task Resource_calendar_or_period_warning_does_not_abort_a_complete_review_bundle(
         string profile, bool toDisk, bool malformedCalendar)
     {
         using var output = new TemporaryOutput();
-        Exception error;
+        IReadOnlyDictionary<string, byte[]> files;
         if (profile == "programme")
         {
             var baseline = ProgrammeReviewNamingTests.Snapshot(OriginalFilename,
@@ -28,11 +28,18 @@ public sealed class ReviewExportDiagnosticTests
             var request = ProgrammeReviewNamingTests.Request([baseline]);
             var store = Store(baseline.OriginalXerFilename, "J123", malformedCalendar);
             var service = new ProgrammeReviewBundleService();
-            error = toDisk
-                ? await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
-                    service.BuildFromParsedDataAsync(store, request, output.Path))
-                : await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
-                    service.BuildFromParsedDataToMemoryAsync(store, request));
+            if (toDisk)
+            {
+                var result = await service.BuildFromParsedDataAsync(store, request, output.Path);
+                Assert.Equal(1, result.WarningCount);
+                files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
+            }
+            else
+            {
+                var result = await service.BuildFromParsedDataToMemoryAsync(store, request);
+                Assert.Equal(1, result.WarningCount);
+                files = result.Files;
+            }
         }
         else
         {
@@ -40,21 +47,31 @@ public sealed class ReviewExportDiagnosticTests
             var request = TenderReviewNamingTests.Request([source]);
             var store = Store(source.SourceToken, "J5001", malformedCalendar);
             var service = new TenderReviewBundleService();
-            error = toDisk
-                ? await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-                    service.BuildFromParsedDataAsync(store, request, output.Path))
-                : await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-                    service.BuildFromParsedDataToMemoryAsync(store, request));
+            if (toDisk)
+            {
+                var result = await service.BuildFromParsedDataAsync(store, request, output.Path);
+                Assert.Equal(1, result.WarningCount);
+                files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
+            }
+            else
+            {
+                var result = await service.BuildFromParsedDataToMemoryAsync(store, request);
+                Assert.Equal(1, result.WarningCount);
+                files = result.Files;
+            }
         }
-
-        Assert.Contains(EnhancedTableNames.XerResourceDist15, error.Message, StringComparison.Ordinal);
-        Assert.Contains(OriginalFilename, error.Message, StringComparison.Ordinal);
-        Assert.Contains("TASKRSRC 'A1' (task 'T1', resource 'R1')", error.Message, StringComparison.Ordinal);
-        Assert.Contains("C1", error.Message, StringComparison.Ordinal);
-        Assert.Contains(malformedCalendar ? "Invalid calendar clock '25:00'" : "no working time",
-            error.Message, StringComparison.Ordinal);
-        Assert.IsType<InvalidDataException>(error.InnerException);
-        output.AssertUnchanged();
+        Assert.Equal(12, files.Count);
+        string distribution = System.Text.Encoding.UTF8.GetString(files[EnhancedTableNames.XerResourceDist15 + ".csv"]);
+        Assert.Single(distribution.Trim().Split('\n'));
+        string diagnostics = System.Text.Encoding.UTF8.GetString(files[XerDataQuality.FileName]);
+        Assert.Contains(malformedCalendar ? "RESOURCE_CALENDAR_INVALID" : "REMAINING_NO_WORKING_TIME", diagnostics, StringComparison.Ordinal);
+        if (malformedCalendar) Assert.Contains("Invalid calendar clock '25:00'", diagnostics, StringComparison.Ordinal);
+        // Fixed review bundles do not request table11; malformed working-time data
+        // is retained as the table15 warning rather than claimed to be a valid table11.
+        Assert.DoesNotContain("11_XER_CALENDAR_DETAILED.csv", files.Keys);
+        Assert.Contains("8.0000", diagnostics, StringComparison.Ordinal);
+        Assert.Contains(OriginalFilename, diagnostics, StringComparison.Ordinal);
+        Assert.Equal("preserve me", File.ReadAllText(Path.Combine(output.Path, "unrelated.txt")));
     }
 
     private static XerDataStore Store(string publicSource, string projectCode, bool malformedCalendar)
@@ -63,16 +80,16 @@ public sealed class ReviewExportDiagnosticTests
         Add("PROJECT", ["proj_id", "clndr_id", "last_recalc_date", "proj_short_name"],
             ["P1", "C1", "2026-08-31 08:00", projectCode]);
         Add("PROJWBS", ["wbs_id", "proj_id", "parent_wbs_id", "wbs_name"], ["W1", "P1", "", "Root"]);
-        Add("TASK", ["task_id", "proj_id", "wbs_id", "clndr_id", "status_code", "task_type", "task_code",
+        Add("TASK", ["task_id", "proj_id", "wbs_id", "clndr_id", "status_code", "task_type", "task_code", "task_name",
             "restart_date", "reend_date", "early_start_date", "early_end_date", "remain_drtn_hr_cnt"],
-            ["T1", "P1", "W1", "C1", "TK_NotStart", "TT_Task", "A100", "2026-08-30 08:00", "2026-08-30 17:00",
+            ["T1", "P1", "W1", "C1", "TK_NotStart", "TT_Task", "A100", "Resource warning task", "2026-08-30 08:00", "2026-08-30 17:00",
                 "2026-08-30 08:00", "2026-08-30 17:00", "8"]);
         string calendarData = P6TestCalendars.WorkWeek();
         if (malformedCalendar)
             calendarData = calendarData.Replace("f|17:00", "f|25:00", StringComparison.Ordinal);
         Add("CALENDAR", ["clndr_id", "clndr_name", "clndr_type", "day_hr_cnt", "clndr_data"],
             ["C1", "Calendar", "CA_Project", "8", calendarData]);
-        Add("RSRC", ["rsrc_id", "clndr_id", "rsrc_type", "def_qty_per_hr"], ["R1", "C1", "RT_Labor", "1"]);
+        Add("RSRC", ["rsrc_id", "clndr_id", "rsrc_type", "def_qty_per_hr", "rsrc_name"], ["R1", "C1", "RT_Labor", "1", "Labour"]);
         Add("TASKRSRC", ["taskrsrc_id", "task_id", "rsrc_id", "proj_id", "remain_qty", "restart_date", "reend_date"],
             ["A1", "T1", "R1", "P1", "8", "2026-08-30 08:00", "2026-08-30 17:00"]);
         return store;

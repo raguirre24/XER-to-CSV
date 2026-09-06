@@ -165,7 +165,7 @@ public partial class MainForm
             string summary = $"Tender Review bundle {completion}: {result.BundleId}. " +
                              $"{result.ManifestRows.Count} manifest rows; {stopwatch.Elapsed.TotalSeconds:F2}s." +
                              (result.WarningCount > 0
-                                 ? $" {result.WarningCount} data-quality issue(s); see XER_DATA_QUALITY.csv for unallocated actuals and original source values."
+                                 ? $" {result.WarningCount} data-quality issue(s); see XER_DATA_QUALITY.csv for affected tables and fields, original source values, and any unallocated actual or remaining quantities."
                                  : string.Empty);
             UpdateStatus(summary);
             LogActivity(summary);
@@ -249,7 +249,7 @@ public partial class MainForm
         bool hasWarnings = result.WarningCount > 0;
         string completion = hasWarnings
             ? $"Tender Review bundle completed with warnings.\n\n" +
-              $"{result.WarningCount} data-quality issue(s). See XER_DATA_QUALITY.csv for unallocated actuals and original source values.\n\n"
+              $"{result.WarningCount} data-quality issue(s). See XER_DATA_QUALITY.csv for affected tables and fields, original source values, and any unallocated actual or remaining quantities.\n\n"
             : "Tender Review bundle created successfully.\n\n";
         DialogResult open = MessageBox.Show(
             this,

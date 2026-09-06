@@ -17,7 +17,9 @@ public sealed class DataQualityActualExportTests
         "source_row_number", "proj_id_key", "task_id_key", "rsrc_id_key", "taskrsrc_id_key",
         "taskrsrc_id", "task_code", "rsrc_name", "rsrc_type", "unit", "status_code",
         "act_start_date", "act_end_date", "project_data_date", "act_reg_qty", "act_ot_qty",
-        "unallocated_actual_quantity", "message"
+        "unallocated_actual_quantity", "message", "allocation_portion", "restart_date", "reend_date",
+        "remain_qty", "curv_id", "remain_crv", "unallocated_remaining_quantity",
+        "source_table", "column_name", "raw_value", "raw_row_json"
     ];
 
     [Fact]
@@ -43,7 +45,9 @@ public sealed class DataQualityActualExportTests
         Assert.All(rows, row => Assert.False(string.IsNullOrWhiteSpace(row["distribution_month"])));
         Assert.All(issues, issue =>
         {
-            Assert.Equal("1.0", issue["diagnostic_schema_version"]);
+            Assert.Equal("1.2", issue["diagnostic_schema_version"]);
+            Assert.Equal("Actual", issue["allocation_portion"]);
+            Assert.Equal("", issue["unallocated_remaining_quantity"]);
             Assert.Equal("Warning", issue["severity"]);
             Assert.Equal("ACTUAL_FINISH_BEFORE_START", issue["issue_code"]);
             Assert.Equal(Distribution, issue["table_name"]);
@@ -283,7 +287,7 @@ public sealed class DataQualityActualExportTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Unrequested_distribution_does_not_add_diagnostics_or_validate_its_bad_actuals(bool toDisk)
+    public async Task Unrequested_distribution_does_not_validate_its_bad_actuals_and_companion_is_empty(bool toDisk)
     {
         using var output = new TemporaryOutput();
         XerDataStore store = Store();
@@ -291,7 +295,9 @@ public sealed class DataQualityActualExportTests
 
         var files = await Export(toDisk, store, [EnhancedTableNames.XerProject02], output.Path);
 
-        Assert.Equal(EnhancedTableNames.XerProject02, Assert.Single(files).Key);
+        Assert.Equal(2, files.Count);
+        Assert.Contains(EnhancedTableNames.XerProject02, files.Keys);
+        Assert.Single(ReadCsv(files[XerDataQuality.TableName]));
     }
 
     [Theory]
@@ -300,7 +306,7 @@ public sealed class DataQualityActualExportTests
     [InlineData("TASKRSRC", "reend_date", "invalid")]
     [InlineData("CALENDAR", "clndr_data", "malformed")]
     [InlineData("TASK", "clndr_id", "missing")]
-    public async Task Actual_date_warning_does_not_hide_required_quantity_remaining_or_calendar_failure(
+    public async Task Multiple_source_quality_issues_publish_portion_warnings_instead_of_aborting(
         string table, string field, string value)
     {
         using var output = new TemporaryOutput();
@@ -312,11 +318,39 @@ public sealed class DataQualityActualExportTests
         AddAssignment(store, "A1", "7", "0", "4", "2026-08-03 08:00", "");
         Set(store, table, field, value);
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => new ProcessingService().ExportTablesAsync(
-            store, [Distribution], output.Path, null, CancellationToken.None));
+        Dictionary<string, byte[]> files = await Export(true, store, [Distribution], output.Path);
+        var rows = CsvRecords(files[Distribution]);
+        var issues = CsvRecords(files[Diagnostic]);
 
-        Assert.Equal("prior distribution", File.ReadAllText(distributionPath));
-        Assert.Equal("prior diagnostics", File.ReadAllText(diagnosticPath));
+        Assert.NotEqual("prior distribution", File.ReadAllText(distributionPath));
+        Assert.NotEqual("prior diagnostics", File.ReadAllText(diagnosticPath));
+        Assert.Equal(field == "act_reg_qty" ? 1 : 2, issues.Count);
+        Assert.All(issues, issue =>
+        {
+            Assert.Equal("Warning", issue["severity"]);
+            Assert.Equal("A1", issue["taskrsrc_id"]);
+            Assert.NotEmpty(issue["message"]);
+        });
+        if (field == "act_reg_qty")
+        {
+            var actual = Assert.Single(issues);
+            Assert.Equal("ACTUAL_QUANTITY_INVALID", actual["issue_code"]);
+            Assert.Equal("NaN", actual["act_reg_qty"]);
+            Assert.Equal("", actual["unallocated_actual_quantity"]);
+            Assert.Equal(4m, rows.Sum(row => Number(row["monthly_quantity"])));
+        }
+        else
+        {
+            Assert.Empty(rows);
+            var actual = Assert.Single(issues, row => row["allocation_portion"] == "Actual");
+            var remaining = Assert.Single(issues, row => row["allocation_portion"] == "Remaining");
+            Assert.Equal("7.0000", actual["unallocated_actual_quantity"]);
+            Assert.Equal(field == "remain_qty" ? "" : "4.0000", remaining["unallocated_remaining_quantity"]);
+            Assert.Equal(field == "remain_qty" ? "REMAINING_QUANTITY_INVALID"
+                : field == "reend_date" ? "REMAINING_PERIOD_INVALID" : "RESOURCE_CALENDAR_INVALID",
+                remaining["issue_code"]);
+            if (field is "remain_qty" or "reend_date") Assert.Equal(value, remaining[field]);
+        }
         Assert.Equal(2, Directory.GetFiles(output.Path).Length);
         Assert.Empty(Directory.GetDirectories(output.Path));
     }

@@ -37,7 +37,7 @@ try {
     } else { $expected += 'XER_CSV_MANIFEST' }
     if ($tables.Count -ne $expected.Count) { throw "Unexpected archive file count: $($tables.Count)" }
     foreach ($name in $expected) { if (-not $tables.ContainsKey($name)) { throw "Missing CSV: $name" } }
-    $dataQualityHeader = 'diagnostic_schema_version,severity,issue_code,table_name,source_namespace,source_row_number,proj_id_key,task_id_key,rsrc_id_key,taskrsrc_id_key,taskrsrc_id,task_code,rsrc_name,rsrc_type,unit,status_code,act_start_date,act_end_date,project_data_date,act_reg_qty,act_ot_qty,unallocated_actual_quantity,message,FileName'
+    $dataQualityHeader = 'diagnostic_schema_version,severity,issue_code,table_name,source_namespace,source_row_number,proj_id_key,task_id_key,rsrc_id_key,taskrsrc_id_key,taskrsrc_id,task_code,rsrc_name,rsrc_type,unit,status_code,act_start_date,act_end_date,project_data_date,act_reg_qty,act_ot_qty,unallocated_actual_quantity,message,allocation_portion,restart_date,reend_date,remain_qty,curv_id,remain_crv,unallocated_remaining_quantity,source_table,column_name,raw_value,raw_row_json,FileName'
     if ($headers['XER_DATA_QUALITY'] -cne $dataQualityHeader) { throw 'Data-quality companion schema changed.' }
     if ($tables['XER_DATA_QUALITY'].Count -ne 0) { throw 'The clean synthetic fixture must have a header-only data-quality companion.' }
 

@@ -368,10 +368,19 @@ namespace XerToCsvConverter;
     // Lightweight struct for data rows
     public readonly record struct DataRow
     {
+        // Never expose this array: Fields intentionally remains mutable for compatibility,
+        // but source evidence must survive field replacement, alignment and row copying.
+        private readonly string[]? _rawValues;
+        // Reference identity follows copies/rebinding; never serialize this handle.
+        internal object RawEvidenceIdentity => _rawValues ?? Fields;
+        private FrozenDictionary<string, int>? RawFieldIndexes { get; init; }
+        private FrozenDictionary<string, int>? EvaluationFieldIndexes { get; init; }
+
         public DataRow(string[] Fields, string SourceFilename, string? sourceToken = null,
             string? originalSourceFilename = null)
         {
             this.Fields = Fields;
+            _rawValues = Fields.ToArray();
             this.SourceFilename = SourceFilename;
             SourceToken = sourceToken ?? SourceFilename;
             OriginalSourceFilename = originalSourceFilename ?? SourceFilename;
@@ -383,6 +392,42 @@ namespace XerToCsvConverter;
         public string SourceToken { get; init; }
         public string OriginalSourceFilename { get; init; }
         public DataRow WithFields(string[] fields) => this with { Fields = fields };
+
+        /// <summary>Reads immutable source evidence, not the current transformed Fields array.</summary>
+        public XerRawField GetRawField(string name)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
+            if (RawFieldIndexes is null || !RawFieldIndexes.TryGetValue(name, out int index))
+                return new XerRawField(string.Empty, XerRawFieldState.AbsentHeader);
+            if (_rawValues is null || index >= _rawValues.Length)
+                return new XerRawField(string.Empty, XerRawFieldState.OmittedCell);
+            string value = _rawValues[index] ?? string.Empty;
+            return new XerRawField(value, string.IsNullOrWhiteSpace(value)
+                ? XerRawFieldState.Blank : XerRawFieldState.Present);
+        }
+
+        // Parsed-data callers may edit existing cells. Evaluate their current values,
+        // but never turn padding from a genuinely missing source cell into an option.
+        // Original evidence remains independently available through GetRawField.
+        internal XerRawField GetEvaluationField(string name)
+        {
+            XerRawField raw = GetRawField(name);
+            if (raw.State is XerRawFieldState.AbsentHeader or XerRawFieldState.OmittedCell) return raw;
+            if (EvaluationFieldIndexes is null || !EvaluationFieldIndexes.TryGetValue(name, out int index))
+                return new XerRawField(string.Empty, XerRawFieldState.AbsentHeader);
+            if (Fields is null || index >= Fields.Length)
+                return new XerRawField(string.Empty, XerRawFieldState.OmittedCell);
+            string value = Fields[index] ?? string.Empty;
+            return new XerRawField(value, string.IsNullOrWhiteSpace(value)
+                ? XerRawFieldState.Blank : XerRawFieldState.Present);
+        }
+
+        internal DataRow CaptureRawSchema(FrozenDictionary<string, int> fieldIndexes) => this with
+        {
+            RawFieldIndexes = RawFieldIndexes ?? fieldIndexes,
+            EvaluationFieldIndexes = fieldIndexes
+        };
+
         public void Deconstruct(out string[] fields, out string sourceFilename)
         {
             fields = Fields;
@@ -430,6 +475,10 @@ namespace XerToCsvConverter;
         {
             if (Headers is null) throw new InvalidOperationException($"Headers must be set for table {Name} before adding rows.");
 
+            // Capture the occurrence's original schema before padding or union merging.
+            // A previously captured row retains its original schema through all copies.
+            row = row.CaptureRawSchema(_fieldIndexes);
+
             // Align row fields if lengths mismatch (handles variations in XER exports)
             if (row.Fields.Length != Headers.Length)
             {
@@ -442,7 +491,14 @@ namespace XerToCsvConverter;
 
 
 
-        public void AddRows(IEnumerable<DataRow> rows) => _rows.AddRange(rows);
+        public void AddRows(IEnumerable<DataRow> rows)
+        {
+            ArgumentNullException.ThrowIfNull(rows);
+            // Keep batch insertion equivalent to AddRow, including source provenance.
+            // Preserve the former AddRange behavior if callers duplicate a table's rows.
+            IEnumerable<DataRow> input = ReferenceEquals(rows, _rows) ? _rows.ToArray() : rows;
+            foreach (DataRow row in input) AddRow(row);
+        }
 
 
 
@@ -1132,8 +1188,11 @@ namespace XerToCsvConverter;
         internal Exception? GetGenerationFailure(string tableName) =>
             _generationFailures.TryGetValue(tableName, out var failure) ? failure : null;
 
-        private void ClearGenerationFailure(string tableName) =>
+        private void ClearGenerationFailure(string tableName)
+        {
             _generationFailures.TryRemove(tableName, out _);
+            _exportWarnings.TryRemove(tableName, out _);
+        }
 
         private void RecordGenerationFailure(string tableName, Exception failure) =>
             _generationFailures[tableName] = failure;
@@ -1338,7 +1397,7 @@ namespace XerToCsvConverter;
 
 
 
-            if (!IsTableValid(taskTable) || !IsTableValid(calendarTable) || !IsTableValid(projectTable)) return null;
+            if (!IsTableValid(taskTable)) return null;
 
 
 
@@ -1600,6 +1659,7 @@ namespace XerToCsvConverter;
 
 
                 finalTable.AddRows(transformedRows);
+                RecordTaskCalculationWarnings(taskTable, finalTable, calendarHours, projectDataDates);
 
                 return finalTable;
 
@@ -1796,7 +1856,9 @@ namespace XerToCsvConverter;
 
             {
 
-                decimal days = hours / hoursPerDay;
+                decimal days;
+                try { days = hours / hoursPerDay; }
+                catch (OverflowException) { return ""; }
 
                 return days.ToString($"F{decimalPlaces}", CultureInfo.InvariantCulture);
 
@@ -1938,6 +2000,7 @@ namespace XerToCsvConverter;
 
 
 
+                RecordBaselineCalculationWarnings(baselineTable);
                 return baselineTable;
 
             }
@@ -1959,72 +2022,7 @@ namespace XerToCsvConverter;
 
         // Creates the enhanced PROJWBS table (03_XER_PROJWBS)
 
-        public XerTable? Create03XerProjWbsTable()
-        {
-            ClearGenerationFailure(EnhancedTableNames.XerProjWbs03);
-            XerTable? source = _dataStore.GetTable(TableNames.ProjWbs);
-            if (!IsTableValid(source)) return null;
-            try
-            {
-                var indexes = source.FieldIndexes;
-                var nodes = new Dictionary<(string Source, string Id), DataRow>();
-                foreach (DataRow row in source.Rows)
-                {
-                    string id = GetFieldValue(row.Fields, indexes, FieldNames.WbsId).Trim();
-                    if (id.Length == 0 || !nodes.TryAdd((row.SourceToken, id), row))
-                        throw new InvalidDataException($"Source '{row.OriginalSourceFilename}' (occurrence '{row.SourceToken}') has a blank or duplicate PROJWBS.wbs_id '{id}'.");
-                }
-                var parents = new Dictionary<(string Source, string Id), (string Source, string Id)>();
-                foreach (var pair in nodes)
-                {
-                    string parent = GetFieldValue(pair.Value.Fields, indexes, FieldNames.ParentWbsId).Trim();
-                    var parentKey = (pair.Key.Source, parent);
-                    if (parent.Length == 0 || !nodes.TryGetValue(parentKey, out DataRow parentRow)) continue;
-                    string project = GetFieldValue(pair.Value.Fields, indexes, FieldNames.ProjectId).Trim();
-                    string parentProject = GetFieldValue(parentRow.Fields, indexes, FieldNames.ProjectId).Trim();
-                    if (project != parentProject)
-                        throw new InvalidDataException($"Source '{pair.Value.OriginalSourceFilename}' (occurrence '{pair.Key.Source}') WBS '{pair.Key.Id}' has a parent in another project.");
-                    parents.Add(pair.Key, parentKey);
-                }
-                var complete = new HashSet<(string Source, string Id)>();
-                foreach (var key in nodes.Keys)
-                {
-                    var path = new HashSet<(string Source, string Id)>();
-                    var current = key;
-                    while (!complete.Contains(current))
-                    {
-                        if (!path.Add(current))
-                            throw new InvalidDataException($"Source '{nodes[current].OriginalSourceFilename}' (occurrence '{current.Source}') has a PROJWBS parent cycle at '{current.Id}'.");
-                        if (!parents.TryGetValue(current, out current)) break;
-                    }
-                    complete.UnionWith(path);
-                }
-
-                string[] headers = source.Headers!.Concat(new[]
-                    { FieldNames.WbsIdKey, FieldNames.ParentWbsIdKey, FieldNames.MonthUpdate }).ToArray();
-                var result = new XerTable(EnhancedTableNames.XerProjWbs03, source.RowCount);
-                result.SetHeaders(headers);
-                foreach (DataRow row in source.Rows)
-                {
-                    string id = GetFieldValue(row.Fields, indexes, FieldNames.WbsId).Trim();
-                    string[] values = new string[headers.Length];
-                    Array.Copy(row.Fields, values, row.Fields.Length);
-                    values[^3] = CreateKey(row.SourceFilename, id);
-                    // Preserve legacy missing-parent clearing; present invalid ancestry fails.
-                    values[^2] = parents.TryGetValue((row.SourceToken, id), out var parent)
-                        ? CreateKey(row.SourceFilename, parent.Id) : "";
-                    values[^1] = ParseMonthUpdateFromFilename(row.OriginalSourceFilename);
-                    result.AddRow(row.WithFields(values));
-                }
-                return result;
-            }
-            catch (InvalidDataException ex)
-            {
-                Console.WriteLine($"Error creating {EnhancedTableNames.XerProjWbs03}: {ex.Message}");
-                RecordGenerationFailure(EnhancedTableNames.XerProjWbs03, ex);
-                return null;
-            }
-        }
+        public XerTable? Create03XerProjWbsTable() => Create03XerProjWbsTableCore();
 
         // Generic method for creating simple enhanced tables that just add keys
 
@@ -2048,7 +2046,7 @@ namespace XerToCsvConverter;
                 }
 
                 var sourceIndexes = sourceTable.FieldIndexes;
-                var finalHeadersList = sourceHeaders.ToList();
+                var finalHeadersList = new List<string>();
 
                 foreach (var mapping in keyMappings)
 
@@ -2060,7 +2058,7 @@ namespace XerToCsvConverter;
 
                 finalHeadersList.Add(FieldNames.MonthUpdate);
 
-                string[] finalHeaders = finalHeadersList.Select(s => StringInternPool.Intern(s) ?? string.Empty).ToArray();
+                string[] finalHeaders = CreateEnhancedHeaders(sourceTable, newTableName, finalHeadersList);
 
 
 
@@ -2160,6 +2158,7 @@ namespace XerToCsvConverter;
 
 
                 resultTable.AddRows(transformedRows);
+                RecordSimpleIdentityWarnings(sourceTable, newTableName);
 
                 return resultTable;
 
@@ -2225,7 +2224,7 @@ namespace XerToCsvConverter;
                 var sourceIndexes = taskPredTable.FieldIndexes;
 
                 // Define all output columns (existing + new calculated columns)
-                var finalHeadersList = sourceHeaders.ToList();
+                var finalHeadersList = new List<string>();
 
                 finalHeadersList.Add(FieldNames.TaskIdKey);
 
@@ -2261,7 +2260,7 @@ namespace XerToCsvConverter;
 
                 finalHeadersList.Add(FieldNames.MonthUpdate);
 
-                string[] finalHeaders = finalHeadersList.Select(s => StringInternPool.Intern(s) ?? string.Empty).ToArray();
+                string[] finalHeaders = CreateEnhancedHeaders(taskPredTable, EnhancedTableNames.XerPredecessor06, finalHeadersList);
 
 
 
@@ -2305,6 +2304,7 @@ namespace XerToCsvConverter;
                 var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
 
                 var transformedRows = new DataRow[taskPredTable.RowCount];
+                int[] relationshipOrdinals = SourceOrdinals(taskPredTable);
 
 
 
@@ -2452,8 +2452,15 @@ namespace XerToCsvConverter;
 
                     // Calculate Free Float (passing lag in HOURS)
 
-                    string freeFloatInDays = CalculateFreeFloat(sourceRow, sourceIndexes,
-                        relationshipTasks, relationshipCalendars, schedOptionsLookup);
+                    var assessment = AssessRelationship(sourceRow, relationshipTasks, relationshipCalendars,
+                        schedOptionsLookup, relationshipOrdinals[rowIndex], false, default);
+                    string freeFloatInDays = assessment.FormattedDays;
+                    if (assessment.Classification is RelationshipFloatClassification.InvalidData
+                        or RelationshipFloatClassification.MissingData or RelationshipFloatClassification.Unsupported)
+                        RecordDataQualityWarning(EnhancedTableNames.XerPredecessor06,
+                            "RELATIONSHIP_" + assessment.ReasonCode, assessment.Message, sourceRow,
+                            relationshipOrdinals[rowIndex], TableNames.TaskPred, "free_float", "",
+                            XerDataQuality.RawRowJson(taskPredTable, sourceRow));
 
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloatInDays);
 
@@ -2898,7 +2905,7 @@ namespace XerToCsvConverter;
 
         private static void ReportExportCompletion(IProgress<(int percent, string message)>? progress, int warningCount) =>
             progress?.Report((100, warningCount > 0
-                ? $"Completed with warnings: {warningCount} actual allocation issue(s). See {XerDataQuality.FileName}."
+                ? $"Completed with warnings: {warningCount} source-data or calculation issue(s). See {XerDataQuality.FileName}."
                 : "Export complete."));
 
         private static async Task<ResolvedStandardExport> ResolveRequestedTablesAsync(
@@ -2910,10 +2917,10 @@ namespace XerToCsvConverter;
             string[] names = requested.Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(name => name, StringComparer.Ordinal).ToArray();
             foreach (string name in names) StandardExportPublication.ValidateTableName(name);
-            bool includeDataQuality = names.Contains(EnhancedTableNames.XerResourceDist15, StringComparer.OrdinalIgnoreCase);
+            bool includeDataQuality = names.Any(name => StandardExportSchema.SourceTable(name) is not null);
             if (includeDataQuality && (dataStore.GetTable(XerDataQuality.TableName) is not null
                 || names.Contains(XerDataQuality.TableName, StringComparer.OrdinalIgnoreCase)))
-                throw new InvalidDataException($"'{XerDataQuality.TableName}' is reserved for the generated data-quality companion when exporting table 15. No CSV files have been published by this export.");
+                throw new InvalidDataException($"'{XerDataQuality.TableName}' is reserved for the generated Enhanced data-quality companion. No CSV files have been published by this export.");
             cancellationToken.ThrowIfCancellationRequested();
             foreach (string tableName in dataStore.TableNames)
                 XerSourceSchema.ValidateHeaders(tableName, dataStore.GetTable(tableName)!.Headers);
@@ -2940,28 +2947,37 @@ namespace XerToCsvConverter;
                     if (sourceName is null)
                         throw Missing(requestedName, "the requested raw table is absent or the enhanced table is unsupported");
                     if (dataStore.GetTable(sourceName)?.Headers is null)
-                        throw Missing(requestedName, $"required source table '{sourceName}' or its headers are absent");
+                    {
+                        result.Add(transformer.RecoverEnhancedTable(name));
+                        continue;
+                    }
 
                     if (name is EnhancedTableNames.XerTask01 or EnhancedTableNames.XerBaseline04)
                     {
-                        foreach (string dependency in new[] { TableNames.Task, TableNames.Calendar, TableNames.Project })
-                            if (dataStore.GetTable(dependency)?.Headers is null)
-                                throw Missing(requestedName, $"required source table '{dependency}' or its headers are absent");
                         if (!cache.ContainsKey(EnhancedTableNames.XerTask01))
                         {
                             XerTable? tasks = StandardExportSchema.CreateIfSourceEmpty(dataStore, EnhancedTableNames.XerTask01)
                                 ?? transformer.Create01XerTaskTable();
-                            if (tasks is null)
-                                throw GenerationFailed(requestedName, EnhancedTableNames.XerTask01,
-                                    "required activity-table calculation failed");
+                            tasks ??= transformer.RecoverEnhancedTable(EnhancedTableNames.XerTask01,
+                                transformer.GetGenerationFailure(EnhancedTableNames.XerTask01));
                             cache.TryAdd(EnhancedTableNames.XerTask01, tasks);
                         }
                     }
 
                     if (!cache.TryGetValue(name, out table))
                     {
-                        table = StandardExportSchema.CreateIfSourceEmpty(dataStore, name)
-                            ?? GenerateEnhancedTable(transformer, name, cache);
+                        try
+                        {
+                            table = StandardExportSchema.CreateIfSourceEmpty(dataStore, name)
+                                ?? GenerateEnhancedTable(transformer, name, cache);
+                        }
+                        catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
+                        {
+                            // Preserve source rows and report the failure explicitly. A
+                            // transformation failure must not erase other selected tables.
+                            table = transformer.RecoverEnhancedTable(name, ex);
+                        }
+                        table ??= transformer.RecoverEnhancedTable(name, transformer.GetGenerationFailure(name));
                         if (table is not null) cache.TryAdd(name, table);
                     }
                 }
@@ -2976,8 +2992,9 @@ namespace XerToCsvConverter;
                 result.Add(table);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            XerTable? diagnostics = includeDataQuality ? transformer.CreateDataQualityTable() : null;
-            // Always publish the header when 15 is selected: a clean rerun must
+            XerTable? diagnostics = includeDataQuality
+                ? transformer.CreateDataQualityTable(result.Select(table => table.Name)) : null;
+            // Always publish the header for Enhanced exports: a clean rerun must
             // replace, not leave behind, warnings from an earlier export.
             if (diagnostics is not null) result.Add(diagnostics);
             return new ResolvedStandardExport(result.ToArray(), diagnostics?.Rows.Count ?? 0);

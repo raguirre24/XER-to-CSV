@@ -252,13 +252,13 @@ public sealed class ResourceCurveCalculationTests
     }
 
     [Fact]
-    public void Assigned_curve_missing_its_data_table_fails_instead_of_spreading_uniformly()
+    public void Assigned_curve_missing_its_data_table_warns_instead_of_spreading_uniformly()
     {
         AssertRejected(Store());
     }
 
     [Fact]
-    public void Unknown_curve_id_fails_instead_of_using_the_only_available_curve()
+    public void Unknown_curve_id_warns_instead_of_using_the_only_available_curve()
     {
         XerDataStore store = Store(Loaded());
         Set(store, "TASKRSRC", "curv_id", "UNKNOWN");
@@ -267,7 +267,7 @@ public sealed class ResourceCurveCalculationTests
     }
 
     [Fact]
-    public void Duplicate_curve_identity_fails_instead_of_using_first_or_last_row()
+    public void Duplicate_curve_identity_warns_instead_of_using_first_or_last_row()
     {
         XerDataStore store = Store(Loaded());
         XerTable curves = Required(store, "RSRCCURVDATA");
@@ -286,7 +286,7 @@ public sealed class ResourceCurveCalculationTests
     [InlineData("5,0")]
     [InlineData("not-a-number")]
     [InlineData("1e100")]
-    public void Invalid_curve_usage_percentage_fails_instead_of_becoming_zero(string value)
+    public void Invalid_curve_usage_percentage_warns_instead_of_becoming_zero(string value)
     {
         XerDataStore store = Store(Linear());
         Set(store, "RSRCCURVDATA", "pct_usage_7", value);
@@ -407,7 +407,7 @@ public sealed class ResourceCurveCalculationTests
     [InlineData("99:48")]
     [InlineData("50:24;50:23.5")]
     [InlineData("100,48")]
-    public void Invalid_or_unreconciled_manual_profile_fails_instead_of_falling_back(string profile)
+    public void Invalid_or_unreconciled_manual_profile_warns_instead_of_falling_back(string profile)
     {
         XerDataStore store = Store(Loaded());
         Set(store, "TASKRSRC", "remain_crv", profile);
@@ -511,10 +511,13 @@ public sealed class ResourceCurveCalculationTests
             default: throw new InvalidOperationException(defect);
         }
 
-        if (defect is "invalid calendar" or "no working time")
-            Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
-        else
-            AssertRejected(store);
+        AssertRejected(store, defect switch
+        {
+            "invalid calendar" => "RESOURCE_CALENDAR_INVALID",
+            "no working time" => "REMAINING_NO_WORKING_TIME",
+            "zero duration" => "REMAINING_PERIOD_INVALID",
+            _ => "REMAINING_PROFILE_INVALID"
+        });
     }
 
     [Fact]
@@ -740,12 +743,25 @@ public sealed class ResourceCurveCalculationTests
         Assert.Equal(quantities, rows.Select(row => row["monthly_quantity"]).ToArray());
     private static decimal Quantity(Dictionary<string, string> row) =>
         decimal.Parse(row["monthly_quantity"], CultureInfo.InvariantCulture);
-    private static void AssertRejected(XerDataStore store)
+    private static void AssertRejected(XerDataStore store, string code = "REMAINING_PROFILE_INVALID")
     {
-        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
-            new XerTransformer(store).Create15XerResourceDistribution());
-        Assert.Contains(Source, exception.Message, StringComparison.Ordinal);
-        Assert.Contains("A1", exception.Message, StringComparison.Ordinal);
+        var transformer = new XerTransformer(store);
+        Assert.Empty(Assert.IsType<XerTable>(transformer.Create15XerResourceDistribution()).Rows);
+        XerTable diagnostics = transformer.CreateDataQualityTable();
+        DataRow warning = Assert.Single(diagnostics.Rows);
+        XerTable assignments = Required(store, "TASKRSRC");
+        DataRow assignment = Assert.Single(assignments.Rows);
+        Assert.Equal("Warning", warning.Fields[diagnostics.FieldIndexes["severity"]]);
+        Assert.Equal(code, warning.Fields[diagnostics.FieldIndexes["issue_code"]]);
+        Assert.Equal("Remaining", warning.Fields[diagnostics.FieldIndexes["allocation_portion"]]);
+        Assert.Equal(Source, warning.Fields[diagnostics.FieldIndexes["source_namespace"]]);
+        Assert.Equal("A1", warning.Fields[diagnostics.FieldIndexes["taskrsrc_id"]]);
+        Assert.NotEmpty(warning.Fields[diagnostics.FieldIndexes["message"]]);
+        foreach (string field in new[] { "remain_qty", "curv_id", "remain_crv", "restart_date", "reend_date" })
+            Assert.Equal(assignment.Fields[assignments.FieldIndexes[field]], warning.Fields[diagnostics.FieldIndexes[field]]);
+        Assert.Equal(decimal.Parse(assignment.Fields[assignments.FieldIndexes["remain_qty"]], CultureInfo.InvariantCulture),
+            decimal.Parse(warning.Fields[diagnostics.FieldIndexes["unallocated_remaining_quantity"]], CultureInfo.InvariantCulture));
+        Assert.Null(transformer.GetGenerationFailure(EnhancedTableNames.XerResourceDist15));
     }
     private static void AssertEquivalentExceptMethod(Dictionary<string, string>[] expected, Dictionary<string, string>[] actual)
     {

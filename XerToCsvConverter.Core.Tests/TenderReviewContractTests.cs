@@ -48,4 +48,43 @@ public sealed class TenderReviewContractTests
             "schema_version,bundle_profile,bundle_id,bundle_status,parser_version,project_code,project_name,original_xer_filename,canonical_xer_filename,status_date,update_date,data_date,source_sha256,table_name,row_count,csv_sha256,exported_at_utc",
             string.Join(',', TenderReviewContract.ManifestColumns));
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Aggregation_never_crosses_sources_with_blank_keys_and_preserves_conflicting_contributions(bool sameSource)
+    {
+        var request = TenderReviewNamingTests.Request(new[]
+        {
+            TenderReviewNamingTests.Source(0, "same.xer", "2026-09-05"),
+            TenderReviewNamingTests.Source(1, "same.xer", "2026-09-06")
+        });
+        var resolved = TenderReviewNaming.Resolve(request, s => s.SourceSha256!);
+        var contract = TenderReviewContract.GetTable("15_XER_RESOURCE_DISTRIBUTION");
+        var firstValues = contract.Columns.ToDictionary(c => c.Name, _ => "", StringComparer.Ordinal);
+        firstValues["is_actual"] = "false";
+        firstValues["distribution_month"] = "2026-09-01";
+        firstValues["monthly_quantity"] = "2";
+        firstValues["rsrc_name"] = "First label";
+        var secondValues = new Dictionary<string, string>(firstValues, StringComparer.Ordinal)
+        {
+            ["monthly_quantity"] = "3",
+            ["rsrc_name"] = "Second label"
+        };
+        var first = new TenderReviewOutputRow(resolved.Sources[0], firstValues);
+        var second = new TenderReviewOutputRow(resolved.Sources[sameSource ? 0 : 1], secondValues);
+        var warnings = new List<string>();
+        var rows = TenderReviewTransformer.AggregateResourceDistribution(contract, new[] { first, second },
+            (_, message) => warnings.Add(message));
+        Assert.Equal(2, rows.Count);
+        Assert.Same(first.Source, rows[0].Source);
+        Assert.Same(second.Source, rows[1].Source);
+        foreach (string column in contract.Columns.Select(c => c.Name))
+        {
+            Assert.Equal(first.Values[column], rows[0].Values[column]);
+            Assert.Equal(second.Values[column], rows[1].Values[column]);
+        }
+        if (sameSource) Assert.Single(warnings);
+        else Assert.Empty(warnings);
+    }
 }

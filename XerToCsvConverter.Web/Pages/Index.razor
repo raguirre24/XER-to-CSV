@@ -963,7 +963,7 @@
             : $"{subject} complete.";
         _exportWarningMessage = warningCount > 0
             ? $"{_progressMessage} {warningCount} data-quality issue(s). See XER_DATA_QUALITY.csv in the download " +
-              "for unallocated actuals and original source values. Check browser downloads for saved-file delivery."
+              "for affected tables and fields, original source values, and any unallocated actual or remaining quantities. Check browser downloads for saved-file delivery."
             : string.Empty;
         LogActivity(warningCount > 0 ? _exportWarningMessage : _progressMessage);
     }
@@ -972,11 +972,13 @@
     {
         if (_dataStore is null) return;
         var enhanced = new List<string>();
-        if (_dataStore.ContainsTable(TableNames.Task) && _dataStore.ContainsTable(TableNames.Calendar) && _dataStore.ContainsTable(TableNames.Project))
+        // Show every Enhanced output with a primary source; missing lookups
+        // are reported by Core without hiding otherwise available source rows.
+        if (_dataStore.ContainsTable(TableNames.Task))
         { enhanced.Add(EnhancedTableNames.XerTask01); enhanced.Add(EnhancedTableNames.XerBaseline04); }
         if (_dataStore.ContainsTable(TableNames.Project)) enhanced.Add(EnhancedTableNames.XerProject02);
         if (_dataStore.ContainsTable(TableNames.ProjWbs)) enhanced.Add(EnhancedTableNames.XerProjWbs03);
-        if (_dataStore.ContainsTable(TableNames.TaskPred) && _dataStore.ContainsTable(TableNames.Task)) enhanced.Add(EnhancedTableNames.XerPredecessor06);
+        if (_dataStore.ContainsTable(TableNames.TaskPred)) enhanced.Add(EnhancedTableNames.XerPredecessor06);
         if (_dataStore.ContainsTable(TableNames.ActvType)) enhanced.Add(EnhancedTableNames.XerActvType07);
         if (_dataStore.ContainsTable(TableNames.ActvCode)) enhanced.Add(EnhancedTableNames.XerActvCode08);
         if (_dataStore.ContainsTable(TableNames.TaskActv)) enhanced.Add(EnhancedTableNames.XerTaskActv09);
@@ -985,7 +987,7 @@
         if (_dataStore.ContainsTable(TableNames.Rsrc)) enhanced.Add(EnhancedTableNames.XerRsrc12);
         if (_dataStore.ContainsTable(TableNames.TaskRsrc)) enhanced.Add(EnhancedTableNames.XerTaskRsrc13);
         if (_dataStore.ContainsTable(TableNames.Umeasure)) enhanced.Add(EnhancedTableNames.XerUmeasure14);
-        if (_dataStore.ContainsTable(TableNames.TaskRsrc) && _dataStore.ContainsTable(TableNames.Calendar) && _dataStore.ContainsTable(TableNames.Task))
+        if (_dataStore.ContainsTable(TableNames.TaskRsrc))
             enhanced.Add(EnhancedTableNames.XerResourceDist15);
         foreach (string name in enhanced)
             if (!_allTableNames.Contains(name, StringComparer.OrdinalIgnoreCase)) _allTableNames.Add(name);

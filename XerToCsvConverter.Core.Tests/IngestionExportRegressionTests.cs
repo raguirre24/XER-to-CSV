@@ -146,7 +146,7 @@ public sealed class IngestionExportRegressionTests
         XerDataStore merged = await Parse("2601.xer");
         merged.MergeStore(await Parse("2602.xer"));
         Assert.Equal(2, merged.GetTable("PROJECT")!.Rows.Select(row => row.SourceToken).Distinct().Count());
-        Assert.Single(await new ProcessingService().ExportTablesToMemoryAsync(merged, ["02_XER_PROJECT"], null, CancellationToken.None));
+        Assert.Equal(2, (await new ProcessingService().ExportTablesToMemoryAsync(merged, ["02_XER_PROJECT"], null, CancellationToken.None)).Count);
         merged.MergeStore(await Parse("2601.xer"));
         InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() => new ProcessingService().ExportTablesToMemoryAsync(
             merged, ["02_XER_PROJECT"], null, CancellationToken.None));
@@ -218,19 +218,21 @@ public sealed class IngestionExportRegressionTests
     }
 
     [Fact]
-    public async Task Any_missing_requested_output_fails_before_replacing_existing_selected_files()
+    public async Task Missing_numbered_source_is_explicit_header_only_without_blocking_other_available_outputs()
     {
         using var folder = new TemporaryFolder();
         string selected = Path.Combine(folder.Path, "PROJECT.csv");
         File.WriteAllText(selected, "original");
         XerDataStore store = Raw("PROJECT", ["proj_id"], ["P1"]);
 
-        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() => new ProcessingService().ExportTablesAsync(
-            store, ["PROJECT", "01_XER_TASK"], folder.Path, null, CancellationToken.None));
+        var result = await new ProcessingService().ExportTablesWithDiagnosticsAsync(
+            store, ["PROJECT", "01_XER_TASK"], folder.Path, null, CancellationToken.None);
 
-        Assert.Contains("No CSV files have been published", error.Message);
-        Assert.Equal("original", File.ReadAllText(selected));
-        Assert.Single(Directory.GetFiles(folder.Path));
+        Assert.Contains("P1", File.ReadAllText(selected));
+        Assert.Single(CsvLines(File.ReadAllBytes(Path.Combine(folder.Path, "01_XER_TASK.csv"))));
+        Assert.Equal(1, result.WarningCount);
+        Assert.Contains("SOURCE_TABLE_UNAVAILABLE", File.ReadAllText(Path.Combine(folder.Path, XerDataQuality.FileName)));
+        Assert.Equal(3, Directory.GetFiles(folder.Path).Length);
     }
 
     [Fact]

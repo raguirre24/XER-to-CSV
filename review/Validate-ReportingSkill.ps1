@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $skillRoot = Join-Path $RepositoryRoot 'skills/p6-numbered-xer-reporting'
 $assemblyPath = Join-Path $RepositoryRoot 'XerToCsvConverter.Core/bin/Debug/net8.0/XerToCsvConverter.Core.dll'
 if (-not (Test-Path -LiteralPath $assemblyPath)) { throw 'Build Core before checking the documented contracts.' }
-Add-Type -Path $assemblyPath
+$null = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($assemblyPath))
 
 $contractText = Get-Content -LiteralPath (Join-Path $skillRoot 'references/profile-contracts.md') -Raw
 $sharedMatch = [regex]::Match($contractText, '(?s)## Eight shared review table headers(.*?)## Manifests')
@@ -40,6 +40,13 @@ $dictionaryText = Get-Content -LiteralPath (Join-Path $skillRoot 'references/tab
 $diagnosticHeader = [regex]::Match($dictionaryText, '(?m)^diagnostic_schema_version,[^\r\n]+').Value
 $actualDiagnosticHeader = (@([XerToCsvConverter.XerDataQuality]::Columns) + 'FileName') -join ','
 if ($diagnosticHeader -cne $actualDiagnosticHeader) { throw 'Documented diagnostic companion header mismatch.' }
+$legacyDiagnosticColumns = 'diagnostic_schema_version,severity,issue_code,table_name,source_namespace,source_row_number,proj_id_key,task_id_key,rsrc_id_key,taskrsrc_id_key,taskrsrc_id,task_code,rsrc_name,rsrc_type,unit,status_code,act_start_date,act_end_date,project_data_date,act_reg_qty,act_ot_qty,unallocated_actual_quantity,message'.Split(',')
+$appendedDiagnosticColumns = 'allocation_portion,restart_date,reend_date,remain_qty,curv_id,remain_crv,unallocated_remaining_quantity'.Split(',')
+$generalEvidenceColumns = 'source_table,column_name,raw_value,raw_row_json'.Split(',')
+if ([XerToCsvConverter.XerDataQuality]::SchemaVersion -cne '1.2' -or
+    $actualDiagnosticHeader -cne (($legacyDiagnosticColumns + $appendedDiagnosticColumns + $generalEvidenceColumns + 'FileName') -join ',')) {
+    throw 'Diagnostic 1.2 must preserve all former 30 data columns and append the four general source-evidence fields.'
+}
 
 $linkCount = 0
 $files = Get-ChildItem -LiteralPath $skillRoot -Recurse -File
@@ -57,4 +64,4 @@ foreach ($file in $files) {
         $linkCount++
     }
 }
-Write-Output "Passed: $checkedContracts exact numbered review table contracts, diagnostic companion header, $linkCount relative reference links, and skill whitespace."
+Write-Output "Passed: $checkedContracts exact numbered review table contracts, additive 35-column diagnostic 1.2 companion header, $linkCount relative reference links, and skill whitespace."

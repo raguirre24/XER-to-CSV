@@ -22,7 +22,7 @@ public sealed class ExportDataQualitySurfaceTests
         Assert.Contains("completed with warnings", source, StringComparison.Ordinal);
         Assert.Contains("data-quality issue(s)", source, StringComparison.Ordinal);
         Assert.Contains("XER_DATA_QUALITY.csv", source, StringComparison.Ordinal);
-        Assert.Contains("unallocated actuals and original source values", source, StringComparison.Ordinal);
+        Assert.Contains("affected tables and fields, original source values, and any unallocated actual or remaining quantities", source, StringComparison.Ordinal);
         Assert.Contains("Export Completed with Warnings", source, StringComparison.Ordinal);
     }
 
@@ -45,6 +45,7 @@ public sealed class ExportDataQualitySurfaceTests
         Assert.Contains("completed with warnings", warningBlock, StringComparison.Ordinal);
         Assert.Contains("{result.WarningCount}", warningBlock, StringComparison.Ordinal);
         Assert.Contains("XER_DATA_QUALITY.csv", warningBlock, StringComparison.Ordinal);
+        Assert.Contains("affected tables and fields, original source values, and any unallocated actual or remaining quantities", warningBlock, StringComparison.Ordinal);
         Assert.DoesNotContain("Console.WriteLine(", warningBlock, StringComparison.Ordinal);
     }
 
@@ -79,6 +80,7 @@ public sealed class ExportDataQualitySurfaceTests
         Assert.Contains("warningCount > 0", completion, StringComparison.Ordinal);
         Assert.Contains("{warningCount} data-quality issue(s)", completion, StringComparison.Ordinal);
         Assert.Contains("XER_DATA_QUALITY.csv", completion, StringComparison.Ordinal);
+        Assert.Contains("affected tables and fields, original source values, and any unallocated actual or remaining quantities", completion, StringComparison.Ordinal);
         Assert.DoesNotContain("_exportWarningMessage", end, StringComparison.Ordinal);
         Assert.Contains("_exportWarningMessage = string.Empty;", begin, StringComparison.Ordinal);
         Assert.Contains("_exportWarningMessage = string.Empty;", clear, StringComparison.Ordinal);
@@ -96,6 +98,27 @@ public sealed class ExportDataQualitySurfaceTests
             StringSplitOptions.None).Length - 1);
         Assert.Contains(".file-status.warnings", ReadSource("XerToCsvConverter.Web/wwwroot/css/app.css"),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnhancedAvailabilityDependsOnPrimarySourceNotAllCalculationLookups()
+    {
+        string windows = ReadSource("MainForm.cs");
+        int start = windows.IndexOf("private void CheckEnhancedTableDependencies()", StringComparison.Ordinal);
+        int finish = windows.IndexOf("private bool CheckSpecificPbiDependency", start, StringComparison.Ordinal);
+        string availability = windows[start..finish];
+        Assert.Contains("bool flag = _dataStore.ContainsTable(\"TASK\");", availability, StringComparison.Ordinal);
+        Assert.Contains("_canCreateTask01 = flag;", availability, StringComparison.Ordinal);
+        Assert.Contains("bool canCreatePredecessor = _dataStore.ContainsTable(TableNames.TaskPred);", availability, StringComparison.Ordinal);
+        Assert.Contains("_canCreateResourceDist15 = flag4;", availability, StringComparison.Ordinal);
+        Assert.DoesNotContain("&&", availability, StringComparison.Ordinal);
+
+        string web = ReadPrivateMethod(ReadSource("XerToCsvConverter.Web/Pages/Index.razor"),
+            "private void AddEnhancedTableNames()");
+        Assert.Contains("if (_dataStore.ContainsTable(TableNames.Task))", web, StringComparison.Ordinal);
+        Assert.Contains("if (_dataStore.ContainsTable(TableNames.TaskPred))", web, StringComparison.Ordinal);
+        Assert.Contains("if (_dataStore.ContainsTable(TableNames.TaskRsrc))", web, StringComparison.Ordinal);
+        Assert.DoesNotContain("&&", web, StringComparison.Ordinal);
     }
 
     private static string ReadPrivateMethod(string source, string signature)

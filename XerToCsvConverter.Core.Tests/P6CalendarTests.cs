@@ -426,7 +426,9 @@ public sealed class P6CalendarTests
         var transformer = new XerTransformer(Store(new Calendar("c", blob)));
         XerTable raw = Assert.IsType<XerTable>(transformer.Create10XerCalendar());
         Assert.Equal(blob, Field(raw, Assert.Single(raw.Rows), "clndr_data"));
-        Assert.Null(transformer.Create11XerCalendarDetailed());
+        XerTable detailed = Assert.IsType<XerTable>(transformer.Create11XerCalendarDetailed());
+        Assert.All(detailed.Rows, row => Assert.Equal("", Field(detailed, row, "work_hours")));
+        Assert.NotEmpty(transformer.CreateDataQualityTable().Rows);
     }
 
     [Fact]

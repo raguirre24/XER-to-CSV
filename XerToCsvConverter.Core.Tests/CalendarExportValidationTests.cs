@@ -8,32 +8,30 @@ public sealed class CalendarExportValidationTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("malformed")]
-    public async Task Missing_or_malformed_requested_11_fails_memory_export(string? calendarData)
+    public async Task Missing_or_malformed_requested_11_preserves_memory_export(string? calendarData)
     {
-        var service = new ProcessingService();
-        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            service.ExportTablesToMemoryAsync(Store(calendarData),
-                new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerCalendarDetailed11 },
-                null, CancellationToken.None));
-
-        Assert.Contains(EnhancedTableNames.XerCalendarDetailed11, error.Message, StringComparison.Ordinal);
+        var result = await new ProcessingService().ExportTablesToMemoryWithDiagnosticsAsync(Store(calendarData),
+            new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerCalendarDetailed11 }, null, CancellationToken.None);
+        Assert.Equal(3, result.Files.Count);
+        Assert.True(result.WarningCount > 0);
+        Assert.Contains("preserved", Encoding.UTF8.GetString(result.Files["AUDIT_SOURCE"]));
+        Assert.Contains("work_hours", Lines(result.Files[EnhancedTableNames.XerCalendarDetailed11])[0]);
+        Assert.Contains(calendarData ?? "SOURCE_TABLE_UNAVAILABLE", Encoding.UTF8.GetString(result.Files[XerDataQuality.TableName]));
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("malformed")]
-    public async Task Missing_or_malformed_requested_11_fails_before_any_disk_CSV_is_written(string? calendarData)
+    public async Task Missing_or_malformed_requested_11_preserves_disk_export(string? calendarData)
     {
         using var output = new TemporaryOutput();
-        var service = new ProcessingService();
-        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            service.ExportTablesAsync(Store(calendarData),
-                new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerCalendarDetailed11 },
-                output.Path, null, CancellationToken.None));
-
-        Assert.Contains(EnhancedTableNames.XerCalendarDetailed11, error.Message, StringComparison.Ordinal);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(output.Path));
+        var result = await new ProcessingService().ExportTablesWithDiagnosticsAsync(Store(calendarData),
+            new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerCalendarDetailed11 },
+            output.Path, null, CancellationToken.None);
+        Assert.Equal(3, result.Files.Count);
+        Assert.True(result.WarningCount > 0);
+        Assert.Equal(3, Directory.EnumerateFiles(output.Path).Count());
     }
 
     [Theory]
@@ -45,7 +43,8 @@ public sealed class CalendarExportValidationTests
         var bytes = await Export(toDisk, Store(P6TestCalendars.WorkWeek()),
             new List<string> { EnhancedTableNames.XerCalendarDetailed11 }, output.Path);
 
-        byte[] csv = Assert.Single(bytes).Value;
+        Assert.Equal(2, bytes.Count);
+        byte[] csv = bytes[EnhancedTableNames.XerCalendarDetailed11];
         string[] lines = Lines(csv);
         Assert.Equal(8, lines.Length); // Header plus seven explicitly defined weekdays.
         Assert.Contains("work_hours", lines[0], StringComparison.Ordinal);
@@ -63,12 +62,13 @@ public sealed class CalendarExportValidationTests
         store.GetTable("CALENDAR")!.AddRow(new DataRow(
             new[] { "UNUSED", "Malformed unused calendar", "CA_Project", "8", "malformed" }, "source"));
         AddRelationships(store);
-        Assert.Null(new XerTransformer(store).Create11XerCalendarDetailed());
+        Assert.NotNull(new XerTransformer(store).Create11XerCalendarDetailed());
 
         var bytes = await Export(toDisk, store,
             new List<string> { EnhancedTableNames.XerPredecessor06 }, output.Path);
 
-        KeyValuePair<string, byte[]> exported = Assert.Single(bytes);
+        Assert.Equal(2, bytes.Count);
+        KeyValuePair<string, byte[]> exported = bytes.Single(pair => pair.Key == EnhancedTableNames.XerPredecessor06);
         Assert.Equal(EnhancedTableNames.XerPredecessor06, exported.Key);
         string[] lines = Lines(exported.Value);
         Assert.Equal(2, lines.Length);
@@ -82,67 +82,84 @@ public sealed class CalendarExportValidationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Failed_requested_06_with_relationships_rejects_export_before_any_CSV_is_written(bool toDisk)
+    public async Task Colliding_raw_06_column_is_preserved_without_blocking_other_tables(bool toDisk)
     {
         using var output = new TemporaryOutput();
         XerDataStore store = Store(P6TestCalendars.WorkWeek());
         AddRelationships(store);
         XerTable original = store.GetTable("TASKPRED")!;
         var conflicting = new XerTable("TASKPRED");
-        // A raw field colliding with an added field cannot form a valid enhanced
-        // schema. Previously this table disappeared and unrelated CSVs still wrote.
         conflicting.SetHeaders(original.Headers!.Append("free_float").ToArray());
-        conflicting.AddRows(original.Rows.Select(row => new DataRow(
-            row.Fields.Append("0").ToArray(), row.SourceFilename)));
+        conflicting.AddRows(original.Rows.Select(row => row.WithFields(row.Fields.Append("99").ToArray())));
         store.AddTable(conflicting);
-
-        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            Export(toDisk, store, new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerPredecessor06 }, output.Path));
-
-        Assert.Contains(EnhancedTableNames.XerPredecessor06, error.Message, StringComparison.Ordinal);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(output.Path));
+        var files = await Export(toDisk, store, new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerPredecessor06 }, output.Path);
+        Assert.Equal(3, files.Count);
+        string[] lines = Lines(files[EnhancedTableNames.XerPredecessor06]);
+        string[] headers = lines[0].Split(','), values = lines[1].Split(',');
+        Assert.Equal("99", values[Array.IndexOf(headers, "raw_free_float")]);
+        Assert.Equal("1", values[Array.IndexOf(headers, "free_float")]);
+        Assert.Contains("SOURCE_COLUMN_COLLISION", Encoding.UTF8.GetString(files[XerDataQuality.TableName]));
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Explicit_requested_06_without_relationship_source_fails_the_complete_export(bool toDisk)
+    public async Task Explicit_requested_06_without_relationship_source_is_header_only_and_warned(bool toDisk)
     {
         using var output = new TemporaryOutput();
-        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            Export(toDisk, Store(P6TestCalendars.WorkWeek()),
-                new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerPredecessor06 }, output.Path));
-        Assert.Contains("TASKPRED", error.Message);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(output.Path));
+        var files = await Export(toDisk, Store(P6TestCalendars.WorkWeek()),
+            new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerPredecessor06 }, output.Path);
+        Assert.Equal(3, files.Count);
+        Assert.Single(Lines(files[EnhancedTableNames.XerPredecessor06]));
+        Assert.Contains("SOURCE_TABLE_UNAVAILABLE", Encoding.UTF8.GetString(files[XerDataQuality.TableName]));
+        Assert.Contains("TASKPRED", Encoding.UTF8.GetString(files[XerDataQuality.TableName]));
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Failed_15_with_assignments_rejects_export_and_preserves_empty_disk_output(bool toDisk)
+    public async Task Invalid_assignment_calendar_preserves_requested_exports_and_unallocated_quantity(bool toDisk)
     {
         using var output = new TemporaryOutput();
         XerDataStore store = Store("malformed");
         AddAssignments(store);
+        AddTable(store, "RSRC", new[] { "rsrc_id", "rsrc_name", "rsrc_type" }, new[] { "R1", "Labour", "RT_Labor" });
 
-        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            Export(toDisk, store, new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerResourceDist15 }, output.Path));
+        Dictionary<string, byte[]> files = await Export(toDisk, store,
+            new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerResourceDist15 }, output.Path);
 
-        Assert.Contains(EnhancedTableNames.XerResourceDist15, error.Message, StringComparison.Ordinal);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(output.Path));
+        Assert.Equal(3, files.Count);
+        Assert.Contains("preserved", Encoding.UTF8.GetString(files["AUDIT_SOURCE"]), StringComparison.Ordinal);
+        Assert.Single(Lines(files[EnhancedTableNames.XerResourceDist15]));
+        using var stream = new MemoryStream(files[XerDataQuality.TableName], writable: false);
+        using var parser = new Microsoft.VisualBasic.FileIO.TextFieldParser(stream, Encoding.UTF8, detectEncoding: false)
+        { TextFieldType = Microsoft.VisualBasic.FileIO.FieldType.Delimited, HasFieldsEnclosedInQuotes = true, TrimWhiteSpace = false };
+        parser.SetDelimiters(",");
+        string[] headers = parser.ReadFields()!;
+        Dictionary<string, string> warning = headers.Zip(parser.ReadFields()!)
+            .ToDictionary(pair => pair.First, pair => pair.Second);
+        Assert.True(parser.EndOfData);
+        Assert.Equal(XerDataQuality.Columns.Append("FileName"), headers);
+        Assert.Equal("RESOURCE_CALENDAR_INVALID", warning["issue_code"]);
+        Assert.Equal("Remaining", warning["allocation_portion"]);
+        Assert.Equal("A1", warning["taskrsrc_id"]);
+        Assert.Equal("8.0000", warning["unallocated_remaining_quantity"]);
+        Assert.Equal("", warning["unallocated_actual_quantity"]);
+        Assert.Equal("malformed", store.GetTable("CALENDAR")!.Rows[0].Fields[store.GetTable("CALENDAR")!.FieldIndexes["clndr_data"]]);
+        Assert.Equal(toDisk ? 3 : 0, Directory.EnumerateFiles(output.Path).Count());
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Explicit_requested_15_without_assignment_source_fails_the_complete_export(bool toDisk)
+    public async Task Explicit_requested_15_without_assignment_source_is_header_only_and_warned(bool toDisk)
     {
         using var output = new TemporaryOutput();
-        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            Export(toDisk, Store(P6TestCalendars.WorkWeek()),
-                new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerResourceDist15 }, output.Path));
-        Assert.Contains("TASKRSRC", error.Message);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(output.Path));
+        var files = await Export(toDisk, Store(P6TestCalendars.WorkWeek()),
+            new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerResourceDist15 }, output.Path);
+        Assert.Equal(3, files.Count);
+        Assert.Single(Lines(files[EnhancedTableNames.XerResourceDist15]));
+        Assert.Contains("TASKRSRC", Encoding.UTF8.GetString(files[XerDataQuality.TableName]));
     }
 
     [Theory]
@@ -154,7 +171,8 @@ public sealed class CalendarExportValidationTests
         XerDataStore store = Store(P6TestCalendars.WorkWeek());
         AddTasksAndProject(store);
         var bytes = await Export(toDisk, store, new List<string> { EnhancedTableNames.XerProject02 }, output.Path);
-        Assert.Equal(EnhancedTableNames.XerProject02, Assert.Single(bytes).Key);
+        Assert.Equal(2, bytes.Count);
+        Assert.Contains(EnhancedTableNames.XerProject02, bytes.Keys);
     }
 
     private static async Task<Dictionary<string, byte[]>> Export(bool toDisk, XerDataStore store,

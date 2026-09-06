@@ -138,7 +138,9 @@ public sealed class TransformerConsistencyRegressionTests
         Assert.Equal("", task["Data Date"]);
         Assert.Equal("", edge["total_float"]);
         Assert.Equal("", edge["free_float"]);
-        Assert.Null(transformer.Create11XerCalendarDetailed());
+        var calendarRows = Records(Assert.IsType<XerTable>(transformer.Create11XerCalendarDetailed()));
+        Assert.All(calendarRows, row => Assert.Equal("", row["work_hours"]));
+        Assert.Equal(2, Records(transformer.CreateDataQualityTable()).Count(row => row["table_name"] == EnhancedTableNames.XerCalendarDetailed11));
     }
 
     [Theory]
@@ -163,7 +165,7 @@ public sealed class TransformerConsistencyRegressionTests
     [InlineData("self_cycle")]
     [InlineData("long_cycle")]
     [InlineData("cross_project_parent")]
-    public void Invalid_wbs_identity_or_ancestry_cannot_be_exported(string defect)
+    public void Invalid_wbs_identity_or_ancestry_preserves_rows_with_unknown_parent_keys(string defect)
     {
         XerDataStore store = Store();
         XerTable table = Required(store, "PROJWBS");
@@ -178,7 +180,11 @@ public sealed class TransformerConsistencyRegressionTests
             else Set(store, "PROJWBS", 1, "proj_id", "P2");
         }
 
-        Assert.Null(new XerTransformer(store).Create03XerProjWbsTable());
+        var transformer = new XerTransformer(store);
+        var rows = Records(Assert.IsType<XerTable>(transformer.Create03XerProjWbsTable()));
+        Assert.Equal(table.RowCount, rows.Length);
+        Assert.All(rows, row => Assert.Equal("", row["parent_wbs_id_key"]));
+        Assert.NotEmpty(transformer.CreateDataQualityTable().Rows);
     }
 
     [Fact]

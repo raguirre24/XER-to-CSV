@@ -334,7 +334,7 @@ public sealed class ResourceCurveProfileTests
     [InlineData("programme", true, true)]
     [InlineData("tender", false, true)]
     [InlineData("tender", true, true)]
-    public async Task Invalid_assigned_curve_rejects_requested_15_before_any_profile_CSV_is_written(
+    public async Task Invalid_assigned_curve_warns_while_every_profile_exports_valid_assignments(
         string profile, bool toDisk, bool malformedDefinition)
     {
         using var output = new TemporaryOutput();
@@ -356,43 +356,72 @@ public sealed class ResourceCurveProfileTests
             back.Fields[curves.FieldIndexes["pct_usage_20"]] = "NaN";
         }
 
-        Exception error;
+        IReadOnlyDictionary<string, byte[]> files;
         switch (profile)
         {
             case "programme":
                 var programme = new ProgrammeReviewBundleService();
                 ProgrammeReviewBundleRequest programmeRequest = ProgrammeReviewNamingTests.Request(new[] { baseline });
-                error = toDisk
-                    ? await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                        programme.BuildFromParsedDataAsync(store, programmeRequest, output.Path))
-                    : await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                        programme.BuildFromParsedDataToMemoryAsync(store, programmeRequest));
+                if (toDisk)
+                {
+                    var result = await programme.BuildFromParsedDataAsync(store, programmeRequest, output.Path);
+                    Assert.Equal(1, result.WarningCount);
+                    files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
+                }
+                else
+                {
+                    var result = await programme.BuildFromParsedDataToMemoryAsync(store, programmeRequest);
+                    Assert.Equal(1, result.WarningCount);
+                    files = result.Files;
+                }
                 break;
             case "tender":
                 var tender = new TenderReviewBundleService();
                 TenderReviewBundleRequest tenderRequest = TenderReviewNamingTests.Request(new[] { tenderSource });
-                error = toDisk
-                    ? await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                        tender.BuildFromParsedDataAsync(store, tenderRequest, output.Path))
-                    : await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                        tender.BuildFromParsedDataToMemoryAsync(store, tenderRequest));
+                if (toDisk)
+                {
+                    var result = await tender.BuildFromParsedDataAsync(store, tenderRequest, output.Path);
+                    Assert.Equal(1, result.WarningCount);
+                    files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
+                }
+                else
+                {
+                    var result = await tender.BuildFromParsedDataToMemoryAsync(store, tenderRequest);
+                    Assert.Equal(1, result.WarningCount);
+                    files = result.Files;
+                }
                 break;
             default:
                 var standard = new ProcessingService();
                 var tables = new List<string> { "AUDIT_SOURCE", EnhancedTableNames.XerResourceDist15 };
-                error = toDisk
-                    ? await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                        standard.ExportTablesAsync(store, tables, output.Path, null, CancellationToken.None))
-                    : await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                        standard.ExportTablesToMemoryAsync(store, tables, null, CancellationToken.None));
+                if (toDisk)
+                {
+                    var result = await standard.ExportTablesWithDiagnosticsAsync(store, tables, output.Path, null, CancellationToken.None);
+                    Assert.Equal(1, result.WarningCount);
+                    files = result.Files.ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
+                }
+                else
+                {
+                    var result = await standard.ExportTablesToMemoryWithDiagnosticsAsync(store, tables, null, CancellationToken.None);
+                    Assert.Equal(1, result.WarningCount);
+                    files = result.Files.ToDictionary(pair => pair.Key + ".csv", pair => pair.Value);
+                }
                 break;
         }
 
-        Assert.Contains(EnhancedTableNames.XerResourceDist15, error.Message, StringComparison.Ordinal);
-        Assert.Contains(source, error.Message, StringComparison.Ordinal);
-        Assert.Contains(malformedDefinition ? "BACK" : "MISSING", error.Message, StringComparison.Ordinal);
-        Assert.Contains("A2", error.Message, StringComparison.Ordinal);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(output.Path));
+        Assert.Equal(profile == "standard" ? 3 : 12, files.Count);
+        Dictionary<string, string>[] allocations = Records(ReadCsv(files[DistributionFile]));
+        Assert.Equal(new[] { 80m, 20m }, Quantities(allocations));
+        IReadOnlyList<string[]> diagnosticCsv = ReadCsv(files[XerDataQuality.FileName]);
+        string[] diagnosticValues = Assert.Single(diagnosticCsv.Skip(1));
+        var warning = diagnosticCsv[0].Zip(diagnosticValues).ToDictionary(pair => pair.First, pair => pair.Second);
+        Assert.Equal("REMAINING_PROFILE_INVALID", warning["issue_code"]);
+        Assert.Equal("Remaining", warning["allocation_portion"]);
+        Assert.Equal("A2", warning["taskrsrc_id"]);
+        Assert.Equal(malformedDefinition ? "BACK" : "MISSING", warning["curv_id"]);
+        Assert.Equal("200", warning["remain_qty"]);
+        Assert.Equal("200.0000", warning["unallocated_remaining_quantity"]);
+        Assert.Equal(300m, Quantities(allocations).Sum() + decimal.Parse(warning["unallocated_remaining_quantity"], CultureInfo.InvariantCulture));
     }
 
     [Fact]

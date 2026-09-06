@@ -2464,7 +2464,7 @@ public partial class MainForm : Form
 
 				string completion = result.WarningCount > 0 ? "Export completed with warnings. " : "Export complete. ";
 				string warnings = result.WarningCount > 0
-					? $" {result.WarningCount} data-quality issue(s); see XER_DATA_QUALITY.csv for unallocated actuals and original source values."
+					? $" {result.WarningCount} data-quality issue(s); see XER_DATA_QUALITY.csv for affected tables and fields, original source values, and any unallocated actual or remaining quantities."
 					: string.Empty;
 				UpdateStatus(completion + summary + warnings);
 
@@ -2607,9 +2607,9 @@ public partial class MainForm : Form
 
 		bool canCreateActvType = _dataStore.ContainsTable("ACTVTYPE");
 
-		bool canCreatePredecessor = _dataStore.ContainsTable(TableNames.TaskPred)
-			&& _dataStore.ContainsTable(TableNames.Task)
-			&& _dataStore.ContainsTable(TableNames.Calendar);
+		// A primary source is enough to export its rows. Core leaves dependent
+		// calculations blank with diagnostics when a lookup source is unavailable.
+		bool canCreatePredecessor = _dataStore.ContainsTable(TableNames.TaskPred);
 
 		bool canCreateRsrc = _dataStore.ContainsTable("RSRC");
 
@@ -2617,7 +2617,7 @@ public partial class MainForm : Form
 
 		bool canCreateUmeasure = _dataStore.ContainsTable("UMEASURE");
 
-		_canCreateTask01 = flag && flag2 && flag3;
+		_canCreateTask01 = flag;
 
 		_canCreateProjWbs03 = canCreateProjWbs;
 
@@ -2643,7 +2643,7 @@ public partial class MainForm : Form
 
 		_canCreateUmeasure14 = canCreateUmeasure;
 
-		_canCreateResourceDist15 = flag4 && flag && flag3 && flag2;
+		_canCreateResourceDist15 = flag4;
 
 	}
 
@@ -2704,172 +2704,20 @@ public partial class MainForm : Form
 
 
 	private string GetMissingDependenciesMessage(string prefix)
-
 	{
-
-		List<string> list = new List<string>();
-
-		if (!_canCreateTask01)
-
+		string[] primarySources =
 		{
-
-			if (!_dataStore.ContainsTable("TASK"))
-
-			{
-
-				list.Add("TASK");
-
-			}
-
-			if (!_dataStore.ContainsTable("CALENDAR"))
-
-			{
-
-				list.Add("CALENDAR");
-
-			}
-
-			if (!_dataStore.ContainsTable("PROJECT"))
-
-			{
-
-				list.Add("PROJECT");
-
-			}
-
-		}
-
-		if (!_canCreateProjWbs03 && !_dataStore.ContainsTable("PROJWBS"))
-
-		{
-
-			list.Add("PROJWBS");
-
-		}
-
-		if (!_canCreatePredecessor06)
-
-		{
-
-			if (!_dataStore.ContainsTable(TableNames.TaskPred))
-			{
-				list.Add("TASKPRED");
-			}
-
-			if (!_dataStore.ContainsTable(TableNames.Task))
-			{
-				list.Add("TASK");
-			}
-
-			if (!_dataStore.ContainsTable(TableNames.Calendar))
-			{
-				list.Add("CALENDAR");
-			}
-
-		}
-
-		if (!_canCreateActvType07 && !_dataStore.ContainsTable("ACTVTYPE"))
-
-		{
-
-			list.Add("ACTVTYPE");
-
-		}
-
-		if (!_canCreateActvCode08 && !_dataStore.ContainsTable("ACTVCODE"))
-
-		{
-
-			list.Add("ACTVCODE");
-
-		}
-
-		if (!_canCreateTaskActv09 && !_dataStore.ContainsTable("TASKACTV"))
-
-		{
-
-			list.Add("TASKACTV");
-
-		}
-
-		if (!_canCreateRsrc12 && !_dataStore.ContainsTable("RSRC"))
-
-		{
-
-			list.Add("RSRC");
-
-		}
-
-		if (!_canCreateTaskRsrc13 && !_dataStore.ContainsTable("TASKRSRC"))
-
-		{
-
-			list.Add("TASKRSRC");
-
-		}
-
-		if (!_canCreateUmeasure14 && !_dataStore.ContainsTable("UMEASURE"))
-
-		{
-
-			list.Add("UMEASURE");
-
-		}
-
-		if (!_canCreateResourceDist15)
-
-		{
-
-			if (!_dataStore.ContainsTable("TASKRSRC"))
-
-			{
-
-				list.Add("TASKRSRC");
-
-			}
-
-			if (!_dataStore.ContainsTable("TASK"))
-
-			{
-
-				list.Add("TASK");
-
-			}
-
-			if (!_dataStore.ContainsTable("CALENDAR"))
-
-			{
-
-				list.Add("CALENDAR");
-
-			}
-
-			if (!_dataStore.ContainsTable("PROJECT"))
-
-			{
-
-				list.Add("PROJECT");
-
-			}
-
-		}
-
-		List<string> list2 = (from s in list.Distinct()
-
-			orderby s
-
-			select s).ToList();
-
-		if (list2.Any())
-
-		{
-
-			return prefix + " Required source tables missing: " + string.Join(", ", list2) + ".";
-
-		}
-
-		return prefix + " All dependencies met.";
-
+			TableNames.Task, TableNames.Project, TableNames.ProjWbs, TableNames.TaskPred,
+			TableNames.ActvType, TableNames.ActvCode, TableNames.TaskActv, TableNames.Calendar,
+			TableNames.Rsrc, TableNames.TaskRsrc, TableNames.Umeasure
+		};
+		string[] missing = primarySources.Where(name => !_dataStore.ContainsTable(name))
+			.OrderBy(name => name, StringComparer.Ordinal).ToArray();
+		string availability = missing.Length > 0
+			? " Source tables not present: " + string.Join(", ", missing) + "."
+			: " All primary source tables are present.";
+		return prefix + availability +
+			" Available Enhanced tables export even when dependent values cannot be calculated; see XER_DATA_QUALITY.csv for warnings.";
 	}
 
 
@@ -3600,7 +3448,7 @@ public partial class MainForm : Form
 
 		string text = warningCount > 0
 			? $"Export completed with warnings. {exportedFiles.Count} CSV files were exported.\n\n" +
-			  $"{warningCount} data-quality issue(s). See XER_DATA_QUALITY.csv for unallocated actuals and original source values."
+			  $"{warningCount} data-quality issue(s). See XER_DATA_QUALITY.csv for affected tables and fields, original source values, and any unallocated actual or remaining quantities."
 			: $"Successfully exported {exportedFiles.Count} CSV files.";
 
 		if (source.Any())

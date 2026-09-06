@@ -9,23 +9,155 @@ namespace XerToCsvConverter.Core.Tests;
 public sealed class ReviewProfileAuditTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Mixed_bad_cells_and_duplicate_dimensions_preserve_all_rows_and_healthy_calculations(bool tender)
+    {
+        string source = Source(tender);
+        XerDataStore store = Store(source, tender ? "J5001" : "J123");
+        AddRelationship(store, source, "P1");
+        Set(store, "TASK", 0, "early_start_date", "not-a-date");
+        Set(store, "TASK", 0, "restart_date", "bad-preferred-start");
+        Set(store, "TASK", 0, "remain_drtn_hr_cnt", "NaN");
+        XerTable wbs = store.GetTable("PROJWBS")!;
+        wbs.AddRow(new DataRow(["W1", "W1", "P1", "Repeated WBS"], source));
+        Add(store, source, "ACTVTYPE", ["actv_code_type_id", "actv_code_type"], ["CAT", "Category"], ["CAT", "Repeated category"]);
+        Add(store, source, "ACTVCODE", ["actv_code_id", "actv_code_type_id", "actv_code_name"], ["VAL", "MISSING", "Orphan code"]);
+
+        var files = await Export(store, tender);
+
+        Assert.Equal(12, files.Count);
+        Assert.Equal(2, Rows(files["03_XER_PROJWBS.csv"]).Length);
+        Assert.Equal(2, Rows(files["07_XER_ACTVTYPE.csv"]).Length);
+        Assert.Single(Rows(files["08_XER_ACTVCODE.csv"]));
+        var tasks = Rows(files["01_XER_TASK.csv"]);
+        Assert.Equal(2, tasks.Length);
+        var bad = tasks.Single(r => r["task_code"] == "A100");
+        var good = tasks.Single(r => r["task_code"] == "A200");
+        Assert.Equal("", bad["early_start_date"]);
+        Assert.Equal("", bad["Start"]);
+        Assert.Equal("", bad["remaining_duration"]);
+        Assert.Equal("1", good["remaining_duration"]);
+        Assert.Equal("2026-01-05", good["Start"]);
+        Assert.Single(Rows(files["06_XER_PREDECESSOR.csv"]));
+        string warnings = Encoding.UTF8.GetString(files[XerDataQuality.FileName]);
+        Assert.Contains("not-a-date", warnings, StringComparison.Ordinal);
+        Assert.Contains("bad-preferred-start", warnings, StringComparison.Ordinal);
+        Assert.Contains("REVIEW_KEY_AMBIGUOUS", warnings, StringComparison.Ordinal);
+        Assert.Contains("REVIEW_REFERENCE_UNRESOLVED", warnings, StringComparison.Ordinal);
+        if (tender) Assert.DoesNotContain(source, warnings, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false, "TASK")]
+    [InlineData(true, "TASK")]
+    [InlineData(false, "PROJWBS")]
+    [InlineData(true, "PROJWBS")]
+    [InlineData(false, "CALENDAR")]
+    [InlineData(true, "CALENDAR")]
+    public async Task Absent_nonmetadata_source_keeps_the_complete_numbered_set(bool tender, string missing)
+    {
+        var original = Store(Source(tender), tender ? "J5001" : "J123");
+        var store = new XerDataStore();
+        foreach (string table in original.TableNames.Where(n => n != missing)) store.AddTable(original.GetTable(table)!);
+        var files = await Export(store, tender);
+        Assert.Equal(12, files.Count);
+        Assert.Single(Rows(files["02_XER_PROJECT.csv"]));
+        Assert.Equal(missing == "TASK" ? 0 : 2, Rows(files["01_XER_TASK.csv"]).Length);
+        Assert.NotEmpty(Rows(files[XerDataQuality.FileName]));
+    }
+
+    [Fact]
+    public async Task Ambiguous_programme_business_history_is_blank_without_discarding_duplicate_tasks()
+    {
+        var store = Store(Source(false), "J123");
+        XerTable tasks = store.GetTable("TASK")!;
+        string[] duplicate = tasks.Rows[0].Fields.ToArray();
+        duplicate[tasks.FieldIndexes["task_id"]] = "T3";
+        tasks.AddRow(new DataRow(duplicate, Source(false)));
+        var files = await Export(store, false);
+        var rows = Rows(files["01_XER_TASK.csv"]);
+        Assert.Equal(3, rows.Length);
+        Assert.All(rows.Where(r => r["task_code"] == "A100"), row =>
+        {
+            Assert.Equal("", row["Baseline Finish"]);
+            Assert.Equal("", row["Finish_Variance_Previous_Month"]);
+            Assert.Equal("", row["Planned Last Period"]);
+            Assert.Equal("2026-01-02", row["Finish"]);
+        });
+        Assert.Equal("2026-01-05", rows.Single(r => r["task_code"] == "A200")["Baseline Finish"]);
+        Assert.Contains("REVIEW_HISTORY_AMBIGUOUS", Encoding.UTF8.GetString(files[XerDataQuality.FileName]), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("status_code", "TK_Unknown")]
+    [InlineData("remain_drtn_hr_cnt", "-8")]
+    public async Task Invalid_programme_history_state_preserves_raw_values_without_manufacturing_variances(string field, string value)
+    {
+        var store = Store(Source(false), "J123");
+        Set(store, "TASK", 0, field, value);
+        var files = await Export(store, false);
+        var tasks = Rows(files["01_XER_TASK.csv"]);
+        Assert.Equal(2, tasks.Length);
+        var bad = tasks.Single(r => r["task_code"] == "A100");
+        Assert.Equal("", bad["Finish_Variance_Previous_Month"]);
+        Assert.Equal("", bad["Planned Last Period"]);
+        if (field == "remain_drtn_hr_cnt") Assert.Equal("-1", bad["remaining_duration"]);
+        Assert.Contains("REVIEW_HISTORY_INPUT_INVALID", Encoding.UTF8.GetString(files[XerDataQuality.FileName]), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Tender_duplicate_byte_inputs_with_bad_cells_match_disk_and_preserve_stage_local_warnings()
+    {
+        var store = Store(Source(true), "J5001");
+        Set(store, "TASK", 0, "late_end_date", "invalid-late-finish");
+        Set(store, "TASK", 0, "remain_drtn_hr_cnt", "not-hours");
+        byte[] content = SerializeXer(store);
+        using var temp = new TemporaryReviewDirectory();
+        string path = Path.Combine(temp.Path, "repeated.xer");
+        await File.WriteAllBytesAsync(path, content);
+        var sources = new[]
+        {
+            TenderReviewNamingTests.Source(0, "repeated.xer", "2026-09-05") with { SourceSha256 = null, XerFilePath = path },
+            TenderReviewNamingTests.Source(1, "repeated.xer", "2026-09-06") with { SourceSha256 = null, XerFilePath = path }
+        };
+        var request = TenderReviewNamingTests.Request(sources);
+        var service = new TenderReviewBundleService();
+        var memory = await service.BuildFromXerBytesAsync(request,
+            sources.Select(s => new TenderReviewSourceBytes { SourceToken = s.SourceToken, Content = content }).ToArray());
+        var disk = await service.BuildFromXerFilesAsync(request, Path.Combine(temp.Path, "out"));
+        foreach (var pair in memory.Files) Assert.Equal(pair.Value, await File.ReadAllBytesAsync(Path.Combine(disk.BundlePath, pair.Key)));
+        Assert.Equal(4, Rows(memory.Files["01_XER_TASK.csv"]).Length);
+        var warnings = Rows(memory.Files[XerDataQuality.FileName]);
+        Assert.Equal(2, warnings.Select(r => r["source_namespace"]).Distinct().Count());
+        Assert.All(warnings, row => Assert.Equal("repeated.xer", row["FileName"]));
+        Assert.All(sources, s => Assert.DoesNotContain(s.SourceToken, Encoding.UTF8.GetString(memory.Files[XerDataQuality.FileName]), StringComparison.Ordinal));
+    }
+
+    private sealed class TemporaryReviewDirectory : IDisposable
+    {
+        private readonly DirectoryInfo _directory = Directory.CreateTempSubdirectory("xer-review-resilience-");
+        internal string Path => _directory.FullName;
+        public void Dispose() => _directory.Delete(true);
+    }
+
+    [Theory]
     [InlineData(false, "pred_proj_id")]
     [InlineData(true, "pred_proj_id")]
     [InlineData(false, "proj_id")]
     [InlineData(true, "proj_id")]
-    public async Task Relationship_project_mismatch_is_rejected_before_export(bool tender, string projectField)
+    public async Task Relationship_project_mismatch_is_preserved_with_blank_float_and_warning(bool tender, string projectField)
     {
         string source = Source(tender);
         XerDataStore store = Store(source, tender ? "J5001" : "J123");
         AddRelationship(store, source, "P1");
         Set(store, "TASKPRED", 0, projectField, "P2");
 
-        Exception error = tender
-            ? await Assert.ThrowsAsync<TenderReviewValidationException>(() => Export(store, true))
-            : await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() => Export(store, false));
-        Assert.Contains(projectField, error.Message, StringComparison.Ordinal);
-        Assert.Contains("P2", error.Message, StringComparison.Ordinal);
-        Assert.Contains("external", error.Message, StringComparison.OrdinalIgnoreCase);
+        var files = await Export(store, tender);
+        Assert.Equal("", Assert.Single(Rows(files["06_XER_PREDECESSOR.csv"]))["free_float"]);
+        string warning = Encoding.UTF8.GetString(files[XerDataQuality.FileName]);
+        Assert.Contains(projectField, warning, StringComparison.Ordinal);
+        Assert.Contains("P2", warning, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -55,7 +187,7 @@ public sealed class ReviewProfileAuditTests
     [InlineData(true, "task_id")]
     [InlineData(false, "pred_task_id")]
     [InlineData(true, "pred_task_id")]
-    public async Task Relationship_missing_endpoint_is_rejected_even_with_blank_lag_and_float(
+    public async Task Relationship_missing_endpoint_is_preserved_even_with_blank_lag_and_float(
         bool tender, string taskField)
     {
         string source = Source(tender);
@@ -66,11 +198,11 @@ public sealed class ReviewProfileAuditTests
         Set(store, "TASK", 0, "total_float_hr_cnt", "");
         Set(store, "TASK", 1, "total_float_hr_cnt", "");
 
-        Exception error = tender
-            ? await Assert.ThrowsAsync<TenderReviewValidationException>(() => Export(store, true))
-            : await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() => Export(store, false));
-        Assert.Contains(taskField, error.Message, StringComparison.Ordinal);
-        Assert.Contains("MISSING", error.Message, StringComparison.Ordinal);
+        var files = await Export(store, tender);
+        Assert.Equal("", Assert.Single(Rows(files["06_XER_PREDECESSOR.csv"]))["free_float"]);
+        string warning = Encoding.UTF8.GetString(files[XerDataQuality.FileName]);
+        Assert.Contains(taskField, warning, StringComparison.Ordinal);
+        Assert.Contains("MISSING", warning, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -146,7 +278,7 @@ public sealed class ReviewProfileAuditTests
     [InlineData(true, true)]
     [InlineData(false, false)]
     [InlineData(true, false)]
-    public async Task Optional_partial_raw_schema_is_allowed_only_when_no_rows_need_projection(bool tender, bool empty)
+    public async Task Optional_partial_raw_schema_preserves_available_rows_and_warns_for_missing_columns(bool tender, bool empty)
     {
         string source = Source(tender);
         XerDataStore store = Store(source, tender ? "J5001" : "J123");
@@ -169,26 +301,25 @@ public sealed class ReviewProfileAuditTests
         }
         else
         {
-            Exception error = tender
-                ? await Assert.ThrowsAsync<TenderReviewValidationException>(() => Export(store, true))
-                : await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() => Export(store, false));
-            Assert.Contains("def_qty_per_hr", error.Message, StringComparison.Ordinal);
+            var files = await Export(store, tender);
+            Assert.Equal("", Assert.Single(Rows(files["12_XER_RSRC.csv"]))["def_qty_per_hr"]);
+            Assert.Contains("def_qty_per_hr", Encoding.UTF8.GetString(files[XerDataQuality.FileName]), StringComparison.Ordinal);
         }
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Empty_required_table_still_rejects_the_bundle(bool tender)
+    public async Task Empty_required_table_exports_its_header_and_warnings(bool tender)
     {
         string source = Source(tender);
         XerDataStore store = Store(source, tender ? "J5001" : "J123");
         Add(store, source, "PROJWBS", new[] { "wbs_id", "parent_wbs_id", "proj_id", "wbs_name" });
 
-        Exception error = tender
-            ? await Assert.ThrowsAsync<TenderReviewValidationException>(() => Export(store, true))
-            : await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() => Export(store, false));
-        Assert.Contains("03_XER_PROJWBS", error.Message, StringComparison.Ordinal);
+        var files = await Export(store, tender);
+        Assert.Empty(Rows(files["03_XER_PROJWBS.csv"]));
+        Assert.Equal(2, Rows(files["01_XER_TASK.csv"]).Length);
+        Assert.Contains("03_XER_PROJWBS", Encoding.UTF8.GetString(files[XerDataQuality.FileName]), StringComparison.Ordinal);
     }
 
     [Fact]

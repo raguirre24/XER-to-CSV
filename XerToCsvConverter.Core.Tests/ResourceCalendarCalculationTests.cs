@@ -142,7 +142,7 @@ public sealed class ResourceCalendarCalculationTests
             new CalendarInput("C1", "8", P6TestCalendars.WorkWeek()),
             new CalendarInput("C2", "8", ""));
 
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        AssertUnallocated(store, "RESOURCE_CALENDAR_INVALID", "8.0000");
     }
 
     [Theory]
@@ -288,7 +288,22 @@ public sealed class ResourceCalendarCalculationTests
         SetField(store, "PROJECT", "last_recalc_date", "2026-01-02 16:00:00");
         SetField(store, "TASKRSRC", field, value);
 
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        var transformer = new XerTransformer(store);
+        XerTable distribution = Assert.IsType<XerTable>(transformer.Create15XerResourceDistribution());
+        XerTable diagnostics = transformer.CreateDataQualityTable();
+        DataRow issue = Assert.Single(diagnostics.Rows);
+        bool remaining = field == "remain_qty";
+        Assert.Equal(remaining ? "REMAINING_QUANTITY_INVALID" : "ACTUAL_QUANTITY_INVALID",
+            issue.Fields[diagnostics.FieldIndexes["issue_code"]]);
+        Assert.Equal(value, issue.Fields[diagnostics.FieldIndexes[field]]);
+        Assert.Equal(remaining ? "Remaining" : "Actual", issue.Fields[diagnostics.FieldIndexes["allocation_portion"]]);
+        string expectedUnallocated = value == "-1" ? field == "act_ot_qty" ? "7.0000" : "-1.0000" : "";
+        Assert.Equal(expectedUnallocated, issue.Fields[diagnostics.FieldIndexes[
+            remaining ? "unallocated_remaining_quantity" : "unallocated_actual_quantity"]]);
+        if (remaining)
+            Assert.Equal(8m, Records(distribution).Sum(row => decimal.Parse(row["monthly_quantity"], CultureInfo.InvariantCulture)));
+        else Assert.Empty(distribution.Rows);
+        Assert.Null(transformer.GetGenerationFailure(EnhancedTableNames.XerResourceDist15));
     }
 
     [Theory]
@@ -297,7 +312,7 @@ public sealed class ResourceCalendarCalculationTests
     [InlineData("reend_date", "")]
     [InlineData("reend_date", "not-a-date")]
     [InlineData("reend_date", "2025-12-31 08:00:00")]
-    public void Positive_remaining_quantity_with_invalid_assignment_period_fails_export(
+    public void Positive_remaining_quantity_with_invalid_assignment_period_is_preserved_as_unallocated(
         string field, string value)
     {
         XerDataStore store = BuildStore("TT_Task", "C1", "C1", "8",
@@ -305,7 +320,7 @@ public sealed class ResourceCalendarCalculationTests
             new CalendarInput("C1", "8", AllDays("08:00", "16:00")));
         SetField(store, "TASKRSRC", field, value);
 
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        AssertUnallocated(store, "REMAINING_PERIOD_INVALID", "8.0000", field: field, raw: value);
     }
 
     [Theory]
@@ -438,9 +453,9 @@ public sealed class ResourceCalendarCalculationTests
         XerDataStore store = MultiProjectStore(reverseTaskOrder);
 
         // Project context cannot repair the duplicate public task_id_key shared
-        // by these two TASK rows. Reject the whole distribution in either order,
-        // rather than publishing quantities which cannot join to a unique task.
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        // by these two TASK rows. Preserve each affected assignment as an
+        // unallocated warning in either order, without selecting a task.
+        AssertUnallocated(store, "ASSIGNMENT_CONTEXT_INVALID", "32.0000", expectedCount: 2);
     }
 
     [Fact]
@@ -450,7 +465,7 @@ public sealed class ResourceCalendarCalculationTests
         XerTable assignments = Assert.IsType<XerTable>(store.GetTable("TASKRSRC"));
         assignments.Rows[0].Fields[assignments.FieldIndexes["proj_id"]] = "";
 
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        AssertUnallocated(store, "ASSIGNMENT_CONTEXT_INVALID", "32.0000", expectedCount: 2);
     }
 
     [Fact]
@@ -465,7 +480,7 @@ public sealed class ResourceCalendarCalculationTests
         conflicting[task.FieldIndexes["clndr_id"]] = "C2";
         task.AddRow(new DataRow(conflicting, SourceToken));
 
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        AssertUnallocated(store, "ASSIGNMENT_CONTEXT_INVALID", "24.0000");
     }
 
     [Fact]
@@ -480,7 +495,7 @@ public sealed class ResourceCalendarCalculationTests
         conflicting[resource.FieldIndexes["clndr_id"]] = "C2";
         resource.AddRow(new DataRow(conflicting, SourceToken));
 
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        AssertUnallocated(store, "ASSIGNMENT_CONTEXT_INVALID", "24.0000");
     }
 
     [Fact]
@@ -630,7 +645,7 @@ public sealed class ResourceCalendarCalculationTests
     {
         XerDataStore store = BuildStore("TT_Task", "C1", "C1", "1", start, finish,
             new CalendarInput("C1", "8", P6TestCalendars.WorkWeek()));
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        AssertUnallocated(store, start == finish ? "REMAINING_PERIOD_INVALID" : "REMAINING_NO_WORKING_TIME", "1.0000");
     }
 
     [Fact]
@@ -639,7 +654,27 @@ public sealed class ResourceCalendarCalculationTests
         XerDataStore store = ActualStore("TK_Complete", "1", "0",
             "2026-01-01 08:00:00", "2026-01-01 08:00:00");
         SetField(store, "CALENDAR", "clndr_data", "malformed");
-        Assert.Null(new XerTransformer(store).Create15XerResourceDistribution());
+        AssertUnallocated(store, "RESOURCE_CALENDAR_INVALID", "1.0000", actual: true);
+    }
+
+    private static void AssertUnallocated(XerDataStore store, string code, string expectedQuantity,
+        bool actual = false, int expectedCount = 1, string? field = null, string? raw = null)
+    {
+        var transformer = new XerTransformer(store);
+        Assert.Empty(Assert.IsType<XerTable>(transformer.Create15XerResourceDistribution()).Rows);
+        XerTable diagnostics = transformer.CreateDataQualityTable();
+        Assert.Equal(expectedCount, diagnostics.Rows.Count);
+        Assert.All(diagnostics.Rows, row =>
+        {
+            Assert.Equal("Warning", row.Fields[diagnostics.FieldIndexes["severity"]]);
+            Assert.Equal(code, row.Fields[diagnostics.FieldIndexes["issue_code"]]);
+            Assert.Equal(actual ? "Actual" : "Remaining", row.Fields[diagnostics.FieldIndexes["allocation_portion"]]);
+            Assert.NotEmpty(row.Fields[diagnostics.FieldIndexes["message"]]);
+            if (field is not null) Assert.Equal(raw, row.Fields[diagnostics.FieldIndexes[field]]);
+        });
+        Assert.Equal(decimal.Parse(expectedQuantity, CultureInfo.InvariantCulture), diagnostics.Rows.Sum(row =>
+            decimal.Parse(row.Fields[diagnostics.FieldIndexes[actual ? "unallocated_actual_quantity" : "unallocated_remaining_quantity"]], CultureInfo.InvariantCulture)));
+        Assert.Null(transformer.GetGenerationFailure(EnhancedTableNames.XerResourceDist15));
     }
 
     private static XerDataStore MultiProjectStore(bool reverseTaskOrder)

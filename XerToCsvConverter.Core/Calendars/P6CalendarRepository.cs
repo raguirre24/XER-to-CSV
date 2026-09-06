@@ -127,7 +127,7 @@ internal sealed record P6ParsedCalendar(IReadOnlyList<IReadOnlyList<P6WorkInterv
     IReadOnlyDictionary<DateTime, IReadOnlyList<P6WorkInterval>> Exceptions);
 
 /// <summary>Parses the balanced XER calendar tree; no regular expression truncates nested shifts.</summary>
-internal static class P6CalendarParser
+internal static partial class P6CalendarParser
 {
     internal static P6ParsedCalendar Parse(string text, CancellationToken cancellationToken)
     {

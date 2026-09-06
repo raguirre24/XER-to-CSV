@@ -9,7 +9,7 @@ param(
 # No original files are changed and no XER/CSV content is persisted or uploaded.
 # This checks parser/reporting contracts, not native P6 scheduling parity.
 $ErrorActionPreference = 'Stop'
-Add-Type -Path (Resolve-Path -LiteralPath $CoreAssemblyPath).Path
+$null = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $CoreAssemblyPath).Path))
 Add-Type -AssemblyName Microsoft.VisualBasic.Core
 $culture = [Globalization.CultureInfo]::InvariantCulture
 $numberStyle = [Globalization.NumberStyles]::Float
@@ -93,6 +93,23 @@ function Get-OptionalNumber([string]$Value, [switch]$BlankIsZero) {
     $parsed = [decimal]0
     if ([decimal]::TryParse($Value, $numberStyle, $culture, [ref]$parsed)) { return $parsed }
     return $null
+}
+
+# Independent source-quantity interpretation. Keep unknown separate from zero and
+# preserve signed amounts for reconciliation; never call Core allocation helpers.
+function Get-SourcePortionQuantity($Table, $Row, [string]$Portion) {
+    $fields = if ($Portion -ceq 'Actual') { @('act_reg_qty','act_ot_qty') } else { @('remain_qty') }
+    $total = [decimal]0
+    $invalid = $false
+    $known = $true
+    foreach ($field in $fields) {
+        $number = Get-OptionalNumber (Get-SourceCell $Table $Row $field) -BlankIsZero
+        if ($null -eq $number) { $known = $false; $invalid = $true; continue }
+        if ($number -lt 0) { $invalid = $true }
+        try { $total = [decimal]::Add($total, $number) }
+        catch [OverflowException] { $known = $false; $invalid = $true }
+    }
+    return [pscustomobject]@{ Known = $known; Value = $(if ($known) { $total } else { $null }); Invalid = $invalid }
 }
 
 function Get-ExpectedDays([string]$Hours, $HoursPerDay, [int]$Decimals = 2) {
@@ -203,16 +220,52 @@ $requested = [Collections.Generic.List[string]]::new()
 foreach ($name in $tableSources.Keys) { $requested.Add($name) }
 $export = $service.ExportTablesToMemoryWithDiagnosticsAsync($store, $requested, $null, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
 $bytesByTable = $export.Files
-$expectedFileCount = $tableSources.Count + $(if ($ExcludeResourceDistribution) { 0 } else { 1 })
+$expectedFileCount = $tableSources.Count + 1
 Assert-Audit ($bytesByTable.Count -eq $expectedFileCount) 'The Enhanced export did not return every selected table and required companion.'
-$quality = $null
-if (-not $ExcludeResourceDistribution) {
-    Assert-Audit ($bytesByTable.ContainsKey('XER_DATA_QUALITY')) 'Table 15 is missing its data-quality companion.'
-    $quality = Read-CsvTable $bytesByTable['XER_DATA_QUALITY'] 'XER_DATA_QUALITY'
-    Assert-Headers $quality (@([XerToCsvConverter.XerDataQuality]::Columns) + 'FileName')
-    Assert-Audit ($quality.Rows.Count -eq $export.WarningCount) 'Completion warning count disagrees with the companion.'
-} else {
-    Assert-Audit (-not $bytesByTable.ContainsKey('XER_DATA_QUALITY') -and $export.WarningCount -eq 0) 'Unrequested allocation diagnostics were generated.'
+Assert-Audit ($bytesByTable.ContainsKey('XER_DATA_QUALITY')) 'Enhanced selection is missing its data-quality companion.'
+$quality = Read-CsvTable $bytesByTable['XER_DATA_QUALITY'] 'XER_DATA_QUALITY'
+Assert-Headers $quality (@([XerToCsvConverter.XerDataQuality]::Columns) + 'FileName')
+Assert-Audit ($quality.Rows.Count -eq $export.WarningCount) 'Completion warning count disagrees with the companion.'
+$generalWarningCount = 0
+$checkedDiagnosticEvidenceCells = 0
+$diagnosticSourceRows = [Collections.Generic.Dictionary[ValueTuple[string,string],object]]::new()
+foreach ($warning in $quality.Rows) {
+    Assert-Audit ($warning[$quality.Indexes['diagnostic_schema_version']] -ceq '1.2' -and
+        $warning[$quality.Indexes['severity']] -ceq 'Warning') 'Companion schema/severity is invalid.'
+    Assert-Audit ($tableSources.Contains($warning[$quality.Indexes['table_name']])) 'Companion diagnoses an unselected numbered table.'
+    Assert-Audit (-not [string]::IsNullOrWhiteSpace($warning[$quality.Indexes['issue_code']]) -and
+        -not [string]::IsNullOrWhiteSpace($warning[$quality.Indexes['message']])) 'Companion issue lacks a code or explanation.'
+    $portion = $warning[$quality.Indexes['allocation_portion']]
+    if ($portion -cin @('Actual','Remaining')) { continue }
+    Assert-Audit ($portion -ceq '' -and $warning[$quality.Indexes['unallocated_actual_quantity']] -ceq '' -and
+        $warning[$quality.Indexes['unallocated_remaining_quantity']] -ceq '') 'General warning invented an allocation portion or quantity.'
+    $generalWarningCount++
+    $sourceTableName = $warning[$quality.Indexes['source_table']]
+    $sourceTable = $store.GetTable($sourceTableName)
+    $ordinalText = $warning[$quality.Indexes['source_row_number']]
+    if ([string]::IsNullOrEmpty($ordinalText)) {
+        Assert-Audit ($null -eq $sourceTable -or $sourceTable.RowCount -eq 0) 'A populated source table warning has no source row ordinal.'
+        continue
+    }
+    $ordinal = [int]$ordinalText
+    $namespace = $warning[$quality.Indexes['source_namespace']]
+    $sourceKey = [ValueTuple[string,string]]::new($sourceTableName, $namespace)
+    if (-not $diagnosticSourceRows.ContainsKey($sourceKey)) {
+        $diagnosticSourceRows.Add($sourceKey, @($sourceTable.Rows | Where-Object { $_.SourceFilename -ceq $namespace }))
+    }
+    $sourceRows = $diagnosticSourceRows[$sourceKey]
+    Assert-Audit ($ordinal -gt 0 -and $ordinal -le $sourceRows.Count) 'General warning cannot be resolved to its source occurrence/row.'
+    $sourceRow = $sourceRows[$ordinal - 1]
+    Assert-Audit ($warning[$quality.Indexes['FileName']] -ceq $sourceRow.OriginalSourceFilename) 'General warning lost original filename provenance.'
+    $evidence = @($warning[$quality.Indexes['raw_row_json']] | ConvertFrom-Json)
+    Assert-Audit ($evidence.Count -eq $sourceTable.Headers.Count) 'General warning did not retain every source column.'
+    for ($index = 0; $index -lt $sourceTable.Headers.Count; $index++) {
+        $column = $sourceTable.Headers[$index]
+        Assert-Audit ($evidence[$index].column -ceq $column -and
+            [string]$evidence[$index].value -ceq (Get-SourceCell $sourceTable $sourceRow $column)) 'General warning changed its raw source field/value evidence.'
+        Assert-Audit ($evidence[$index].presence -ceq $sourceRow.GetRawField($column).State.ToString()) 'General warning changed source field presence.'
+        $checkedDiagnosticEvidenceCells++
+    }
 }
 $tables = @{} # Output tables, not an input collection.
 $checkedRawCells = [long]0
@@ -425,7 +478,10 @@ $actualQuantities = [Collections.Generic.Dictionary[ValueTuple[string,string,str
 $assignments = $store.GetTable('TASKRSRC')
 $assignmentByOccurrence = [Collections.Generic.Dictionary[ValueTuple[string,int],object]]::new()
 $sourceOrdinals = [Collections.Generic.Dictionary[string,int]]::new([StringComparer]::Ordinal)
-$expectedIssueRows = [Collections.Generic.HashSet[ValueTuple[string,int]]]::new()
+$expectedIssueRows = [Collections.Generic.Dictionary[ValueTuple[string,int,string],string]]::new()
+$actualWarningCount = 0
+$remainingWarningCount = 0
+$unknownQuantityWarnings = 0
 foreach ($row in $assignments.Rows) {
     $ordinal = 1
     if ($sourceOrdinals.ContainsKey($row.SourceToken)) { $ordinal = $sourceOrdinals[$row.SourceToken] + 1 }
@@ -434,22 +490,33 @@ foreach ($row in $assignments.Rows) {
     $assignmentByOccurrence.Add($occurrence, $row)
     $taskId = (Get-SourceCell $assignments $row 'task_id').Trim()
     $resourceId = (Get-SourceCell $assignments $row 'rsrc_id').Trim()
-    $actual = (Read-Number (Get-SourceCell $assignments $row 'act_reg_qty') 'TASKRSRC.act_reg_qty' -BlankIsZero) + (Read-Number (Get-SourceCell $assignments $row 'act_ot_qty') 'TASKRSRC.act_ot_qty' -BlankIsZero)
-    $remaining = Read-Number (Get-SourceCell $assignments $row 'remain_qty') 'TASKRSRC.remain_qty' -BlankIsZero
-    if ($actual -gt 0) {
-        $start = Get-ExpectedDate (Get-SourceCell $assignments $row 'act_start_date')
-        $endRaw = Get-SourceCell $assignments $row 'act_end_date'
-        $task = $taskByPublicKey[(Get-Key $row.SourceFilename $taskId)]
-        $status = (Get-SourceCell $rawTasks $task 'status_code').Trim()
-        $end = if (-not [string]::IsNullOrWhiteSpace($endRaw)) { Get-ExpectedDate $endRaw }
-            elseif ($status -ieq 'TK_Active') { $projectDates[[ValueTuple[string,string]]::new($row.SourceToken, (Get-SourceCell $rawTasks $task 'proj_id').Trim())] }
-            else { '' }
-        if (-not $start -or -not $end -or $end -clt $start) { $null = $expectedIssueRows.Add($occurrence) }
-    }
-    foreach ($part in @(@('1', $actual), @('0', $remaining))) {
-        if ($part[1] -le 0) { continue }
-        $key = [ValueTuple[string,string,string,string]]::new($row.SourceToken, $taskId, $resourceId, $part[0])
-        Add-Quantity $expectedQuantities $key ([decimal]::Round($part[1], 4, [MidpointRounding]::ToEven))
+    $task = $taskByPublicKey[(Get-Key $row.SourceFilename $taskId)]
+    $status = (Get-SourceCell $rawTasks $task 'status_code').Trim()
+    foreach ($portion in @('Actual','Remaining')) {
+        $quantity = Get-SourcePortionQuantity $assignments $row $portion
+        if ($quantity.Known -and $quantity.Value -eq 0 -and -not $quantity.Invalid) { continue }
+        $issue = ''
+        if ($quantity.Invalid) { $issue = 'Quantity' }
+        elseif ($status -notin @('TK_NotStart','TK_Active','TK_Complete')) { $issue = 'Status' }
+        elseif (($portion -ceq 'Actual' -and $status -ieq 'TK_NotStart') -or
+            ($portion -ceq 'Remaining' -and $status -ieq 'TK_Complete')) { $issue = 'Status' }
+        else {
+            $startField = if ($portion -ceq 'Actual') { 'act_start_date' } else { 'restart_date' }
+            $endField = if ($portion -ceq 'Actual') { 'act_end_date' } else { 'reend_date' }
+            $start = Get-ExpectedDate (Get-SourceCell $assignments $row $startField)
+            $endRaw = Get-SourceCell $assignments $row $endField
+            $end = if (-not [string]::IsNullOrWhiteSpace($endRaw)) { Get-ExpectedDate $endRaw }
+                elseif ($portion -ceq 'Actual' -and $status -ieq 'TK_Active') { $projectDates[[ValueTuple[string,string]]::new($row.SourceToken, (Get-SourceCell $rawTasks $task 'proj_id').Trim())] }
+                else { '' }
+            if (-not $start -or -not $end) { $issue = 'PeriodMissingOrMalformed' }
+            elseif ($end -clt $start -or ($portion -ceq 'Remaining' -and $end -ceq $start)) { $issue = 'PeriodOrder' }
+        }
+        if ($issue) { $expectedIssueRows.Add([ValueTuple[string,int,string]]::new($row.SourceFilename, $ordinal, $portion), $issue) }
+        if ($quantity.Known) {
+            $flag = if ($portion -ceq 'Actual') { '1' } else { '0' }
+            $key = [ValueTuple[string,string,string,string]]::new($row.SourceToken, $taskId, $resourceId, $flag)
+            Add-Quantity $expectedQuantities $key ([decimal]::Round($quantity.Value, 4, [MidpointRounding]::ToEven))
+        }
     }
 }
 $distribution = $tables['15_XER_RESOURCE_DISTRIBUTION']
@@ -487,32 +554,62 @@ foreach ($row in $distribution.Rows) {
     }
 }
 foreach ($row in $quality.Rows) {
+    if ($row[$quality.Indexes['allocation_portion']] -ceq '') { continue }
     $occurrence = [ValueTuple[string,int]]::new($row[$quality.Indexes['source_namespace']], [int]$row[$quality.Indexes['source_row_number']])
-    Assert-Audit ($expectedIssueRows.Remove($occurrence)) 'Companion has a duplicated or unjustified actual-date warning.'
+    $portion = $row[$quality.Indexes['allocation_portion']]
+    Assert-Audit ($portion -cin @('Actual','Remaining')) 'Companion has no explicit allocation portion.'
+    $issueKey = [ValueTuple[string,int,string]]::new($occurrence.Item1, $occurrence.Item2, $portion)
+    Assert-Audit ($expectedIssueRows.ContainsKey($issueKey)) "Companion warning $($row[$quality.Indexes['issue_code']]) at $issueKey was not independently predicted by source quantity/status/period checks. Add a dedicated independent oracle before extending this harness to another unsupported case."
+    $issueKind = $expectedIssueRows[$issueKey]
+    $null = $expectedIssueRows.Remove($issueKey)
+    Assert-Audit (-not [string]::IsNullOrWhiteSpace($row[$quality.Indexes['issue_code']]) -and
+        -not [string]::IsNullOrWhiteSpace($row[$quality.Indexes['message']])) 'Companion warning lacks its classification or explanation.'
+    if ($portion -ceq 'Actual') { $actualWarningCount++ } else { $remainingWarningCount++ }
     $assignment = $assignmentByOccurrence[$occurrence]
     Assert-Audit ($null -ne $assignment) 'Companion cannot be matched to its source assignment occurrence.'
-    Assert-Audit ($row[$quality.Indexes['diagnostic_schema_version']] -ceq '1.0' -and $row[$quality.Indexes['severity']] -ceq 'Warning') 'Companion schema/severity is invalid.'
+    Assert-Audit ($row[$quality.Indexes['diagnostic_schema_version']] -ceq '1.2' -and $row[$quality.Indexes['severity']] -ceq 'Warning') 'Companion schema/severity is invalid.'
     Assert-Audit ($row[$quality.Indexes['table_name']] -ceq '15_XER_RESOURCE_DISTRIBUTION') 'Companion names the wrong affected table.'
     Assert-Audit ($row[$quality.Indexes['FileName']] -ceq $assignment.OriginalSourceFilename) 'Companion lost original filename provenance.'
-    foreach ($column in @('taskrsrc_id','act_start_date','act_end_date','act_reg_qty','act_ot_qty')) {
+    foreach ($column in @('taskrsrc_id','act_start_date','act_end_date','act_reg_qty','act_ot_qty','restart_date','reend_date','remain_qty','curv_id','remain_crv')) {
         Assert-Audit ($row[$quality.Indexes[$column]] -ceq (Get-SourceCell $assignments $assignment $column)) "Companion changed source $column."
     }
     $taskId = (Get-SourceCell $assignments $assignment 'task_id').Trim()
     $resourceId = (Get-SourceCell $assignments $assignment 'rsrc_id').Trim()
     $task = $taskByPublicKey[(Get-Key $assignment.SourceFilename $taskId)]
     $projectId = (Get-SourceCell $rawTasks $task 'proj_id').Trim()
+    $status = (Get-SourceCell $rawTasks $task 'status_code').Trim()
+    $expectedIssueCode = switch ($issueKind) {
+        'Quantity' { if ($portion -ceq 'Actual') { 'ACTUAL_QUANTITY_INVALID' } else { 'REMAINING_QUANTITY_INVALID' } }
+        'Status' {
+            if ($status -notin @('TK_NotStart','TK_Active','TK_Complete')) { 'ASSIGNMENT_CONTEXT_INVALID' }
+            elseif ($portion -ceq 'Actual') { 'ACTUAL_ON_UNSTARTED' } else { 'REMAINING_ON_COMPLETED' }
+        }
+        'PeriodMissingOrMalformed' { if ($portion -ceq 'Actual') { 'ACTUAL_PERIOD_INVALID' } else { 'REMAINING_PERIOD_INVALID' } }
+        'PeriodOrder' { if ($portion -ceq 'Actual') { 'ACTUAL_FINISH_BEFORE_START' } else { 'REMAINING_PERIOD_INVALID' } }
+    }
+    Assert-Audit ($row[$quality.Indexes['issue_code']] -ceq $expectedIssueCode) "Companion issue code does not match independently detected source $issueKind."
+    Assert-Audit ($row[$quality.Indexes['status_code']] -ceq $status) 'Companion changed the source activity state.'
     foreach ($pair in @(@('task_id_key',$taskId),@('rsrc_id_key',$resourceId),@('proj_id_key',$projectId),@('taskrsrc_id_key',(Get-SourceCell $assignments $assignment 'taskrsrc_id')))) {
         Assert-Audit ($row[$quality.Indexes[$pair[0]]] -ceq (Get-Key $assignment.SourceFilename $pair[1])) 'Companion key is not source-qualified.'
     }
     $sourceProject = @($rawProjects.Rows | Where-Object { $_.SourceToken -ceq $assignment.SourceToken -and (Get-SourceCell $rawProjects $_ 'proj_id').Trim() -ceq $projectId })
     Assert-Audit ($sourceProject.Count -eq 1 -and $row[$quality.Indexes['project_data_date']] -ceq (Get-SourceCell $rawProjects $sourceProject[0] 'last_recalc_date')) 'Companion changed the raw project Data Date.'
-    $actual = (Read-Number (Get-SourceCell $assignments $assignment 'act_reg_qty') 'TASKRSRC.act_reg_qty' -BlankIsZero) + (Read-Number (Get-SourceCell $assignments $assignment 'act_ot_qty') 'TASKRSRC.act_ot_qty' -BlankIsZero)
-    $unallocated = Read-Number $row[$quality.Indexes['unallocated_actual_quantity']] 'Companion.unallocated_actual_quantity'
-    Assert-Audit ($unallocated -eq [decimal]::Round($actual, 4, [MidpointRounding]::ToEven)) 'Companion did not preserve the rounded source actual quantity.'
-    $key = [ValueTuple[string,string,string,string]]::new($assignment.SourceToken, $taskId, $resourceId, '1')
-    Add-Quantity $actualQuantities $key $unallocated
+    $quantity = Get-SourcePortionQuantity $assignments $assignment $portion
+    $quantityColumn = if ($portion -ceq 'Actual') { 'unallocated_actual_quantity' } else { 'unallocated_remaining_quantity' }
+    $otherQuantityColumn = if ($portion -ceq 'Actual') { 'unallocated_remaining_quantity' } else { 'unallocated_actual_quantity' }
+    Assert-Audit ($row[$quality.Indexes[$otherQuantityColumn]] -ceq '') 'Companion populated both portion totals on a single warning.'
+    if ($quantity.Known) {
+        $unallocated = Read-Number $row[$quality.Indexes[$quantityColumn]] "Companion.$quantityColumn"
+        Assert-Audit ($unallocated -eq [decimal]::Round($quantity.Value, 4, [MidpointRounding]::ToEven)) 'Companion did not preserve the rounded signed source portion quantity.'
+        $flag = if ($portion -ceq 'Actual') { '1' } else { '0' }
+        $key = [ValueTuple[string,string,string,string]]::new($assignment.SourceToken, $taskId, $resourceId, $flag)
+        Add-Quantity $actualQuantities $key $unallocated
+    } else {
+        Assert-Audit ($row[$quality.Indexes[$quantityColumn]] -ceq '' -and $issueKind -ceq 'Quantity') 'An unrepresentable amount must have a quantity warning and a blank numeric total.'
+        $unknownQuantityWarnings++
+    }
 }
-Assert-Audit ($expectedIssueRows.Count -eq 0) 'An invalid actual period was not represented in the companion.'
+Assert-Audit ($expectedIssueRows.Count -eq 0) 'An invalid source quantity, status or period was not represented in the companion.'
 Assert-Audit ($actualQuantities.Count -eq $expectedQuantities.Count) '15 omitted or invented a source/task/resource/actual allocation group.'
 foreach ($pair in $expectedQuantities.GetEnumerator()) {
     Assert-Audit ($actualQuantities.ContainsKey($pair.Key) -and $actualQuantities[$pair.Key] -eq $pair.Value) 'Distributed plus unallocated units failed source assignment quantity reconciliation.'
@@ -527,7 +624,13 @@ foreach ($name in $tableSources.Keys) {
     OrderedInputOccurrences = $sourceTokens.Count
     Tables = $tables.Count
     FilesIncludingCompanion = $bytesByTable.Count
-    ActualDateWarnings = $export.WarningCount
+    DataQualityWarnings = $export.WarningCount
+    GeneralWarnings = $generalWarningCount
+    DiagnosticEvidenceCells = $checkedDiagnosticEvidenceCells
+    AllocationWarnings = $(if ($ExcludeResourceDistribution) { $null } else { $actualWarningCount + $remainingWarningCount })
+    ActualAllocationWarnings = $(if ($ExcludeResourceDistribution) { $null } else { $actualWarningCount })
+    RemainingAllocationWarnings = $(if ($ExcludeResourceDistribution) { $null } else { $remainingWarningCount })
+    UnknownQuantityWarnings = $(if ($ExcludeResourceDistribution) { $null } else { $unknownQuantityWarnings })
     ResourceDistributionScope = $(if ($ExcludeResourceDistribution) { 'Explicitly excluded; NOT validated' } else { 'Included and reconciled' })
     ExactRetainedSourceCells = $checkedRawCells
     FiniteDerivedNumericCells = $checkedNumericCells

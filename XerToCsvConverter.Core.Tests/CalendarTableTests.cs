@@ -137,7 +137,11 @@ public sealed class CalendarTableTests
             ("source", Calendar("C1", P6TestCalendars.WorkWeek("10"))));
         var transformer = new XerTransformer(store);
         Assert.Equal(2, Assert.IsType<XerTable>(transformer.Create10XerCalendar()).RowCount);
-        Assert.Null(transformer.Create11XerCalendarDetailed());
+        XerTable detailed = Assert.IsType<XerTable>(transformer.Create11XerCalendarDetailed());
+        Assert.Equal(14, detailed.RowCount);
+        Assert.All(detailed.Rows, row => Assert.Equal("", Field(detailed, row, "work_hours")));
+        XerTable warnings = transformer.CreateDataQualityTable();
+        Assert.Equal(2, warnings.Rows.Count(row => Field(warnings, row, "table_name") == EnhancedTableNames.XerCalendarDetailed11));
     }
 
     private static string[] Calendar(string id, string blob, string hours = "8", string parent = "") =>

@@ -249,14 +249,15 @@ public sealed class RelationshipFreeFloatTests
     [InlineData("C1", "clndr_data", "not a calendar")]
     [InlineData("C2", "clndr_data", "")]
     [InlineData("C2", "clndr_data", "not a calendar")]
-    public void Unknown_relationship_calendar_does_not_invent_a_float(
+    public void Only_a_required_relationship_calendar_blocks_the_calculation(
         string calendarId, string field, string value)
     {
         var fixture = new Fixture();
         fixture.AddSource("source-A", 8, 24);
         fixture.Set("CALENDAR", "source-A", calendarId, field, value);
 
-        Assert.Equal(string.Empty, fixture.Value("free_float"));
+        // Zero lag never projects work on the fixed successor's calendar.
+        Assert.Equal(calendarId == "C2" ? "1" : string.Empty, fixture.Value("free_float"));
     }
 
     [Theory]
@@ -272,7 +273,7 @@ public sealed class RelationshipFreeFloatTests
         var missingCalendar = new Fixture();
         missingCalendar.AddSource("source-A", 8, 24);
         missingCalendar.Set("TASK", "source-A", taskId, "clndr_id", "MISSING");
-        Assert.Equal(string.Empty, missingCalendar.Value("free_float"));
+        Assert.Equal(taskId == "T2" ? "1" : string.Empty, missingCalendar.Value("free_float"));
     }
 
     [Theory]
@@ -661,13 +662,13 @@ public sealed class RelationshipFreeFloatTests
     [Theory]
     [InlineData("C1")]
     [InlineData("C2")]
-    public void Duplicate_used_calendar_identity_does_not_invent_a_float(string calendarId)
+    public void Duplicate_calendar_identity_blocks_only_when_required(string calendarId)
     {
         var fixture = new Fixture();
         fixture.AddSource("source-A", 8, 24);
         fixture.DuplicateRow("CALENDAR", "source-A", calendarId);
 
-        Assert.Equal(string.Empty, fixture.Value("free_float"));
+        Assert.Equal(calendarId == "C2" ? "1" : string.Empty, fixture.Value("free_float"));
     }
 
     [Theory]
@@ -804,8 +805,20 @@ public sealed class RelationshipFreeFloatTests
         internal void Set(string tableName, string source, string id, string field, string value)
         {
             XerTable table = _store.GetTable(tableName)!;
-            DataRow row = table.Rows.Single(row => row.SourceFilename == source && row.Fields[0] == id);
-            row.Fields[table.FieldIndexes[field]] = value;
+            var replacement = new XerTable(tableName);
+            replacement.SetHeaders(table.Headers!);
+            foreach (DataRow row in table.Rows)
+            {
+                if (row.SourceFilename == source && row.Fields[0] == id)
+                {
+                    var fields = row.Fields.ToArray();
+                    fields[table.FieldIndexes[field]] = value;
+                    replacement.AddRow(new DataRow(fields, row.SourceFilename,
+                        sourceToken: row.SourceToken, originalSourceFilename: row.OriginalSourceFilename));
+                }
+                else replacement.AddRow(row);
+            }
+            _store.AddTable(replacement);
         }
 
         internal void SetTaskDates(string source, string id, string start, string finish)

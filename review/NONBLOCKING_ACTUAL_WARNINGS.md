@@ -1,5 +1,12 @@
 # Non-blocking actual-date warnings
 
+Historical checkpoint: its actual-date-only warning scope and companion schema
+1.0/24-column header are superseded by the
+[current non-blocking resource-allocation policy](NONBLOCKING_RESOURCE_WARNINGS.md),
+which covers actual and remaining portions with the additive schema 1.1 header.
+The validation results below describe that earlier implementation, not the current
+coverage limits.
+
 Validated 2026-09-06. This supersedes the strict July rejection recorded in
 [the earlier real-XER checkpoint](REAL_XER_VALIDATION.md).
 

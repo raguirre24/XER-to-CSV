@@ -1,0 +1,43 @@
+ERMHDR	23.12	2026-09-06	Synthetic retained-logic profile fixture
+%T	PROJECT
+%F	proj_id	last_recalc_date	proj_short_name	clndr_id	add_date
+%R	P1	2026-01-30 00:00	J5001	C1	2025-01-01 00:00
+%T	PROJWBS
+%F	wbs_id	parent_wbs_id	proj_id	wbs_name	wbs_short_name	seq_num
+%R	W1		P1	Synthetic review project	ROOT	1
+%T	CALENDAR
+%F	clndr_id	clndr_name	clndr_type	day_hr_cnt	clndr_data
+%R	C1	Continuous	CA_Project	24	(0||CalendarData()((0||DaysOfWeek()((0||1()((0||0(s|00:00|f|24:00)())))(0||2()((0||0(s|00:00|f|24:00)())))(0||3()((0||0(s|00:00|f|24:00)())))(0||4()((0||0(s|00:00|f|24:00)())))(0||5()((0||0(s|00:00|f|24:00)())))(0||6()((0||0(s|00:00|f|24:00)())))(0||7()((0||0(s|00:00|f|24:00)())))))))
+%T	TASK
+%F	task_id	proj_id	wbs_id	clndr_id	task_type	status_code	task_code	task_name	rsrc_id	act_start_date	act_end_date	early_start_date	early_end_date	late_start_date	late_end_date	restart_date	reend_date	target_start_date	target_end_date	cstr_type	cstr_date	priority_type	float_path	float_path_order	driving_path_flag	remain_drtn_hr_cnt	target_drtn_hr_cnt	total_float_hr_cnt	free_float_hr_cnt	complete_pct_type	phys_complete_pct	act_work_qty	remain_work_qty	duration_type
+%R	T1	P1	W1	C1	TT_Task	TK_Active	A100	Synthetic A100		2026-01-28 00:00		2026-01-31 00:00	2026-02-01 00:00	2026-01-31 00:00	2026-02-01 00:00	2026-01-31 00:00	2026-02-01 00:00	2026-01-31 00:00	2026-02-01 00:00						Y	24	24	0	0	CP_Drtn	0	0	100	DT_FixedDrtn
+%R	T2	P1	W1	C1	TT_Task	TK_Active	A200	Synthetic A200		2026-01-29 00:00		2026-02-01 00:00	2026-02-02 00:00	2026-02-01 00:00	2026-02-02 00:00	2026-02-01 00:00	2026-02-02 00:00	2026-02-01 00:00	2026-02-02 00:00						Y	24	24	0	0	CP_Drtn	0	0	100	DT_FixedDrtn
+%T	TASKPRED
+%F	task_pred_id	task_id	pred_task_id	proj_id	pred_proj_id	pred_type	lag_hr_cnt
+%R	E1	T2	T1	P1	P1	PR_FS	0
+%T	SCHEDOPTIONS
+%F	proj_id	sched_calendar_on_relationship_lag	sched_retained_logic	sched_progress_override	sched_lag_early_start_flag	sched_use_expect_end_flag	sched_outer_depend_type
+%R	P1	rcal_Predecessor	Y	N	Y	Y	SD_Both
+%T	ACTVTYPE
+%F	actv_code_type_id	actv_code_type
+%R	CT1	Area
+%T	ACTVCODE
+%F	actv_code_id	actv_code_type_id	actv_code_name
+%R	CV1	CT1	North
+%T	TASKACTV
+%F	task_id	actv_code_id	actv_code_type_id
+%R	T1	CV1	CT1
+%R	T2	CV1	CT1
+%T	RSRC
+%F	rsrc_id	rsrc_short_name	rsrc_name	rsrc_type	clndr_id	unit_id	def_qty_per_hr
+%R	R1	LAB	Synthetic labour	RT_Labor	C1	U1	1
+%T	UMEASURE
+%F	unit_id	unit_abbrev	unit_name
+%R	U1	h	hours
+%T	TASKRSRC
+%F	taskrsrc_id	task_id	proj_id	rsrc_id	act_reg_qty	act_ot_qty	remain_qty	act_start_date	act_end_date	restart_date	reend_date	target_start_date	target_end_date	target_qty	curv_id
+%R	RA1	T1	P1	R1	0	0	100			2026-01-31 00:00	2026-02-01 00:00	2026-01-31 00:00	2026-02-01 00:00	100	CFRONT
+%T	RSRCCURVDATA
+%F	curv_id	curv_name	pct_usage_0	pct_usage_1	pct_usage_2	pct_usage_3	pct_usage_4	pct_usage_5	pct_usage_6	pct_usage_7	pct_usage_8	pct_usage_9	pct_usage_10	pct_usage_11	pct_usage_12	pct_usage_13	pct_usage_14	pct_usage_15	pct_usage_16	pct_usage_17	pct_usage_18	pct_usage_19	pct_usage_20
+%R	CFRONT	Synthetic front	0	8	8	8	8	8	8	8	8	8	8	2	2	2	2	2	2	2	2	2	2
+%E

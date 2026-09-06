@@ -97,7 +97,9 @@ public sealed class LegacyTableReviewTests
         Dictionary<string, string> task = Single(transformer.Create01XerTaskTable());
 
         Assert.Equal("", task["Original Duration"]);
-        Assert.Null(transformer.Create11XerCalendarDetailed());
+        XerTable detailed = Assert.IsType<XerTable>(transformer.Create11XerCalendarDetailed());
+        Assert.All(Records(detailed), row => Assert.Equal("", row["work_hours"]));
+        Assert.Equal(2, Records(transformer.CreateDataQualityTable()).Count(row => row["table_name"] == EnhancedTableNames.XerCalendarDetailed11));
     }
 
     [Fact]
@@ -158,7 +160,11 @@ public sealed class LegacyTableReviewTests
         Add(store, "PROJWBS", Source, new[] { "wbs_id", "parent_wbs_id", "proj_id" },
             new[] { "W1", "W2", "P1" }, new[] { "W2", "W1", "P1" });
 
-        Assert.Null(new XerTransformer(store).Create03XerProjWbsTable());
+        var transformer = new XerTransformer(store);
+        var rows = Records(Assert.IsType<XerTable>(transformer.Create03XerProjWbsTable()));
+        Assert.Equal(2, rows.Length);
+        Assert.All(rows, row => Assert.Equal("", row["parent_wbs_id_key"]));
+        Assert.Equal(2, transformer.CreateDataQualityTable().RowCount);
     }
 
     [Fact]
@@ -178,15 +184,27 @@ public sealed class LegacyTableReviewTests
     }
 
     [Fact]
-    public async Task Failed_requested_task_table_prevents_partial_success()
+    public async Task Missing_calendar_context_keeps_task_and_project_rows_with_unknown_calculations_and_warnings()
     {
-        // CALENDAR is absent; a requested failed transformation must fail the export.
+        // Imported task/project evidence remains exportable without a resolvable calendar.
         var store = new XerDataStore();
         Add(store, "TASK", Source, new[] { "task_id", "proj_id" }, new[] { "T1", "P1" });
         Add(store, "PROJECT", Source, new[] { "proj_id" }, new[] { "P1" });
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => new ProcessingService().ExportTablesToMemoryAsync(store,
-            new List<string> { "01_XER_TASK", "02_XER_PROJECT" }, null, CancellationToken.None));
+        var transformer = new XerTransformer(store);
+        Dictionary<string, string> task = Single(transformer.Create01XerTaskTable());
+        Assert.Equal("T1", task["task_id"]);
+        Assert.Equal("P1", task["proj_id"]);
+        Assert.Equal("", task["Original Duration"]);
+        Assert.Equal("", task["Remaining Duration"]);
+        Assert.Equal("", task["total_float"]);
+        var export = await new ProcessingService().ExportTablesToMemoryWithDiagnosticsAsync(store,
+            new List<string> { "01_XER_TASK", "02_XER_PROJECT" }, null, CancellationToken.None);
+        Assert.Equal(3, export.Files.Count);
+        Assert.True(export.WarningCount > 0);
+        Assert.Contains("T1", Encoding.UTF8.GetString(export.Files[EnhancedTableNames.XerTask01]), StringComparison.Ordinal);
+        Assert.Contains("P1", Encoding.UTF8.GetString(export.Files[EnhancedTableNames.XerProject02]), StringComparison.Ordinal);
+        Assert.Contains(XerDataQuality.TableName, export.Files.Keys);
     }
 
     private static XerDataStore Store(string source = Source, bool includeCurveColumns = true)
