@@ -92,6 +92,9 @@ public sealed class RelationshipAuditCliTests
         Assert.Equal("input.xer", records[2][original]);
         Assert.Equal("Calculated", records[1][Array.IndexOf(records[0], "classification")]);
         Assert.Equal("0", records[1][Array.IndexOf(records[0], "free_float")]);
+        Assert.Equal("1.1", records[1][Array.IndexOf(records[0], "audit_schema_version")]);
+        Assert.Equal("Finite", records[1][Array.IndexOf(records[0], "free_float_status")]);
+        Assert.NotEmpty(records[1][Array.IndexOf(records[0], "free_float_basis")]);
         Assert.DoesNotContain("SourceToken", Encoding.UTF8.GetString(first), StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, await RelationshipAuditCliApplication.RunAsync([.. args, "--overwrite"], new StringWriter(), new StringWriter()));
         Assert.Equal(first, File.ReadAllBytes(destination));
@@ -116,6 +119,9 @@ public sealed class RelationshipAuditCliTests
         for (int index = 0; index < audit.Count; index++)
         {
             Assert.Equal(audit[index].FormattedDays, records[index + 1][Array.IndexOf(records[0], "free_float")]);
+            Assert.Equal(audit[index].AllowanceStatus.ToString(), records[index + 1][Array.IndexOf(records[0], "free_float_status")]);
+            Assert.Equal(audit[index].CalculationBasis, records[index + 1][Array.IndexOf(records[0], "free_float_basis")]);
+            Assert.Equal(audit[index].ReasonCode, records[index + 1][Array.IndexOf(records[0], "free_float_reason")]);
             Assert.Equal(audit[index].SuccessorIdKey, records[index + 1][Array.IndexOf(records[0], "task_id_key")]);
         }
         using var diskAudit = new StringWriter();
@@ -146,6 +152,7 @@ public sealed class RelationshipAuditCliTests
         {
             FileName = "input,\"quoted\".xer", SourceNamespace = "namespace", SourceRowNumber = 1,
             Classification = RelationshipFloatClassification.Calculated, FloatHours = -1.25m,
+            AllowanceStatus = RelationshipAllowanceStatus.Finite, CalculationBasis = "TestCalendar",
             FloatDays = -0.15625m, Message = "first\r\nsecond, \"quoted\"", RawLag = "bad\tvalue",
             ProjectDataDate = new DateTime(2026, 9, 6, 17, 0, 0).AddTicks(123),
             InputEvidence = new Dictionary<string, RelationshipFieldEvidence>
@@ -164,6 +171,8 @@ public sealed class RelationshipAuditCliTests
         Assert.Equal(assessment.Message, Field("message"));
         Assert.Equal("-1.25", Field("free_float_hours"));
         Assert.Equal("-0.15625", Field("free_float"));
+        Assert.Equal("Finite", Field("free_float_status"));
+        Assert.Equal("TestCalendar", Field("free_float_basis"));
         Assert.Equal("", Field("effective_lag_hours"));
         Assert.Equal("2026-09-06 17:00:00.0000123", Field("project_data_date"));
         Assert.Equal("ExplicitBlank", Field("sched_retained_logic_state"));
@@ -180,6 +189,39 @@ public sealed class RelationshipAuditCliTests
         List<string[]> rows = ParseCsv(writer.ToString());
         Assert.Single(rows);
         Assert.Equal(RelationshipAuditCsv.Columns, rows[0]);
+        Assert.Equal("1.1", RelationshipAuditCsv.SchemaVersion);
+        Assert.Equal(46, rows[0].Length);
+        int floatIndex = Array.IndexOf(rows[0], "free_float");
+        Assert.Equal(new[] { "free_float", "free_float_status", "free_float_basis", "classification", "reason_code", "message" },
+            rows[0].Skip(floatIndex).Take(6));
+    }
+
+    [Theory]
+    [InlineData(RelationshipAllowanceStatus.Finite, "2", "0.25")]
+    [InlineData(RelationshipAllowanceStatus.Estimated, "2", "0.25")]
+    [InlineData(RelationshipAllowanceStatus.NoFiniteBound, "", "")]
+    [InlineData(RelationshipAllowanceStatus.Historical, "", "")]
+    [InlineData(RelationshipAllowanceStatus.FixedEvent, "", "")]
+    [InlineData(RelationshipAllowanceStatus.RequiresContext, "", "")]
+    [InlineData(RelationshipAllowanceStatus.MissingData, "", "")]
+    [InlineData(RelationshipAllowanceStatus.InvalidData, "", "")]
+    public void Audit_does_not_publish_numeric_payloads_for_nonfinite_statuses(
+        RelationshipAllowanceStatus status, string expectedHours, string expectedDays)
+    {
+        var assessment = new RelationshipFloatAssessment
+        {
+            Classification = RelationshipFloatClassification.Calculated, AllowanceStatus = status,
+            CalculationBasis = "SyntheticBasis", ReasonCode = "SyntheticReason", FloatHours = 2m, FloatDays = 0.25m
+        };
+        using var writer = new StringWriter();
+        RelationshipAuditCsv.Write([assessment], writer);
+        List<string[]> rows = ParseCsv(writer.ToString());
+        string Field(string name) => rows[1][Array.IndexOf(rows[0], name)];
+        Assert.Equal(expectedHours, Field("free_float_hours"));
+        Assert.Equal(expectedDays, Field("free_float"));
+        Assert.Equal(status.ToString(), Field("free_float_status"));
+        Assert.Equal("Calculated", Field("classification"));
+        Assert.Equal("SyntheticReason", Field("reason_code"));
     }
 
     [Fact]

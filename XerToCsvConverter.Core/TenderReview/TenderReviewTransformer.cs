@@ -410,6 +410,8 @@ internal sealed class TenderReviewTransformer
                             ConvertRelationshipLag(relationship, tenderSource, context),
                         "total_float" when relationship is not null =>
                             ConvertRelationshipTotalFloat(relationship, tenderSource, context),
+                        "free_float" when contract.TableName == "06_XER_PREDECESSOR"
+                            && reader.Get("free_float_status") is not ("Finite" or "Estimated") => string.Empty,
                         "free_float" when relationship is not null =>
                             ValidateRelationshipFreeFloat(
                                 reader.Get(column), relationship, tenderSource, context),

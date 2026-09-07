@@ -9,6 +9,12 @@ public enum RelationshipFloatClassification
     Calculated, Ignored, Historical, Unsupported, MissingData, InvalidData
 }
 
+/// <summary>Meaning of the relationship allowance, independent of the legacy audit classification.</summary>
+public enum RelationshipAllowanceStatus
+{
+    Finite, Estimated, NoFiniteBound, Historical, FixedEvent, RequiresContext, MissingData, InvalidData
+}
+
 /// <summary>Original input evidence; State also distinguishes malformed typed values.</summary>
 public sealed record RelationshipFieldEvidence(string RawValue, string State)
 {
@@ -55,11 +61,14 @@ public sealed record RelationshipFloatAssessment
     public decimal? FloatHours { get; init; }
     public decimal? FloatDays { get; init; }
     public RelationshipFloatClassification Classification { get; init; }
+    public RelationshipAllowanceStatus AllowanceStatus { get; init; } = RelationshipAllowanceStatus.RequiresContext;
+    public string CalculationBasis { get; init; } = "None";
     public string ReasonCode { get; init; } = "";
     public string Message { get; init; } = "";
     public IReadOnlyDictionary<string, RelationshipFieldEvidence> InputEvidence { get; init; } =
         new ReadOnlyDictionary<string, RelationshipFieldEvidence>(new Dictionary<string, RelationshipFieldEvidence>());
 
     public string FormattedDays => Classification == RelationshipFloatClassification.Calculated
+        && AllowanceStatus is RelationshipAllowanceStatus.Finite or RelationshipAllowanceStatus.Estimated
         ? FloatDays?.ToString("G29", CultureInfo.InvariantCulture) ?? "" : "";
 }

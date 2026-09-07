@@ -1,0 +1,77 @@
+{
+  "input_file": "C:\\Users\\ricar\\Documents\\Code\\XER to CSV\\XER Sample\\2608-EBA_PAA_8.0 (draft).xer",
+  "input_sha256": "BCD04882C15C96ED94A18F670F6F5F9AD26493993BA5ADD44250A48958E487B7",
+  "core_sha256": "7D7BFDD759CC13482053E88DB003D2390768C4A67789FDD3CDF3E4C0D1B45798",
+  "source_relationship_rows": 16761,
+  "exported_rows_verified": 16761,
+  "classifications": [
+    {
+      "count": 2401,
+      "classification": "Calculated"
+    },
+    {
+      "count": 14145,
+      "classification": "Historical"
+    },
+    {
+      "count": 215,
+      "classification": "Unsupported"
+    }
+  ],
+  "reasons": [
+    {
+      "count": 2341,
+      "reason_code": "CalculatedRemainingRelationship"
+    },
+    {
+      "count": 60,
+      "reason_code": "CalculatedRetainedRemainingRelationship"
+    },
+    {
+      "count": 1078,
+      "reason_code": "HistoricalFixedPredecessor"
+    },
+    {
+      "count": 13067,
+      "reason_code": "HistoricalSuccessor"
+    },
+    {
+      "count": 199,
+      "reason_code": "UnsupportedActivityType"
+    },
+    {
+      "count": 11,
+      "reason_code": "UnsupportedProgressedRelationship"
+    },
+    {
+      "count": 5,
+      "reason_code": "UnsupportedProgressedStartEndpoint"
+    }
+  ],
+  "types": [
+    {
+      "count": 2177,
+      "relationship_type": "PR_FF"
+    },
+    {
+      "count": 13379,
+      "relationship_type": "PR_FS"
+    },
+    {
+      "count": 12,
+      "relationship_type": "PR_SF"
+    },
+    {
+      "count": 1193,
+      "relationship_type": "PR_SS"
+    }
+  ],
+  "numeric_positive": 945,
+  "numeric_zero": 1456,
+  "numeric_negative": 0,
+  "numeric_tiny_nonzero": 0,
+  "numeric_resource_dependent": 0,
+  "numeric_inconsistent_active_evidence": 0,
+  "source_unchanged": true,
+  "evidence_scope": "Current-source tests and row-for-row export reconciliation; no native P6 reschedule comparison."
+}

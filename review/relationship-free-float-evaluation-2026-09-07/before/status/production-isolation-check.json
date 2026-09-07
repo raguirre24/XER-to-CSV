@@ -1,0 +1,11 @@
+{
+  "CheckedAtUtc": "2026-09-07T09:40:42.2073591Z",
+  "Command": "dotnet msbuild 'XER to CSV.csproj' -getItem:Compile",
+  "DesktopCompileCount": 6,
+  "EvaluationCompileCount": 0,
+  "LegacyBinExists": false,
+  "LegacyObjExists": false,
+  "HiddenBuildDirectoryExists": true,
+  "CoreAssemblySha256": "7D7BFDD759CC13482053E88DB003D2390768C4A67789FDD3CDF3E4C0D1B45798",
+  "HarnessAssertionFailures": 0
+}

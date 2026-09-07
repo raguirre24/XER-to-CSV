@@ -33,7 +33,7 @@ public sealed class TenderReviewBundleServiceTests
         Assert.Equal(22, result.ManifestRows.Count);
         Assert.All(result.ManifestRows, row =>
         {
-            Assert.Equal("1.0", row.SchemaVersion);
+            Assert.Equal("2.0", row.SchemaVersion);
             Assert.Equal("tender_review", row.BundleProfile);
             Assert.Equal("COMPLETE", row.BundleStatus);
             Assert.Equal(result.BundleId, row.BundleId);
@@ -568,7 +568,7 @@ public sealed class TenderReviewBundleServiceTests
         Assert.Equal("clndr_id_key,clndr_name", string.Join(',', ReadCsv(result.Files["10_XER_CALENDAR.csv"])[0]));
         Assert.DoesNotContain("11_XER_CALENDAR_DETAILED.csv", result.Files.Keys);
         Assert.Equal(12, result.Files.Count);
-        Assert.All(result.ManifestRows, row => Assert.Equal("1.0", row.SchemaVersion));
+        Assert.All(result.ManifestRows, row => Assert.Equal("2.0", row.SchemaVersion));
         Assert.Equal(3, result.ManifestRows.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
     }
 
@@ -812,7 +812,7 @@ public sealed class TenderReviewBundleServiceTests
     [InlineData("2026-09-07 17:00", "2026-09-08 17:00", "0.125")]
     [InlineData("2026-09-07 09:00", "2026-09-08 09:00", "0.875")]
     [InlineData("2026-09-07 17:00", "2026-09-08 00:00", "-0.125")]
-    public async Task Relationship_delay_allowance_reaches_tender_csv_without_changing_contract(
+    public async Task Relationship_delay_allowance_and_status_reach_tender_v2_csv(
         string predecessorFinish, string successorStart, string expectedFloat)
     {
         TenderReviewSource source = TenderReviewNamingTests.Source(0, "stage.xer", "2026-09-05");
@@ -826,7 +826,7 @@ public sealed class TenderReviewBundleServiceTests
             .BuildFromParsedDataToMemoryAsync(store, TenderReviewNamingTests.Request(new[] { source }));
         IReadOnlyList<string[]> csv = ReadCsv(result.Files["06_XER_PREDECESSOR.csv"]);
         Assert.Equal(2, csv.Count);
-        Assert.Equal(16, csv[0].Length);
+        Assert.Equal(19, csv[0].Length);
         Assert.Equal(TenderReviewContract.Tables.Single(table => table.TableName == "06_XER_PREDECESSOR")
             .Columns.Select(column => column.Name), csv[0]);
         Dictionary<string, string> relationship = Row(csv[0], csv[1]);
@@ -836,10 +836,14 @@ public sealed class TenderReviewBundleServiceTests
         // 08-12/13-17 weekday calendar these permit +1, +7 and -1 working hours.
         Assert.Equal(expectedFloat, relationship["free_float"]);
         Assert.Equal("1", relationship["lag"]);
+        RelationshipFloatAssessment assessment = Assert.Single(new XerTransformer(store).AssessRelationships());
+        Assert.Equal(assessment.AllowanceStatus.ToString(), relationship["free_float_status"]);
+        Assert.Equal(assessment.CalculationBasis, relationship["free_float_basis"]);
+        Assert.Equal(assessment.ReasonCode, relationship["free_float_reason"]);
         Assert.Equal("PR_FS", relationship["pred_type"]);
         Assert.Equal("CSV::J5001::TENDER::20260905::T1", relationship["pred_task_id_key"]);
         Assert.Equal("CSV::J5001::TENDER::20260905::T2", relationship["task_id_key"]);
-        Assert.All(result.ManifestRows, row => Assert.Equal("1.0", row.SchemaVersion));
+        Assert.All(result.ManifestRows, row => Assert.Equal("2.0", row.SchemaVersion));
 
         void SetDates(string taskId, string start, string finish)
         {

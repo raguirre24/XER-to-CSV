@@ -1,0 +1,321 @@
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using XerToCsvConverter;
+
+// Independent evaluation artifact. The synthetic schedule mirrors the public-parser fixture in
+// RelationshipAssessmentTests, with an explicit Monday-Friday calendar and transparent date arithmetic.
+CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+string output = args.Length == 0 ? Environment.CurrentDirectory : Path.GetFullPath(args[0]);
+Directory.CreateDirectory(output);
+string[] types = ["PR_FS", "PR_FF", "PR_SS", "PR_SF"];
+string[] statuses = ["TK_NotStart", "TK_Active", "TK_Complete"];
+string[] modes = ["RetainedLogic", "ProgressOverride", "ActualDates", "ConflictingFlags", "MissingOptions"];
+List<Result> matrix = [], activityTypes = [], malformed = [], fixedEventBasis = [], suspensionBasis = [];
+List<string> failures = [];
+List<object> precisionObservations = [];
+
+foreach (string type in types)
+foreach (string predecessor in statuses)
+foreach (string successor in statuses)
+foreach (string mode in modes)
+foreach (int lag in new[] { -8, 0, 8 })
+{
+    var fixture = new Schedule(type, predecessor, successor, mode, lag);
+    string expected = ExpectedReason(type, predecessor, successor, mode, lag);
+    Result actual = Evaluate($"{type}/{predecessor}/{successor}/{mode}/lag={lag}", fixture, expected);
+    matrix.Add(actual);
+    if (actual.Classification == "Calculated")
+    {
+        decimal expectedHours = (type switch { "PR_FS" => 0m, "PR_FF" or "PR_SS" => 8m, _ => 16m }) - lag;
+        if (actual.Hours != expectedHours)
+        {
+            long ticks = checked((long)decimal.Round(actual.Hours!.Value * TimeSpan.TicksPerHour, 0));
+            DateTime from = DateTime.Parse(actual.PredecessorEndpoint, CultureInfo.InvariantCulture);
+            DateTime deadline = DateTime.Parse(actual.SuccessorEndpoint, CultureInfo.InvariantCulture);
+            bool isStart = type is "PR_SS" or "PR_SF";
+            DateTime lagged = ReferenceAddTicks(ReferenceMove(from, ticks, isStart), lag * TimeSpan.TicksPerHour);
+            DateTime nextLagged = ReferenceAddTicks(ReferenceMove(from, ticks + 1, isStart), lag * TimeSpan.TicksPerHour);
+            Check(lagged <= deadline && nextLagged > deadline, actual.Case + ": independent tick feasibility/maximality failed");
+            precisionObservations.Add(new { actual.Case, ExpectedHours = expectedHours, ActualHours = actual.Hours,
+                ErrorTicks = (expectedHours - actual.Hours) * TimeSpan.TicksPerHour, actual.ExportedFreeFloat,
+                LaggedEndpoint = lagged.ToString("O"), Deadline = deadline.ToString("O"), NextTickLaggedEndpoint = nextLagged.ToString("O"),
+                Feasible = lagged <= deadline, NextTickInfeasible = nextLagged > deadline });
+        }
+        // Start/finish boundary canonicalization deliberately chooses the greatest feasible .NET tick.
+        // Preserve exact values above while accepting at most one tick of boundary adjustment.
+        Check(actual.Hours.HasValue && decimal.Round(Math.Abs(actual.Hours.Value - expectedHours) * TimeSpan.TicksPerHour, 0) <= 1m
+            && actual.Days == actual.Hours / 8m,
+            $"{actual.Case}: expected {expectedHours} hours; observed {actual.Hours}");
+    }
+}
+
+foreach (string type in types)
+foreach (string predecessor in statuses)
+foreach (string successor in statuses)
+foreach (string activityType in new[] { "TT_Task", "TT_Rsrc", "TT_Mile", "TT_FinMile", "TT_LOE", "TT_WBS", "TT_Unknown" })
+foreach (bool changePredecessor in new[] { true, false })
+{
+    var fixture = new Schedule(type, predecessor, successor, "RetainedLogic", 0);
+    var task = changePredecessor ? fixture.Predecessor : fixture.Successor;
+    task["task_type"] = activityType;
+    if (activityType is "TT_Mile" or "TT_FinMile")
+    {
+        string milestone = task[activityType == "TT_Mile" ? "restart_date" : "reend_date"];
+        foreach (string field in new[] { "restart_date", "reend_date", "early_start_date", "early_end_date" }) task[field] = milestone;
+        task["remain_drtn_hr_cnt"] = "0";
+        if (task["status_code"] == "TK_Complete") task["act_end_date"] = task["act_start_date"];
+    }
+    string expected = successor == "TK_Complete" ? "HistoricalSuccessor"
+        : predecessor == "TK_Complete" ? "HistoricalFixedPredecessor"
+        : activityType == "TT_WBS" ? "IgnoredSummaryRelationship"
+        : activityType is "TT_LOE" or "TT_Unknown" ? "UnsupportedActivityType"
+        : ExpectedReason(type, predecessor, successor, "RetainedLogic", 0);
+    activityTypes.Add(Evaluate($"{type}/{predecessor}/{successor}/{activityType}/{(changePredecessor ? "predecessor" : "successor")}", fixture, expected));
+}
+
+foreach (string type in types)
+foreach (bool changePredecessor in new[] { true, false })
+{
+    string side = changePredecessor ? "predecessor" : "successor";
+    foreach (string badStatus in new[] { "", "TK_Bogus", "TK_Active ", "tk_notstart" })
+    {
+        var fixture = new Schedule(type);
+        (changePredecessor ? fixture.Predecessor : fixture.Successor)["status_code"] = badStatus;
+        string expected = badStatus.Trim().Equals("TK_Active", StringComparison.OrdinalIgnoreCase)
+            ? "UnresolvedActualStart"
+            : badStatus.Equals("tk_notstart", StringComparison.OrdinalIgnoreCase) ? "CalculatedRemainingRelationship" : "UnknownActivityStatus";
+        malformed.Add(Evaluate($"status-token/{type}/{side}/{badStatus}", fixture, expected));
+    }
+    foreach (var probe in new[] {
+        (Name: "not-started-with-actual-start", Status: "TK_NotStart", Field: "act_start_date", Value: "2026-01-01 08:00"),
+        (Name: "not-started-with-actual-finish", Status: "TK_NotStart", Field: "act_end_date", Value: "2026-01-01 17:00"),
+        (Name: "active-with-actual-finish", Status: "TK_Active", Field: "act_end_date", Value: "2026-01-01 17:00"),
+        (Name: "active-missing-actual-start", Status: "TK_Active", Field: "act_start_date", Value: ""),
+        (Name: "active-malformed-actual-start", Status: "TK_Active", Field: "act_start_date", Value: "bad-date"),
+        (Name: "active-actual-start-after-data-date", Status: "TK_Active", Field: "act_start_date", Value: "2026-01-03 08:00"),
+        (Name: "active-actual-start-after-remaining-finish", Status: "TK_Active", Field: "act_start_date", Value: "2026-01-10 08:00"),
+        (Name: "active-negative-remaining-duration", Status: "TK_Active", Field: "remain_drtn_hr_cnt", Value: "-8"),
+        (Name: "active-malformed-remaining-duration", Status: "TK_Active", Field: "remain_drtn_hr_cnt", Value: "bad-number"),
+        (Name: "complete-missing-actual-finish", Status: "TK_Complete", Field: "act_end_date", Value: ""),
+        (Name: "complete-malformed-actual-finish", Status: "TK_Complete", Field: "act_end_date", Value: "bad-date") })
+    {
+        // Both endpoint directions now assert consistent active-state validation.
+        var fixture = new Schedule(type, changePredecessor ? probe.Status : "TK_NotStart", changePredecessor ? "TK_NotStart" : probe.Status);
+        (changePredecessor ? fixture.Predecessor : fixture.Successor)[probe.Field] = probe.Value;
+        string expected = probe.Name switch {
+            "not-started-with-actual-start" or "not-started-with-actual-finish" or "active-with-actual-finish" => "InconsistentActivityState",
+            "active-missing-actual-start" or "active-malformed-actual-start" => "UnresolvedActualStart",
+            "active-actual-start-after-data-date" => "ActualStartAfterDataDate",
+            "active-actual-start-after-remaining-finish" => "ActualStartAfterRemainingEndpoint",
+            "complete-missing-actual-finish" or "complete-malformed-actual-finish" => changePredecessor ? "HistoricalFixedPredecessor" : "HistoricalSuccessor",
+            _ => ExpectedReason(type, fixture.Predecessor["status_code"], fixture.Successor["status_code"], fixture.Mode, 0)
+        };
+        malformed.Add(Evaluate($"{probe.Name}/{type}/{side}", fixture, expected));
+    }
+}
+
+foreach (string type in new[] { "PR_SS", "PR_SF" })
+foreach (string successor in new[] { "TK_NotStart", "TK_Active" })
+foreach (string mode in new[] { "RetainedLogic", "ProgressOverride" })
+foreach (string lag in new[] { "-8", "0", "8", "", "bad-lag" })
+{
+    var fixture = new Schedule(type, "TK_Active", successor, mode);
+    fixture.Options["sched_lag_early_start_flag"] = "N";
+    fixture.Relationship["lag_hr_cnt"] = lag;
+    // A valid fixed actual start has no finite remaining movement to solve; lag/calendar are unnecessary.
+    fixedEventBasis.Add(Evaluate($"fixed-actual-start/{type}/{successor}/{mode}/lag={lag}", fixture, "FixedActualPredecessorStart"));
+}
+
+foreach (string type in new[] { "PR_FS", "PR_FF" })
+foreach (string resourceEndpoint in new[] { "None", "Predecessor", "Successor" })
+foreach (int lag in new[] { 0, 8 })
+{
+    var fixture = new Schedule(type, "TK_Active", "TK_NotStart", "RetainedLogic", lag);
+    fixture.Predecessor["suspend_date"] = "2026-01-06 10:00";
+    fixture.Predecessor["resume_date"] = "2026-01-07 11:00";
+    fixture.Successor["restart_date"] = fixture.Successor["early_start_date"] = "2026-01-08 08:00";
+    fixture.Successor["reend_date"] = fixture.Successor["early_end_date"] = "2026-01-08 17:00";
+    if (resourceEndpoint != "None") (resourceEndpoint == "Predecessor" ? fixture.Predecessor : fixture.Successor)["task_type"] = "TT_Rsrc";
+    string expectedBasis = resourceEndpoint == "None" ? "TaskCalendarSuspensionAdjusted" : "TaskCalendarResourceEstimateSuspensionAdjusted";
+    var actual = Evaluate($"closed-suspension/{type}/{resourceEndpoint}/lag={lag}", fixture, "CalculatedRemainingRelationship", expectedBasis);
+    // Tuesday is removed only from predecessor movement; it remains available for the lag operation.
+    decimal expectedHours = (type == "PR_FS" ? 8m : 16m) - lag;
+    Check(actual.Hours == expectedHours && actual.Days == expectedHours / 8m, $"{actual.Case}: expected {expectedHours} suspension-adjusted hours, observed {actual.Hours}");
+    suspensionBasis.Add(actual);
+}
+
+WriteCsv("status-mode-lag-matrix.csv", matrix);
+WriteCsv("activity-type-matrix.csv", activityTypes);
+WriteCsv("malformed-state-probes.csv", malformed);
+WriteCsv("fixed-event-basis-probes.csv", fixedEventBasis);
+WriteCsv("suspension-basis-probes.csv", suspensionBasis);
+var summary = new {
+    TimestampUtc = DateTime.UtcNow.ToString("O"),
+    CoreAssembly = typeof(XerTransformer).Assembly.Location,
+    CoreAssemblySha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(XerTransformer).Assembly.Location))),
+    MatrixCases = matrix.Count, ActivityTypeCases = activityTypes.Count, MalformedCases = malformed.Count, FixedEventBasisCases = fixedEventBasis.Count, SuspensionBasisCases = suspensionBasis.Count,
+    MatrixCounts = matrix.GroupBy(x => new { x.RequestedMode, x.Classification, x.AllowanceStatus, x.CalculationBasis }).Select(x => new { x.Key.RequestedMode, x.Key.Classification, x.Key.AllowanceStatus, x.Key.CalculationBasis, Count = x.Count() }),
+    ExactWholeHourDifferences = precisionObservations,
+    Failures = failures
+};
+File.WriteAllText(Path.Combine(output, "summary.json"), JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true }));
+Console.WriteLine($"Evaluated {matrix.Count} status/mode/lag cases, {activityTypes.Count} activity-type cases, {malformed.Count} malformed-state probes, {fixedEventBasis.Count} fixed-event basis probes and {suspensionBasis.Count} suspension basis probes. Assertion failures: {failures.Count}.");
+foreach (string failure in failures) Console.WriteLine(failure);
+return failures.Count == 0 ? 0 : 1;
+
+void Check(bool condition, string message) { if (!condition) failures.Add(message); }
+Result Evaluate(string name, Schedule fixture, string? expectedReason = null, string? expectedBasisOverride = null)
+{
+    var transformer = new XerTransformer(fixture.Store());
+    var assessments = transformer.AssessRelationships();
+    Check(assessments.Count == 1, name + ": expected one assessment");
+    var a = assessments.Single();
+    XerTable export = transformer.Create06XerPredecessor(new ConcurrentDictionary<string, XerTable>())!;
+    string exported = export.Rows.Single().Fields[export.FieldIndexes["free_float"]];
+    Check(exported == a.FormattedDays, name + ": table 06 and assessment disagree");
+    Check(export.Rows.Single().Fields[export.FieldIndexes["free_float_status"]] == a.AllowanceStatus.ToString(), name + ": table 06 status disagrees");
+    Check(export.Rows.Single().Fields[export.FieldIndexes["free_float_reason"]] == a.ReasonCode, name + ": table 06 reason disagrees");
+    Check(export.Rows.Single().Fields[export.FieldIndexes["free_float_basis"]] == a.CalculationBasis.ToString(), name + ": table 06 basis disagrees");
+    Check(a.Classification == RelationshipFloatClassification.Calculated || (a.FloatHours == null && a.FloatDays == null && exported == ""), name + ": noncalculated case has a numeric value");
+    if (expectedReason != null) Check(a.ReasonCode == expectedReason, $"{name}: expected {expectedReason}, observed {a.ReasonCode}");
+    string expectedClass = expectedReason switch {
+        null => throw new InvalidOperationException(name + ": every evaluation probe must declare an expected reason"),
+        _ when expectedReason.StartsWith("Calculated", StringComparison.Ordinal) => "Calculated",
+        _ when expectedReason.StartsWith("Historical", StringComparison.Ordinal) => "Historical",
+        _ when expectedReason.StartsWith("Ignored", StringComparison.Ordinal) => "Ignored",
+        "InconsistentActivityState" or "UnknownActivityStatus" or "ActualStartAfterRemainingEndpoint" => "InvalidData",
+        "UnresolvedActualStart" => new[] { fixture.Predecessor, fixture.Successor }.Any(t => t["status_code"].Trim().Equals("TK_Active", StringComparison.OrdinalIgnoreCase) && t["act_start_date"] == "") ? "MissingData" : "InvalidData",
+        "UnresolvedProgressMode" => fixture.Mode == "ConflictingFlags" ? "InvalidData" : "MissingData",
+        "UnresolvedLagCalendarSetting" => "MissingData",
+        _ => "Unsupported"
+    };
+    Check(a.Classification.ToString() == expectedClass, $"{name}: expected classification {expectedClass}, observed {a.Classification}");
+    bool expectedNumeric = expectedClass == "Calculated";
+    Check(expectedNumeric ? a.FloatHours.HasValue && a.FloatDays.HasValue && exported != "" : a.FloatHours == null && a.FloatDays == null && exported == "",
+        name + ": numeric availability disagrees with expected reason");
+    bool resource = fixture.Predecessor["task_type"] == "TT_Rsrc" || fixture.Successor["task_type"] == "TT_Rsrc";
+    string expectedStatus = expectedReason == "FixedActualPredecessorStart" ? "FixedEvent" : expectedClass switch {
+        "Calculated" => resource ? "Estimated" : "Finite", "Ignored" => "NoFiniteBound", "Unsupported" => "RequiresContext", _ => a.Classification.ToString()
+    };
+    string expectedBasis = expectedBasisOverride ?? (expectedStatus switch {
+        "Finite" => "TaskCalendarRemainingEndpoint", "Estimated" => "TaskCalendarResourceEstimate", "Historical" => "HistoricalActualEvent",
+        "FixedEvent" => "FixedActualStart", "NoFiniteBound" => "IgnoredRelationship", "RequiresContext" => "UnresolvedContext", _ => "None"
+    });
+    Check(a.AllowanceStatus.ToString() == expectedStatus, $"{name}: expected status {expectedStatus}, observed {a.AllowanceStatus}");
+    Check(a.CalculationBasis.ToString() == expectedBasis, $"{name}: expected basis {expectedBasis}, observed {a.CalculationBasis}");
+    return new(name, a.RelationshipType, a.PredecessorStatus, a.SuccessorStatus, fixture.Mode, a.SchedulingMode,
+        fixture.Relationship["lag_hr_cnt"], a.Classification.ToString(), a.ReasonCode, a.AllowanceStatus.ToString(), a.CalculationBasis.ToString(), a.FloatHours, a.FloatDays, exported,
+        a.PredecessorEndpointField, a.PredecessorEndpoint?.ToString("s") ?? "", a.SuccessorEndpointField, a.SuccessorEndpoint?.ToString("s") ?? "",
+        fixture.Predecessor["task_type"], fixture.Successor["task_type"], fixture.Predecessor["act_start_date"], fixture.Successor["act_start_date"],
+        fixture.Predecessor["remain_drtn_hr_cnt"], fixture.Successor["remain_drtn_hr_cnt"], fixture.Project["last_recalc_date"],
+        fixture.Predecessor.GetValueOrDefault("suspend_date", ""), fixture.Predecessor.GetValueOrDefault("resume_date", ""),
+        expectedReason, a.Message);
+}
+void WriteCsv(string name, List<Result> rows)
+{
+    using var writer = new StreamWriter(Path.Combine(output, name), false, new UTF8Encoding(false));
+    var properties = typeof(Result).GetProperties();
+    writer.WriteLine(string.Join(',', properties.Select(p => p.Name)));
+    foreach (var row in rows) writer.WriteLine(string.Join(',', properties.Select(p => Csv(p.GetValue(row)?.ToString() ?? ""))));
+}
+static string Csv(string value) => '"' + value.Replace("\"", "\"\"") + '"';
+// Independent interval walk over the explicit fixture's split weekday calendar.
+// No production calculator, integrator, lag inverse, or solver is called here.
+static DateTime ReferenceAddTicks(DateTime original, long ticks)
+{
+    if (ticks == 0) return original;
+    bool forward = ticks > 0;
+    long remaining = Math.Abs(ticks);
+    for (DateTime date = original.Date; ; date = date.AddDays(forward ? 1 : -1))
+    {
+        if (date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) continue;
+        var slots = new[] { (Start: date.AddHours(8), Finish: date.AddHours(12)), (Start: date.AddHours(13), Finish: date.AddHours(17)) };
+        foreach (var slot in forward ? slots : slots.Reverse())
+        {
+            DateTime left = slot.Start, right = slot.Finish;
+            if (forward && original > left) left = original;
+            if (!forward && original < right) right = original;
+            long available = Math.Max(0, (right - left).Ticks);
+            if (available == 0) continue;
+            if (remaining <= available) return forward ? left.AddTicks(remaining) : right.AddTicks(-remaining);
+            remaining -= available;
+        }
+    }
+}
+static DateTime ReferenceMove(DateTime original, long ticks, bool start)
+{
+    if (ticks == 0) return original;
+    DateTime moved = ReferenceAddTicks(original, ticks);
+    return start ? ReferenceAddTicks(moved, 1).AddTicks(-1) : ReferenceAddTicks(moved, -1).AddTicks(1);
+}
+static string ExpectedReason(string type, string predecessor, string successor, string mode, int lag)
+{
+    if (successor == "TK_Complete") return "HistoricalSuccessor";
+    if (predecessor == "TK_Complete") return "HistoricalFixedPredecessor";
+    if (predecessor == "TK_Active" && type == "PR_SF") return "FixedActualPredecessorStart";
+    if (successor == "TK_Active") return mode switch {
+        "MissingOptions" or "ConflictingFlags" => "UnresolvedProgressMode",
+        "ActualDates" => "UnsupportedActualDatesProgressCase",
+        "ProgressOverride" => type == "PR_FS" && lag == 0 ? "IgnoredUnderExportedProgressOverride" : "UnsupportedProgressOverrideCase",
+        _ => type == "PR_SS" ? "UnsupportedProgressedRelationship" : type == "PR_SF" ? "CalculatedRetainedStartToFinish" : "CalculatedRetainedRemainingRelationship"
+    };
+    if (predecessor == "TK_Active" && type is "PR_SS" or "PR_SF") return "UnsupportedProgressedStartEndpoint";
+    if (mode == "MissingOptions" && lag != 0) return "UnresolvedLagCalendarSetting";
+    return "CalculatedRemainingRelationship";
+}
+record Result(string Case, string Type, string PredecessorStatus, string SuccessorStatus, string RequestedMode, string ResolvedMode,
+    string LagHours, string Classification, string Reason, string AllowanceStatus, string CalculationBasis, decimal? Hours, decimal? Days, string ExportedFreeFloat,
+    string PredecessorField, string PredecessorEndpoint, string SuccessorField, string SuccessorEndpoint,
+    string PredecessorType, string SuccessorType, string PredecessorActualStart, string SuccessorActualStart,
+    string PredecessorRemainingHours, string SuccessorRemainingHours, string DataDate, string PredecessorSuspendDate, string PredecessorResumeDate, string ExpectedReason, string Message);
+
+sealed class Schedule
+{
+    internal string Mode { get; }
+    internal Dictionary<string, string> Project { get; } = new() { ["proj_id"] = "P1", ["clndr_id"] = "C3", ["last_recalc_date"] = "2026-01-02 17:00" };
+    internal Dictionary<string, string> Options { get; } = new() { ["proj_id"] = "P1", ["sched_retained_logic"] = "Y", ["sched_progress_override"] = "N", ["sched_lag_early_start_flag"] = "Y", ["sched_calendar_on_relationship_lag"] = "rcal_Predecessor" };
+    internal Dictionary<string, string> Predecessor { get; } = Task("T1", "C1", "2026-01-05");
+    internal Dictionary<string, string> Successor { get; } = Task("T2", "C2", "2026-01-06");
+    internal Dictionary<string, string> Relationship { get; } = new() { ["task_pred_id"] = "R1", ["task_id"] = "T2", ["pred_task_id"] = "T1", ["pred_type"] = "PR_FS", ["lag_hr_cnt"] = "0", ["proj_id"] = "P1", ["pred_proj_id"] = "P1" };
+    internal Schedule(string type = "PR_FS", string predecessor = "TK_NotStart", string successor = "TK_NotStart", string mode = "RetainedLogic", int lag = 0)
+    {
+        Mode = mode;
+        Relationship["pred_type"] = type; Relationship["lag_hr_cnt"] = lag.ToString(CultureInfo.InvariantCulture);
+        SetStatus(Predecessor, predecessor); SetStatus(Successor, successor);
+        Options["sched_retained_logic"] = mode is "RetainedLogic" or "ConflictingFlags" ? "Y" : "N";
+        Options["sched_progress_override"] = mode is "ProgressOverride" or "ConflictingFlags" ? "Y" : "N";
+    }
+    internal XerDataStore Store()
+    {
+        var text = new StringBuilder();
+        Add("PROJECT", [Project]);
+        Add("CALENDAR", [Calendar("C1"), Calendar("C2"), Calendar("C3")]);
+        Add("TASK", [Predecessor, Successor]); Add("TASKPRED", [Relationship]);
+        if (Mode != "MissingOptions") Add("SCHEDOPTIONS", [Options]);
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(text.ToString()));
+        return new XerParser().ParseXerStream(stream, "status-evaluation.xer", null, CancellationToken.None);
+        void Add(string name, Dictionary<string, string>[] rows)
+        {
+            string[] headers = rows.SelectMany(row => row.Keys).Distinct(StringComparer.Ordinal).ToArray();
+            text.Append("%T\t").AppendLine(name).Append("%F\t").AppendLine(string.Join('\t', headers));
+            foreach (var row in rows) text.Append("%R\t").AppendLine(string.Join('\t', headers.Select(header => row.GetValueOrDefault(header, ""))));
+        }
+    }
+    static void SetStatus(Dictionary<string, string> task, string status)
+    {
+        task["status_code"] = status;
+        task["act_start_date"] = status == "TK_NotStart" ? "" : "2026-01-01 08:00";
+        task["act_end_date"] = status == "TK_Complete" ? "2026-01-01 17:00" : "";
+        if (status == "TK_Complete") task["remain_drtn_hr_cnt"] = "0";
+    }
+    static Dictionary<string, string> Task(string id, string calendar, string date) => new() {
+        ["task_id"] = id, ["proj_id"] = "P1", ["clndr_id"] = calendar, ["status_code"] = "TK_NotStart", ["task_type"] = "TT_Task", ["task_code"] = id,
+        ["restart_date"] = date + " 08:00", ["reend_date"] = date + " 17:00", ["early_start_date"] = date + " 08:00", ["early_end_date"] = date + " 17:00",
+        ["act_start_date"] = "", ["act_end_date"] = "", ["remain_drtn_hr_cnt"] = "8", ["total_float_hr_cnt"] = "0" };
+    static Dictionary<string, string> Calendar(string id) => new() {
+        ["clndr_id"] = id, ["clndr_name"] = id, ["clndr_type"] = "CA_Project", ["base_clndr_id"] = "", ["day_hr_cnt"] = "8",
+        ["clndr_data"] = "(0||CalendarData()((0||DaysOfWeek()(" + string.Concat(Enumerable.Range(1, 7).Select(day => $"(0||{day}()({(day is >= 2 and <= 6 ? "(0||0(s|08:00|f|12:00)())(0||1(s|13:00|f|17:00)())" : "")}))")) + "))))" };
+}

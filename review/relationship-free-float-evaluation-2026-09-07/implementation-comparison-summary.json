@@ -1,0 +1,26 @@
+{
+  "input_sha256": "BCD04882C15C96ED94A18F670F6F5F9AD26493993BA5ADD44250A48958E487B7",
+  "before_core_sha256": "7D7BFDD759CC13482053E88DB003D2390768C4A67789FDD3CDF3E4C0D1B45798",
+  "after_core_sha256": "411A28B16040D83FE8786EC395008C58875AD02F1FACF26856950EBE6E191444",
+  "before_rows": 16761,
+  "after_rows": 16761,
+  "identities_matched": 16761,
+  "unchanged_existing_values_and_reasons": 16759,
+  "changed_existing_values_or_reasons": 2,
+  "numeric_changes": 0,
+  "changes_by_explanation": [
+    {
+      "explanation": "Already-actual predecessor start is now explicitly FixedEvent; no movable start allowance is invented.",
+      "count": 1
+    },
+    {
+      "explanation": "Direct WBS-summary relationship is now explicitly ignored/NoFiniteBound; summary rollups remain separate.",
+      "count": 1
+    },
+    {
+      "explanation": "Existing identity, value, classification and reason preserved; allowance status/basis added.",
+      "count": 16759
+    }
+  ],
+  "unexplained_changes": 0
+}

@@ -1,0 +1,133 @@
+{
+  "input_file": "C:\\Users\\ricar\\Documents\\Code\\XER to CSV\\XER Sample\\2608-EBA_PAA_8.0 (draft).xer",
+  "input_sha256": "BCD04882C15C96ED94A18F670F6F5F9AD26493993BA5ADD44250A48958E487B7",
+  "core_sha256": "411A28B16040D83FE8786EC395008C58875AD02F1FACF26856950EBE6E191444",
+  "source_relationship_rows": 16761,
+  "exported_rows_verified": 16761,
+  "classifications": [
+    {
+      "count": 2401,
+      "classification": "Calculated"
+    },
+    {
+      "count": 14145,
+      "classification": "Historical"
+    },
+    {
+      "count": 1,
+      "classification": "Ignored"
+    },
+    {
+      "count": 214,
+      "classification": "Unsupported"
+    }
+  ],
+  "reasons": [
+    {
+      "count": 2341,
+      "reason_code": "CalculatedRemainingRelationship"
+    },
+    {
+      "count": 60,
+      "reason_code": "CalculatedRetainedRemainingRelationship"
+    },
+    {
+      "count": 1,
+      "reason_code": "FixedActualPredecessorStart"
+    },
+    {
+      "count": 1078,
+      "reason_code": "HistoricalFixedPredecessor"
+    },
+    {
+      "count": 13067,
+      "reason_code": "HistoricalSuccessor"
+    },
+    {
+      "count": 1,
+      "reason_code": "IgnoredSummaryRelationship"
+    },
+    {
+      "count": 198,
+      "reason_code": "UnsupportedActivityType"
+    },
+    {
+      "count": 11,
+      "reason_code": "UnsupportedProgressedRelationship"
+    },
+    {
+      "count": 4,
+      "reason_code": "UnsupportedProgressedStartEndpoint"
+    }
+  ],
+  "allowance_statuses": [
+    {
+      "count": 2401,
+      "allowance_status": "Finite"
+    },
+    {
+      "count": 1,
+      "allowance_status": "FixedEvent"
+    },
+    {
+      "count": 14145,
+      "allowance_status": "Historical"
+    },
+    {
+      "count": 1,
+      "allowance_status": "NoFiniteBound"
+    },
+    {
+      "count": 213,
+      "allowance_status": "RequiresContext"
+    }
+  ],
+  "calculation_bases": [
+    {
+      "count": 1,
+      "calculation_basis": "FixedActualStart"
+    },
+    {
+      "count": 14145,
+      "calculation_basis": "HistoricalActualEvent"
+    },
+    {
+      "count": 1,
+      "calculation_basis": "IgnoredRelationship"
+    },
+    {
+      "count": 2401,
+      "calculation_basis": "TaskCalendarRemainingEndpoint"
+    },
+    {
+      "count": 213,
+      "calculation_basis": "UnresolvedContext"
+    }
+  ],
+  "types": [
+    {
+      "relationship_type": "PR_FF",
+      "count": 2177
+    },
+    {
+      "relationship_type": "PR_FS",
+      "count": 13379
+    },
+    {
+      "relationship_type": "PR_SF",
+      "count": 12
+    },
+    {
+      "relationship_type": "PR_SS",
+      "count": 1193
+    }
+  ],
+  "numeric_positive": 945,
+  "numeric_zero": 1456,
+  "numeric_negative": 0,
+  "numeric_tiny_nonzero": 0,
+  "numeric_resource_dependent": 0,
+  "numeric_inconsistent_active_evidence": 0,
+  "source_unchanged": true,
+  "evidence_scope": "Current-source tests and row-for-row export reconciliation; no native P6 reschedule comparison."
+}

@@ -7,6 +7,8 @@ public sealed class WorkingDayCalculator
     private readonly IReadOnlyList<IReadOnlyList<P6WorkInterval>> _week;
     private readonly IReadOnlyDictionary<DateTime, IReadOnlyList<P6WorkInterval>> _exceptions;
     private readonly bool _hasWeeklyWork;
+    private readonly DateTime? _nonWorkingStart;
+    private readonly DateTime? _nonWorkingFinish;
 
     /// <summary>An explicit conventional calendar for callers that deliberately request one.</summary>
     public static WorkingDayCalculator Default { get; } = CreateDefault();
@@ -43,11 +45,22 @@ public sealed class WorkingDayCalculator
     }
 
     internal WorkingDayCalculator(IReadOnlyList<IReadOnlyList<P6WorkInterval>> week,
-        IReadOnlyDictionary<DateTime, IReadOnlyList<P6WorkInterval>> exceptions)
+        IReadOnlyDictionary<DateTime, IReadOnlyList<P6WorkInterval>> exceptions,
+        DateTime? nonWorkingStart = null, DateTime? nonWorkingFinish = null)
     {
         _week = week;
         _exceptions = exceptions;
         _hasWeeklyWork = week.Any(day => day.Count > 0);
+        _nonWorkingStart = nonWorkingStart;
+        _nonWorkingFinish = nonWorkingFinish;
+    }
+
+    /// <summary>Activity-specific civil-day exclusion; shared calendar definitions and lag clocks stay unchanged.</summary>
+    internal WorkingDayCalculator WithNonWorkingPeriod(DateTime start, DateTime finish)
+    {
+        if (finish.Date < start.Date)
+            throw new ArgumentException("A nonworking period cannot finish before it starts.", nameof(finish));
+        return finish.Date == start.Date ? this : new WorkingDayCalculator(_week, _exceptions, start.Date, finish.Date);
     }
 
     public bool IsWorkingDay(DateTime date) => GetIntervals(date.Date).Count > 0;
@@ -147,7 +160,9 @@ public sealed class WorkingDayCalculator
     }
 
     private IReadOnlyList<P6WorkInterval> GetIntervals(DateTime date) =>
-        _exceptions.TryGetValue(date, out var intervals) ? intervals : _week[(int)date.DayOfWeek];
+        _nonWorkingStart.HasValue && date >= _nonWorkingStart.Value && date < _nonWorkingFinish!.Value
+            ? Array.Empty<P6WorkInterval>()
+            : _exceptions.TryGetValue(date, out var intervals) ? intervals : _week[(int)date.DayOfWeek];
 
     private static P6WorkInterval ConvertSlot((TimeSpan Start, TimeSpan End) slot)
     {

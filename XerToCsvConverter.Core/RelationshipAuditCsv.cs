@@ -14,7 +14,7 @@ namespace XerToCsvConverter;
 /// </summary>
 public static class RelationshipAuditCsv
 {
-    public const string SchemaVersion = "1.0";
+    public const string SchemaVersion = "1.1";
     private static readonly string[] OptionFields =
     [
         "sched_retained_logic", "sched_progress_override", "sched_lag_early_start_flag",
@@ -29,7 +29,8 @@ public static class RelationshipAuditCsv
         "scheduling_mode", "ss_lag_basis", "lag_calendar_setting", "lag_calendar_key",
         "predecessor_calendar_key", "raw_lag_hr_cnt", "effective_lag_hours", "project_data_date",
         "predecessor_endpoint", "successor_endpoint", "predecessor_endpoint_field", "successor_endpoint_field",
-        "predecessor_hours_per_day", "free_float_hours", "free_float", "classification", "reason_code", "message"
+        "predecessor_hours_per_day", "free_float_hours", "free_float", "free_float_status", "free_float_basis",
+        "classification", "reason_code", "message"
     }.Concat(OptionFields.SelectMany(field => new[] { field, field + "_state" }))
         .Append("input_evidence").ToArray());
 
@@ -174,7 +175,10 @@ public static class RelationshipAuditCsv
             value.SchedulingMode, value.SsLagBasis, value.LagCalendarSetting, value.LagCalendarKey,
             value.PredecessorCalendarKey, value.RawLag, Number(value.EffectiveLagHours), Date(value.ProjectDataDate),
             Date(value.PredecessorEndpoint), Date(value.SuccessorEndpoint), value.PredecessorEndpointField, value.SuccessorEndpointField,
-            Number(value.PredecessorHoursPerDay), Number(value.FloatHours), value.FormattedDays,
+            Number(value.PredecessorHoursPerDay), value.Classification == RelationshipFloatClassification.Calculated
+                && value.AllowanceStatus is RelationshipAllowanceStatus.Finite or RelationshipAllowanceStatus.Estimated
+                    ? Number(value.FloatHours) : "", value.FormattedDays,
+            value.AllowanceStatus.ToString(), value.CalculationBasis,
             value.Classification.ToString(), value.ReasonCode, value.Message
         ];
         foreach (string field in fields) yield return field;

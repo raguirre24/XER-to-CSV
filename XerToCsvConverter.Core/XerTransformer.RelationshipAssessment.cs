@@ -113,7 +113,25 @@ public partial class XerTransformer
         if (includeEvidence)
             assessment = assessment with { InputEvidence = BuildRelationshipEvidence(row, predecessor, successor, otherOptions, options) };
         RelationshipFloatAssessment Result(RelationshipFloatClassification classification, string reason, string message) =>
-            assessment with { Classification = classification, ReasonCode = reason, Message = message };
+            assessment with
+            {
+                Classification = classification, ReasonCode = reason, Message = message,
+                AllowanceStatus = classification switch
+                {
+                    RelationshipFloatClassification.Ignored => RelationshipAllowanceStatus.NoFiniteBound,
+                    RelationshipFloatClassification.Historical => RelationshipAllowanceStatus.Historical,
+                    RelationshipFloatClassification.MissingData => RelationshipAllowanceStatus.MissingData,
+                    RelationshipFloatClassification.InvalidData => RelationshipAllowanceStatus.InvalidData,
+                    _ => RelationshipAllowanceStatus.RequiresContext
+                },
+                CalculationBasis = classification switch
+                {
+                    RelationshipFloatClassification.Ignored => "IgnoredRelationship",
+                    RelationshipFloatClassification.Historical => "HistoricalActualEvent",
+                    RelationshipFloatClassification.Unsupported => "UnresolvedContext",
+                    _ => "None"
+                }
+            };
         RelationshipFloatAssessment Missing(string reason, string message) => Result(RelationshipFloatClassification.MissingData, reason, message);
         RelationshipFloatAssessment Invalid(string reason, string message) => Result(RelationshipFloatClassification.InvalidData, reason, message);
         RelationshipFloatAssessment Unsupported(string reason, string message) => Result(RelationshipFloatClassification.Unsupported, reason, message);
@@ -141,9 +159,14 @@ public partial class XerTransformer
             return Result(RelationshipFloatClassification.Historical, "HistoricalSuccessor", "The successor is complete; there is no remaining successor event for this metric.");
         if (predecessor.Status == "TK_COMPLETE")
             return Result(RelationshipFloatClassification.Historical, "HistoricalFixedPredecessor", "There is no movable remaining predecessor event. A fixed historical release or unexpired lag may still affect the successor.");
+        if (predecessor.Type == "TT_WBS" || successor.Type == "TT_WBS")
+            return Result(RelationshipFloatClassification.Ignored, "IgnoredSummaryRelationship",
+                "Direct WBS-summary relationships are ignored during scheduling; summary rollups are a separate dependency mechanism.");
         if (predecessor.Type is not ("TT_TASK" or "TT_RSRC" or "TT_MILE" or "TT_FINMILE") ||
             successor.Type is not ("TT_TASK" or "TT_RSRC" or "TT_MILE" or "TT_FINMILE"))
-            return Unsupported("UnsupportedActivityType", "LOE, WBS-summary or unknown activity types do not establish task-calendar movement.");
+            return Unsupported("UnsupportedActivityType", predecessor.Type == "TT_LOE" || successor.Type == "TT_LOE"
+                ? "LOE movement depends on its linked activity network; an independent remaining endpoint allowance cannot be established."
+                : "The exported activity type has no supported remaining endpoint movement model.");
         foreach (var task in new[] { predecessor, successor })
         {
             if (RawText(task.Row, "act_end_date").Length > 0 ||
@@ -154,6 +177,45 @@ public partial class XerTransformer
             if (start.Date.HasValue && finish.Date.HasValue && finish.Date < start.Date)
                 return Invalid("ReversedRemainingPeriod", "An exported remaining finish precedes its remaining start.");
         }
+
+        // An active predecessor needs the same evidence as an active successor.
+        // Validate chronology before scheduling-mode exclusions so contradictory
+        // actuals cannot receive a numeric finish allowance or a fixed-event label.
+        foreach (var task in new[] { predecessor, successor }.Where(task => task.Status == "TK_ACTIVE"))
+        {
+            DateTime? actual = RawDate(task.Row, "act_start_date");
+            if (!actual.HasValue)
+                return Result(RawText(task.Row, "act_start_date").Length > 0
+                        ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
+                    "UnresolvedActualStart", "Every active endpoint requires an explicit valid actual start; no source dates are repaired.");
+            foreach (bool startEndpoint in new[] { true, false })
+            {
+                var remaining = RemainingEndpoint(task, startEndpoint);
+                if (remaining.Date.HasValue && actual > remaining.Date)
+                    return Invalid("ActualStartAfterRemainingEndpoint", "An active endpoint's actual start is after its exported remaining start or finish.");
+            }
+            var owningOptions = ReferenceEquals(task, predecessor) ? otherOptions : options;
+            if (owningOptions?.ProjectAmbiguous == true || owningOptions?.DataDate is null)
+                return Result(owningOptions?.ProjectAmbiguous == true || RawText(owningOptions?.ProjectRow, "last_recalc_date").Length > 0
+                        ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
+                    "UnresolvedProjectDataDate", "Every active endpoint requires a valid unambiguous owning project Data Date.");
+            if (actual > owningOptions.DataDate)
+                return Unsupported("ActualStartAfterDataDate", "The recorded actual start is after its owning project's Data Date; remaining scheduling context is not established.");
+        }
+        if (external && (predecessor.Status == "TK_ACTIVE" || successor.Status == "TK_ACTIVE"))
+            return Unsupported("UnverifiedMultiProjectProgressContext", "A progressed cross-project relationship needs the governing scheduling project and progress context; matching flags alone is insufficient.");
+
+        if (predecessor.Status == "TK_ACTIVE" && (type == "PR_SF" ||
+            (type == "PR_SS" && options is { Mode: "RetainedLogic" or "ProgressOverride", SsBasis: "ActualStart" })))
+            return Result(RelationshipFloatClassification.Unsupported, "FixedActualPredecessorStart",
+                "The relationship uses the predecessor's fixed actual start; remaining work delay cannot move this event. Any fixed release or unexpired lag is separate from remaining allowance.") with
+            {
+                AllowanceStatus = RelationshipAllowanceStatus.FixedEvent,
+                CalculationBasis = "FixedActualStart",
+                PredecessorEndpoint = RawDate(predecessor.Row, "act_start_date"),
+                PredecessorEndpointField = "act_start_date"
+            };
+
         var rawLag = row.GetEvaluationField("lag_hr_cnt");
         if (rawLag.State != XerRawFieldState.Present)
             return Missing("MissingRelationshipLag", "An absent, truncated or blank lag cannot establish zero lag.");
@@ -164,8 +226,6 @@ public partial class XerTransformer
         bool activeSuccessor = successor.Status == "TK_ACTIVE";
         if (activeSuccessor)
         {
-            if (external)
-                return Unsupported("UnverifiedMultiProjectProgressContext", "A progressed cross-project relationship needs a verified governing scheduling context.");
             if (options?.Mode is null or "Unresolved")
             {
                 bool invalid = options?.IsAmbiguous == true ||
@@ -176,27 +236,13 @@ public partial class XerTransformer
             }
             if (options.Mode == "ActualDates")
                 return Unsupported("UnsupportedActualDatesProgressCase", "This progressed Actual Dates case is not verified; actual events are never moved or replaced by invented remaining events.");
-            if (options.DataDate is null)
-                return Result(RawText(options.ProjectRow, "last_recalc_date").Length > 0
-                        ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
-                    "UnresolvedProjectDataDate", "Progress-sensitive evaluation needs a valid owning project Data Date.");
-            foreach (var task in new[] { predecessor, successor }.Where(task => task.Status == "TK_ACTIVE"))
-            {
-                DateTime? actual = RawDate(task.Row, "act_start_date");
-                if (!actual.HasValue)
-                    return Result(RawText(task.Row, "act_start_date").Length > 0
-                            ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
-                        "UnresolvedActualStart", "Progress-sensitive evaluation needs explicit valid actual starts for active endpoints.");
-                if (actual > options.DataDate)
-                    return Unsupported("ActualStartAfterDataDate", "The recorded actual start is after the Data Date; demonstrated progress semantics cannot be established.");
-            }
             if (options.Mode == "ProgressOverride")
                 return type == "PR_FS" && lagHours == 0
                     ? Result(RelationshipFloatClassification.Ignored, "IgnoredUnderExportedProgressOverride",
                         "Zero-lag FS has an unfinished predecessor and a successor started by the Data Date; ignored under the exported Progress Override setting.")
                     : Unsupported("UnsupportedProgressOverrideCase", "This progressed relationship is not the verified zero-lag FS override case; it is not assumed to be ignored.");
-            if (type is "PR_SS" or "PR_SF")
-                return Unsupported("UnsupportedProgressedRelationship", "Progressed SS/SF remaining-event semantics are not verified, including expired/remaining lag.");
+            if (type == "PR_SS")
+                return Unsupported("UnsupportedProgressedRelationship", "The successor's actual start is fixed; substituting a remaining restart for SS requires an unverified progressed relationship rule.");
         }
         if (predecessor.Status == "TK_ACTIVE" && type is "PR_SS" or "PR_SF")
             return Unsupported("UnsupportedProgressedStartEndpoint", "An actual predecessor start cannot be substituted into the movable remaining-start solver; remaining SS/SF lag semantics are not verified.");
@@ -250,26 +296,35 @@ public partial class XerTransformer
             }
         }
         assessment = assessment with { LagCalendarKey = lagHours == 0 ? "NotRequired" : lagKey };
+        var suspension = ResolveRelationshipSuspension(predecessor);
+        if (suspension.Failure.HasValue)
+            return Result(suspension.Failure.Value, suspension.Reason!,
+                "Predecessor suspension requires active task/resource work, a coherent actual start and valid closed suspend/resume dates. Open or absent bounds are not invented.");
         try
         {
-            decimal hours = RelationshipFreeFloatCalculator.CalculateHours(predecessorCalendar.Calculator, lagCalendar,
+            bool suspensionAdjusted = suspension.Start.HasValue && suspension.Finish > suspension.Start;
+            WorkingDayCalculator movementCalendar = suspensionAdjusted
+                ? predecessorCalendar.Calculator.WithNonWorkingPeriod(suspension.Start!.Value, suspension.Finish!.Value)
+                : predecessorCalendar.Calculator;
+            decimal hours = RelationshipFreeFloatCalculator.CalculateHours(movementCalendar, lagCalendar,
                 from.Date.Value, to.Date.Value, lagHours, type is "PR_SS" or "PR_SF", cancellationToken);
-            // Suspension is activity-specific, not an automatic change to CALENDAR or lag work.
-            // Conservatively refuse movement that may cross an exported suspension boundary.
-            long movementTicks = checked((long)decimal.Round(hours * TimeSpan.TicksPerHour, 0));
-            DateTime moved = predecessorCalendar.Calculator.AddWorkingTicks(from.Date.Value, movementTicks, cancellationToken);
-            if (movementTicks != 0)
-                moved = type is "PR_SS" or "PR_SF"
-                    ? predecessorCalendar.Calculator.AddWorkingTicks(moved, 1, cancellationToken).AddTicks(-1)
-                    : predecessorCalendar.Calculator.AddWorkingTicks(moved, -1, cancellationToken).AddTicks(1);
-            string? suspension = SuspensionIssue(predecessor.Row, from.Date.Value, moved);
-            if (suspension is not null)
-                return Unsupported(suspension, "Predecessor movement may cross activity suspension, or its bounds are unresolved. No suspension work is invented.");
             decimal days = hours / predecessorCalendar.HoursPerDay.Value;
+            bool resourceEstimate = predecessor.Type == "TT_RSRC" || successor.Type == "TT_RSRC";
             return assessment with { Classification = RelationshipFloatClassification.Calculated,
-                ReasonCode = activeSuccessor ? "CalculatedRetainedRemainingRelationship" : "CalculatedRemainingRelationship",
+                AllowanceStatus = resourceEstimate ? RelationshipAllowanceStatus.Estimated : RelationshipAllowanceStatus.Finite,
+                CalculationBasis = (resourceEstimate, suspensionAdjusted) switch
+                {
+                    (true, true) => "TaskCalendarResourceEstimateSuspensionAdjusted",
+                    (true, false) => "TaskCalendarResourceEstimate",
+                    (false, true) => "TaskCalendarSuspensionAdjusted",
+                    _ => "TaskCalendarRemainingEndpoint"
+                },
+                ReasonCode = activeSuccessor ? type == "PR_SF" ? "CalculatedRetainedStartToFinish"
+                    : "CalculatedRetainedRemainingRelationship" : "CalculatedRemainingRelationship",
                 FloatHours = hours, FloatDays = days,
-                Message = "Signed predecessor-working-time allowance evaluated under exported settings with fixed successor endpoint; not a reschedule or native P6 driving flag." };
+                Message = resourceEstimate
+                    ? "Task-calendar estimate with a fixed successor endpoint; assigned-resource calendars, date rollups and leveling are not simulated."
+                    : "Signed predecessor-working-time allowance with a fixed successor endpoint and any valid closed suspension removed from movement availability; not a reschedule or native P6 driving flag." };
         }
         catch (Exception ex) when (ex is InvalidDataException or ArgumentOutOfRangeException or OverflowException)
         {
@@ -287,17 +342,25 @@ public partial class XerTransformer
         return (RawDate(task.Row, field), field);
     }
 
-    private static string? SuspensionIssue(DataRow task, DateTime original, DateTime moved)
+    private static (DateTime? Start, DateTime? Finish, RelationshipFloatClassification? Failure, string? Reason)
+        ResolveRelationshipSuspension(RelationshipTask task)
     {
-        if (original == moved) return null; // No movement interval consumes suspension time.
-        string suspendText = RawText(task, "suspend_date"), resumeText = RawText(task, "resume_date");
-        if (suspendText.Length == 0 && resumeText.Length == 0) return null;
-        var suspend = RawDate(task, "suspend_date");
-        var resume = RawDate(task, "resume_date");
-        if (!suspend.HasValue || (resumeText.Length > 0 && (!resume.HasValue || resume < suspend)))
-            return "UnresolvedSuspensionBounds";
-        DateTime first = original < moved ? original : moved, last = original > moved ? original : moved;
-        return suspend < last && (!resume.HasValue || resume > first) ? "UnsupportedSuspensionMovement" : null;
+        string suspendText = RawText(task.Row, "suspend_date"), resumeText = RawText(task.Row, "resume_date");
+        if (suspendText.Length == 0 && resumeText.Length == 0) return default;
+        if (task.Status != "TK_ACTIVE" || task.Type is not ("TT_TASK" or "TT_RSRC"))
+            return (null, null, RelationshipFloatClassification.InvalidData, "InconsistentSuspensionState");
+        DateTime? suspend = RawDate(task.Row, "suspend_date"), resume = RawDate(task.Row, "resume_date");
+        if ((suspendText.Length > 0 && !suspend.HasValue) || (resumeText.Length > 0 && !resume.HasValue))
+            return (null, null, RelationshipFloatClassification.InvalidData, "InvalidSuspensionBounds");
+        if (!suspend.HasValue || !resume.HasValue)
+            return (null, null, RelationshipFloatClassification.Unsupported, "UnresolvedSuspensionBounds");
+        // P6 suspension/resumption takes effect at the beginning of each recorded day.
+        // A same-day pair excludes no time; raw intraday clock differences do not reverse it.
+        if (resume.Value.Date < suspend.Value.Date)
+            return (null, null, RelationshipFloatClassification.InvalidData, "InvalidSuspensionBounds");
+        if (suspend.Value.Date < RawDate(task.Row, "act_start_date")!.Value.Date)
+            return (null, null, RelationshipFloatClassification.InvalidData, "InconsistentSuspensionState");
+        return (suspend.Value.Date, resume.Value.Date, null, null);
     }
 
     private static IReadOnlyDictionary<string, RelationshipFieldEvidence> BuildRelationshipEvidence(DataRow relationship,

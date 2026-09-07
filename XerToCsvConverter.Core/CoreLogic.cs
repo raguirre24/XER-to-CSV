@@ -145,6 +145,7 @@ namespace XerToCsvConverter;
         // Predecessor Fields
 
         public const string PredecessorClndrIdKey = "predecessor_clndr_id_key"; public const string PredecessorStatusCode = "predecessor_status_code"; public const string Lag = "lag"; public const string TimePeriodHoursPerDay = "time_period_hours_per_day"; public const string PredecessorStart = "predecessor_start"; public const string PredecessorFinish = "predecessor_finish"; public const string PredecessorTaskType = "predecessor_task_type"; public const string PredecessorFreeFloat = "free_float"; public const string PredType = "pred_type"; public const string LagHrCnt = "lag_hr_cnt";
+        public const string FreeFloatStatus = "free_float_status"; public const string FreeFloatBasis = "free_float_basis"; public const string FreeFloatReason = "free_float_reason";
 
 
 
@@ -2256,6 +2257,10 @@ namespace XerToCsvConverter;
 
                 finalHeadersList.Add(FieldNames.PredecessorFreeFloat); // This is the new 'free_float' in DAYS
 
+                finalHeadersList.Add(FieldNames.FreeFloatStatus);
+                finalHeadersList.Add(FieldNames.FreeFloatBasis);
+                finalHeadersList.Add(FieldNames.FreeFloatReason);
+
                 finalHeadersList.Add(FieldNames.TotalFloat);
 
                 finalHeadersList.Add(FieldNames.MonthUpdate);
@@ -2463,6 +2468,9 @@ namespace XerToCsvConverter;
                             XerDataQuality.RawRowJson(taskPredTable, sourceRow));
 
                     SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloatInDays);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.FreeFloatStatus, assessment.AllowanceStatus.ToString());
+                    SetTransformedField(transformed, finalIndexes, FieldNames.FreeFloatBasis, assessment.CalculationBasis);
+                    SetTransformedField(transformed, finalIndexes, FieldNames.FreeFloatReason, assessment.ReasonCode);
 
 
 

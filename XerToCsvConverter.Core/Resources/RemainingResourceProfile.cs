@@ -44,6 +44,32 @@ internal sealed class RemainingResourceProfile
         return Math.Clamp(share, 0, 1);
     }
 
+    internal static RemainingResourceProfile Uniform(string type) => new([1m], [1m], type, uniform: true);
+
+    // Crop each duration band at the estimated phase, then normalize the surviving
+    // band quantities. This is equivalent to (F(p + x*(1-p))-F(p))/(1-F(p)),
+    // without subtracting two nearly equal cumulative shares. Never mutate the
+    // source-cached definition: different assignments can have different phases.
+    internal RemainingResourceProfile? RemainingTail(decimal phase)
+    {
+        if (_usesTicks || phase < 0 || phase >= 1)
+            throw new ArgumentOutOfRangeException(nameof(phase));
+        decimal position = phase * _duration;
+        var ends = new List<decimal>();
+        var quantities = new List<decimal>();
+        decimal quantity = 0;
+        for (int i = 0; i < _ends.Length; i++)
+        {
+            decimal bandStart = i == 0 ? 0 : _ends[i - 1];
+            if (_ends[i] <= position) continue;
+            decimal bandQuantity = _quantities[i] - (i == 0 ? 0 : _quantities[i - 1]);
+            quantity += bandQuantity * ((_ends[i] - Math.Max(position, bandStart)) / (_ends[i] - bandStart));
+            ends.Add(_ends[i] - position);
+            quantities.Add(quantity);
+        }
+        return quantity <= 0 ? null : new RemainingResourceProfile(ends.ToArray(), quantities.ToArray(), "Resource Curve Forecast");
+    }
+
     internal static RemainingResourceProfile FromCurve(Func<string, string> read, string id)
     {
         decimal[] percentages = Enumerable.Range(0, 21)

@@ -1,0 +1,428 @@
+{
+  "TimestampUtc": "2026-09-07T10:13:57.2682404Z",
+  "CoreAssembly": "C:\\Users\\ricar\\Documents\\Code\\XER to CSV\\review\\relationship-free-float-evaluation-2026-09-07\\status\\.build\\bin\\Debug\\net8.0\\XerToCsvConverter.Core.dll",
+  "CoreAssemblySha256": "411A28B16040D83FE8786EC395008C58875AD02F1FACF26856950EBE6E191444",
+  "MatrixCases": 540,
+  "ActivityTypeCases": 504,
+  "MalformedCases": 120,
+  "FixedEventBasisCases": 40,
+  "SuspensionBasisCases": 12,
+  "MatrixCounts": [
+    {
+      "RequestedMode": "RetainedLogic",
+      "Classification": "Calculated",
+      "AllowanceStatus": "Finite",
+      "CalculationBasis": "TaskCalendarRemainingEndpoint",
+      "Count": 33
+    },
+    {
+      "RequestedMode": "ProgressOverride",
+      "Classification": "Calculated",
+      "AllowanceStatus": "Finite",
+      "CalculationBasis": "TaskCalendarRemainingEndpoint",
+      "Count": 18
+    },
+    {
+      "RequestedMode": "ActualDates",
+      "Classification": "Calculated",
+      "AllowanceStatus": "Finite",
+      "CalculationBasis": "TaskCalendarRemainingEndpoint",
+      "Count": 18
+    },
+    {
+      "RequestedMode": "ConflictingFlags",
+      "Classification": "Calculated",
+      "AllowanceStatus": "Finite",
+      "CalculationBasis": "TaskCalendarRemainingEndpoint",
+      "Count": 18
+    },
+    {
+      "RequestedMode": "MissingOptions",
+      "Classification": "MissingData",
+      "AllowanceStatus": "MissingData",
+      "CalculationBasis": "None",
+      "Count": 33
+    },
+    {
+      "RequestedMode": "MissingOptions",
+      "Classification": "Calculated",
+      "AllowanceStatus": "Finite",
+      "CalculationBasis": "TaskCalendarRemainingEndpoint",
+      "Count": 6
+    },
+    {
+      "RequestedMode": "ProgressOverride",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "RequiresContext",
+      "CalculationBasis": "UnresolvedContext",
+      "Count": 22
+    },
+    {
+      "RequestedMode": "ProgressOverride",
+      "Classification": "Ignored",
+      "AllowanceStatus": "NoFiniteBound",
+      "CalculationBasis": "IgnoredRelationship",
+      "Count": 2
+    },
+    {
+      "RequestedMode": "ActualDates",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "RequiresContext",
+      "CalculationBasis": "UnresolvedContext",
+      "Count": 24
+    },
+    {
+      "RequestedMode": "ConflictingFlags",
+      "Classification": "InvalidData",
+      "AllowanceStatus": "InvalidData",
+      "CalculationBasis": "None",
+      "Count": 21
+    },
+    {
+      "RequestedMode": "RetainedLogic",
+      "Classification": "Historical",
+      "AllowanceStatus": "Historical",
+      "CalculationBasis": "HistoricalActualEvent",
+      "Count": 60
+    },
+    {
+      "RequestedMode": "ProgressOverride",
+      "Classification": "Historical",
+      "AllowanceStatus": "Historical",
+      "CalculationBasis": "HistoricalActualEvent",
+      "Count": 60
+    },
+    {
+      "RequestedMode": "ActualDates",
+      "Classification": "Historical",
+      "AllowanceStatus": "Historical",
+      "CalculationBasis": "HistoricalActualEvent",
+      "Count": 60
+    },
+    {
+      "RequestedMode": "ConflictingFlags",
+      "Classification": "Historical",
+      "AllowanceStatus": "Historical",
+      "CalculationBasis": "HistoricalActualEvent",
+      "Count": 60
+    },
+    {
+      "RequestedMode": "MissingOptions",
+      "Classification": "Historical",
+      "AllowanceStatus": "Historical",
+      "CalculationBasis": "HistoricalActualEvent",
+      "Count": 60
+    },
+    {
+      "RequestedMode": "RetainedLogic",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "RequiresContext",
+      "CalculationBasis": "UnresolvedContext",
+      "Count": 9
+    },
+    {
+      "RequestedMode": "ConflictingFlags",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "RequiresContext",
+      "CalculationBasis": "UnresolvedContext",
+      "Count": 3
+    },
+    {
+      "RequestedMode": "MissingOptions",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "RequiresContext",
+      "CalculationBasis": "UnresolvedContext",
+      "Count": 3
+    },
+    {
+      "RequestedMode": "RetainedLogic",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "FixedEvent",
+      "CalculationBasis": "FixedActualStart",
+      "Count": 6
+    },
+    {
+      "RequestedMode": "ProgressOverride",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "FixedEvent",
+      "CalculationBasis": "FixedActualStart",
+      "Count": 6
+    },
+    {
+      "RequestedMode": "ActualDates",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "FixedEvent",
+      "CalculationBasis": "FixedActualStart",
+      "Count": 6
+    },
+    {
+      "RequestedMode": "ConflictingFlags",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "FixedEvent",
+      "CalculationBasis": "FixedActualStart",
+      "Count": 6
+    },
+    {
+      "RequestedMode": "MissingOptions",
+      "Classification": "Unsupported",
+      "AllowanceStatus": "FixedEvent",
+      "CalculationBasis": "FixedActualStart",
+      "Count": 6
+    }
+  ],
+  "ExactWholeHourDifferences": [
+    {
+      "Case": "PR_FF/TK_NotStart/TK_NotStart/RetainedLogic/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_FF/TK_NotStart/TK_NotStart/ProgressOverride/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_FF/TK_NotStart/TK_NotStart/ActualDates/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_FF/TK_NotStart/TK_NotStart/ConflictingFlags/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_FF/TK_NotStart/TK_Active/RetainedLogic/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_FF/TK_Active/TK_NotStart/RetainedLogic/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_FF/TK_Active/TK_NotStart/ProgressOverride/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_FF/TK_Active/TK_NotStart/ActualDates/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_FF/TK_Active/TK_NotStart/ConflictingFlags/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_FF/TK_Active/TK_Active/RetainedLogic/lag=-8",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_NotStart/RetainedLogic/lag=-8",
+      "ExpectedHours": 24,
+      "ActualHours": 23.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "2.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_NotStart/RetainedLogic/lag=0",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_NotStart/ProgressOverride/lag=-8",
+      "ExpectedHours": 24,
+      "ActualHours": 23.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "2.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_NotStart/ProgressOverride/lag=0",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_NotStart/ActualDates/lag=-8",
+      "ExpectedHours": 24,
+      "ActualHours": 23.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "2.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_NotStart/ActualDates/lag=0",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_NotStart/ConflictingFlags/lag=-8",
+      "ExpectedHours": 24,
+      "ActualHours": 23.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "2.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_NotStart/ConflictingFlags/lag=0",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_NotStart/MissingOptions/lag=0",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_Active/RetainedLogic/lag=-8",
+      "ExpectedHours": 24,
+      "ActualHours": 23.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "2.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    },
+    {
+      "Case": "PR_SF/TK_NotStart/TK_Active/RetainedLogic/lag=0",
+      "ExpectedHours": 16,
+      "ActualHours": 15.999999999972222222222222222,
+      "ErrorTicks": 1.000000000000000008000000000,
+      "ExportedFreeFloat": "1.9999999999965277777777777778",
+      "LaggedEndpoint": "2026-01-06T16:59:59.9999999",
+      "Deadline": "2026-01-06T17:00:00.0000000",
+      "NextTickLaggedEndpoint": "2026-01-07T08:00:00.0000000",
+      "Feasible": true,
+      "NextTickInfeasible": true
+    }
+  ],
+  "Failures": []
+}

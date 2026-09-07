@@ -1,0 +1,25 @@
+<Project>
+  <PropertyGroup>
+    <!-- Configure before SDK props so NuGet intermediates also stay under the hidden folder. -->
+    <BaseIntermediateOutputPath>.build/obj/</BaseIntermediateOutputPath>
+    <BaseOutputPath>.build/bin/</BaseOutputPath>
+  </PropertyGroup>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Keep this audit source outside the parent desktop project's recursive *.cs glob. -->
+    <Compile Include="Program.cs.txt" />
+    <!-- Run the Core tests/build first. This direct reference avoids mutating production build outputs. -->
+    <Reference Include="XerToCsvConverter.Core">
+      <HintPath>../../../XerToCsvConverter.Core/bin/Debug/net8.0/XerToCsvConverter.Core.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+</Project>

@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace XerToCsvConverter.Core.Tests;
 
-public sealed class ResourceCurveCalculationTests
+public sealed partial class ResourceCurveCalculationTests
 {
     private const string Source = "curve-source-occurrence-1";
     private const string CurveId = "CURVE1";
@@ -416,12 +416,12 @@ public sealed class ResourceCurveCalculationTests
     }
 
     [Fact]
-    public void Active_assignment_spanning_months_without_manual_profile_does_not_restart_a_nonlinear_curve()
+    public void Unstarted_assignment_on_active_task_uses_phase_zero_across_months()
     {
         XerDataStore store = Store(Loaded());
         Set(store, "TASK", "status_code", "TK_Active");
 
-        AssertRejected(store);
+        AssertQuantities(Transform(store), "80.0000", "20.0000");
     }
 
     [Theory]
@@ -469,13 +469,15 @@ public sealed class ResourceCurveCalculationTests
     [InlineData("2026-08-31 23:00:00", "2026-09-01 00:00:01")]
     [InlineData("2026-12-31 23:00:00", "2027-01-01 00:00:01")]
     [InlineData("2026-01-01 00:00:00", "2027-01-02 00:00:00")]
-    public void Active_nonlinear_curve_with_work_in_more_than_one_month_still_requires_remaining_profile(
+    public void Active_nonlinear_curve_can_forecast_across_month_and_year_boundaries(
         string start, string finish)
     {
         XerDataStore store = Store(Loaded(), quantity: "20", start: start, finish: finish);
         Set(store, "TASK", "status_code", "TK_Active");
 
-        AssertRejected(store);
+        Dictionary<string, string>[] rows = Transform(store);
+        Assert.Equal(20m, rows.Sum(Quantity));
+        Assert.All(rows, row => Assert.Equal("Resource Curve Forecast", row["distribution_type"]));
     }
 
     [Theory]

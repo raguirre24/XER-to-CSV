@@ -33,7 +33,7 @@ public sealed record ProgrammeReviewTableContract(
 /// </summary>
 public static class ProgrammeReviewContract
 {
-    public const string SchemaVersion = "3.0";
+    public const string SchemaVersion = "4.0";
     public const string ManifestFileName = "XER_CSV_MANIFEST.csv";
     public const string CompleteStatus = "complete";
 
@@ -138,6 +138,9 @@ public static class ProgrammeReviewContract
                     C("predecessor_start", ProgrammeReviewColumnType.Date),
                     C("predecessor_finish", ProgrammeReviewColumnType.Date),
                     C("free_float", ProgrammeReviewColumnType.Number, true, "Free Float"),
+                    C("free_float_status"),
+                    C("free_float_basis"),
+                    C("free_float_reason"),
                     C("pred_task_id_key", nullable: false),
                     C("status_code"),
                     C("total_float", ProgrammeReviewColumnType.Number),

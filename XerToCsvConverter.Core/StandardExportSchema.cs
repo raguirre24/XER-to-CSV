@@ -77,6 +77,7 @@ internal static class StandardExportSchema
             FieldNames.TaskType, FieldNames.PredecessorTaskType, FieldNames.Lag,
             FieldNames.TimePeriodHoursPerDay, FieldNames.Start, FieldNames.Finish,
             FieldNames.PredecessorStart, FieldNames.PredecessorFinish, FieldNames.PredecessorFreeFloat,
+            FieldNames.FreeFloatStatus, FieldNames.FreeFloatBasis, FieldNames.FreeFloatReason,
             FieldNames.TotalFloat, FieldNames.MonthUpdate
         ],
         EnhancedTableNames.XerActvType07 => [FieldNames.ActvCodeTypeIdKey, FieldNames.MonthUpdate],

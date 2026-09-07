@@ -39,7 +39,7 @@ public sealed class ProgrammeReviewBundleServiceTests
             Assert.Equal(12, Directory.EnumerateFiles(result.BundlePath).Count());
             Assert.Equal(33, result.ManifestRows.Count);
             Assert.All(result.ManifestRows, row => Assert.Equal("complete", row.BundleStatus));
-            Assert.All(result.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
+            Assert.All(result.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
             Assert.Equal(1, result.ManifestRows.Single(r => r.TableName == "01_XER_TASK" && r.OriginalXerFilename == baseline.OriginalXerFilename).RowCount);
             Assert.Equal(0, result.ManifestRows.Single(r => r.TableName == "07_XER_ACTVTYPE" && r.OriginalXerFilename == baseline.OriginalXerFilename).RowCount);
 
@@ -541,8 +541,47 @@ public sealed class ProgrammeReviewBundleServiceTests
         Assert.Equal("clndr_id_key,clndr_name", string.Join(',', ReadCsv(result.Files["10_XER_CALENDAR.csv"])[0]));
         Assert.DoesNotContain("11_XER_CALENDAR_DETAILED.csv", result.Files.Keys);
         Assert.Equal(12, result.Files.Count);
-        Assert.All(result.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
+        Assert.All(result.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
         Assert.Equal(3, result.ManifestRows.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Relationship_allowance_metadata_reaches_programme_v4_csv(bool historical)
+    {
+        ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
+            "baseline.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-30");
+        XerDataStore store = BuildDataStore((baseline, "2026-02-02 08:00", "2026-02-06 17:00"));
+        XerTable tasks = store.GetTable("TASK")!;
+        string[] successor = tasks.Rows[0].Fields.ToArray();
+        successor[tasks.FieldIndexes["task_id"]] = "T2";
+        successor[tasks.FieldIndexes["task_code"]] = "A200";
+        successor[tasks.FieldIndexes["early_start_date"]] = "2026-02-09 08:00";
+        successor[tasks.FieldIndexes["early_end_date"]] = "2026-02-09 17:00";
+        tasks.AddRow(new DataRow(successor, baseline.OriginalXerFilename));
+        if (historical)
+        {
+            tasks.Rows[0].Fields[tasks.FieldIndexes["status_code"]] = "TK_Complete";
+            tasks.Rows[0].Fields[tasks.FieldIndexes["act_start_date"]] = "2026-01-28 08:00";
+            tasks.Rows[0].Fields[tasks.FieldIndexes["act_end_date"]] = "2026-01-29 17:00";
+        }
+        XerTable relationships = NewTable("TASKPRED", ["task_pred_id", "proj_id", "pred_proj_id", "task_id", "pred_task_id", "pred_type", "lag_hr_cnt"]);
+        relationships.AddRow(new DataRow(["R1", "P1", "P1", "T2", "T1", "PR_FS", "0"], baseline.OriginalXerFilename));
+        store.AddTable(relationships);
+        RelationshipFloatAssessment expected = Assert.Single(new XerTransformer(store).AssessRelationships());
+
+        ProgrammeReviewInMemoryBundleResult result = await new ProgrammeReviewBundleService()
+            .BuildFromParsedDataToMemoryAsync(store, ProgrammeReviewNamingTests.Request([baseline]));
+        IReadOnlyList<string[]> csv = ReadCsv(result.Files["06_XER_PREDECESSOR.csv"]);
+        string[] values = Assert.Single(csv.Skip(1));
+        string Field(string name) => values[Array.IndexOf(csv[0], name)];
+        Assert.Equal(19, csv[0].Length);
+        Assert.Equal(expected.FormattedDays, Field("free_float"));
+        Assert.Equal(expected.AllowanceStatus.ToString(), Field("free_float_status"));
+        Assert.Equal(expected.CalculationBasis, Field("free_float_basis"));
+        Assert.Equal(expected.ReasonCode, Field("free_float_reason"));
+        Assert.All(result.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
     }
 
     [Theory]

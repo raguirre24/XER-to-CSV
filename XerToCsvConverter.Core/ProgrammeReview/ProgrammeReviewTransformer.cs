@@ -274,6 +274,8 @@ internal sealed class ProgrammeReviewTransformer
                         "ProjectCode" => _request.ProjectCode,
                         "monthupdate" => Iso(snapshot.MonthUpdate),
                         "last_recalc_date" => Iso(snapshot.DataDate),
+                        "free_float" when contract.TableName == "06_XER_PREDECESSOR"
+                            && reader.Get("free_float_status") is not ("Finite" or "Estimated") => string.Empty,
                         _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(reader.Get(column), snapshot, column.Name),
                         _ => reader.Get(column)
                     };
@@ -511,7 +513,7 @@ internal sealed class ProgrammeReviewTransformer
                         || value.Contains('|', StringComparison.Ordinal)
                         || value[expectedPrefix.Length..].Contains(ProgrammeReviewNaming.NamespaceDelimiter, StringComparison.Ordinal))
                         throw new ProgrammeReviewValidationException(
-                            $"{table.Contract.TableName}: '{keyColumn}' does not use the row's schema 3.0 relationship-key namespace.");
+                            $"{table.Contract.TableName}: '{keyColumn}' does not use the row's schema {ProgrammeReviewContract.SchemaVersion} relationship-key namespace.");
                 }
             }
         }

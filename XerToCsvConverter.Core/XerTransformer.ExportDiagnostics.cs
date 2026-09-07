@@ -171,6 +171,12 @@ public partial class XerTransformer
                                 && rawIndex < row.Fields.Length) fields[fieldIndex] = row.Fields[rawIndex];
                     }
                     else Array.Copy(row.Fields, fields, Math.Min(source.Headers.Length, row.Fields.Length));
+                    if (name == EnhancedTableNames.XerPredecessor06)
+                    {
+                        fields[result.FieldIndexes[FieldNames.FreeFloatStatus]] = RelationshipAllowanceStatus.RequiresContext.ToString();
+                        fields[result.FieldIndexes[FieldNames.FreeFloatBasis]] = "UnresolvedContext";
+                        fields[result.FieldIndexes[FieldNames.FreeFloatReason]] = "TableGenerationFailed";
+                    }
                     result.AddRow(row.WithFields(fields));
                 }
                 RecordDataQualityWarning(name, code, message + " Imported evidence is retained; unavailable calculations are not inferred.",

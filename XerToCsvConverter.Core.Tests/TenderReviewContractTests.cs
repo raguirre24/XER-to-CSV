@@ -19,7 +19,7 @@ public sealed class TenderReviewContractTests
             ["01_XER_TASK"] = "status_code,task_code,total_float,task_type,id_name,early_start_date,calendar_id_key,task_id_key,driving_path_flag,remaining_duration,early_end_date,monthupdate,status_date,task_name,data_date,act_end_date,Finish,proj_id_key,wbs_id_key,free_float,cstr_type,Start,filename,late_end_date,ProjectCode,UpdateDate,ProjectName",
             ["02_XER_PROJECT"] = "last_recalc_date,proj_id_key,monthupdate,ProjectCode,add_date,state,region,tender_status,udf_datalake_status_date",
             ["03_XER_PROJWBS"] = "wbs_name,wbs_id_key,parent_wbs_id_key,ProjectCode",
-            ["06_XER_PREDECESSOR"] = "task_id_key,pred_type,predecessor_status_code,task_type,predecessor_task_type,lag,start,finish,predecessor_start,predecessor_finish,free_float,pred_task_id_key,status_code,total_float,task_pred_id_key,ProjectCode",
+            ["06_XER_PREDECESSOR"] = "task_id_key,pred_type,predecessor_status_code,task_type,predecessor_task_type,lag,start,finish,predecessor_start,predecessor_finish,free_float,free_float_status,free_float_basis,free_float_reason,pred_task_id_key,status_code,total_float,task_pred_id_key,ProjectCode",
             ["07_XER_ACTVTYPE"] = "actv_code_type_id_key,actv_code_type",
             ["08_XER_ACTVCODE"] = "actv_code_id_key,actv_code_name,actv_code_type_id_key",
             ["09_XER_TASKACTV"] = "task_id_key,actv_code_id_key",
@@ -28,7 +28,7 @@ public sealed class TenderReviewContractTests
             ["15_XER_RESOURCE_DISTRIBUTION"] = "task_id_key,rsrc_id_key,is_actual,distribution_month,monthly_quantity,rsrc_name,rsrc_type,unit,ProjectCode"
         };
 
-        Assert.Equal("1.0", TenderReviewContract.SchemaVersion);
+        Assert.Equal("2.0", TenderReviewContract.SchemaVersion);
         Assert.Equal("tender_review", TenderReviewContract.BundleProfile);
         Assert.Equal("COMPLETE", TenderReviewContract.CompleteStatus);
         Assert.Equal(expectedFiles, TenderReviewContract.Tables.Select(table => table.FileName));

@@ -4,6 +4,41 @@ The shared Core parser supplies calendar calculations to Standard Enhanced,
 Programme Review and Tender Review exports. No BI report measures or Programme
 history/weekday-variance rules are changed by this correction.
 
+## Relationship allowance metadata and coverage (2026-09-07)
+
+Table 06 now places `free_float_status`, `free_float_basis` and
+`free_float_reason` immediately after `free_float` in Standard Enhanced,
+Programme Review **4.0** and Tender Review **2.0**. Only `Finite` and `Estimated`
+serialize a number. The other public outcomes are `NoFiniteBound`, `Historical`,
+`FixedEvent`, `RequiresContext`, `MissingData` and `InvalidData`; they remain blank
+without infinity or a large numeric sentinel. The optional relationship audit is
+**1.1**, with 46 columns and its existing `reason_code` field retained.
+
+This change extends Retained Logic to SF from an unstarted predecessor to an
+active successor's remaining finish. An active predecessor SF start is explicitly
+fixed; SS is fixed when exported Retained Logic/Progress Override uses ActualStart
+as its lag basis. Other progressed SS cases still require scheduling context.
+Every active endpoint now requires valid actual-start and owning-project Data Date
+evidence, and actual start cannot follow its available remaining start or finish.
+This closes the prior active-predecessor-to-unstarted-successor validation gap.
+
+Numeric resource-dependent relationships remain TASK-calendar estimates and are
+labeled `Estimated`; resource-calendar rollups and leveling are not simulated.
+A valid closed predecessor suspension removes its civil-date interval from that
+activity's movement calendar while preserving the independently configured lag
+calendar. The four numeric bases are `TaskCalendarRemainingEndpoint`,
+`TaskCalendarSuspensionAdjusted`, `TaskCalendarResourceEstimate` and
+`TaskCalendarResourceEstimateSuspensionAdjusted`. Direct WBS-summary relationships
+are ignored/`NoFiniteBound`; LOE requires its linked network context.
+
+The file/manifest envelope and data-quality companion 1.2 are unchanged. Loaders
+that require Programme 3.0/Tender 1.0 or exact old table 06 headers must migrate
+before refreshing a new bundle. External reports, SharePoint loaders and
+LongestPathVisual are outside this change. Older version/schema statements in
+the dated validation history below describe those earlier changes. Current
+implementation evidence is in
+[IMPLEMENTATION.md](review/relationship-free-float-evaluation-2026-09-07/IMPLEMENTATION.md).
+
 ## Resilient Enhanced exports (2026-09-06)
 
 Every selected Enhanced numbered table exports its available source data even
@@ -77,14 +112,16 @@ Programme 3.0/Tender 1.0 versions, file counts, manifest columns and calendar/06
 arithmetic are unchanged. See the [allocation warning validation](review/NONBLOCKING_RESOURCE_WARNINGS.md)
 and the portable [table dictionary](skills/p6-numbered-xer-reporting/references/table-dictionary.md).
 
-## Relationship assessments and progressed work (2026-09-06)
+## Relationship assessments and progressed work (updated 2026-09-07)
 
 `XerTransformer.AssessRelationships()` assesses every raw TASKPRED row using the
 same calculation that supplies `06.free_float`. A result distinguishes
 `Calculated`, `Ignored`, `Historical`, `Unsupported`, `MissingData` and `InvalidData`,
 with a reason code, selected endpoint and scheduling bases, and raw input evidence.
-Only `Calculated` serializes a number into the existing free-float column. A
-calculated zero remains distinct from every blank result.
+The legacy `Calculated` classification is further distinguished by public
+`Finite` or `Estimated` status; only those statuses serialize a number. A
+calculated zero remains distinct from every blank result. Fixed actual starts
+retain legacy `Unsupported` with the more specific `FixedEvent` status.
 
 The supported progressed cases use the existing signed inverse of the lag
 operation, denominated in predecessor working hours and positive predecessor HPD.
@@ -94,12 +131,15 @@ They do not move actual events, reschedule the project or certify P6 driving sta
 | --- | --- | --- |
 | Not started -> not started | FS/SS/FF/SF | Existing remaining endpoint calculation. |
 | Active -> not started | FS/FF | Predecessor explicit remaining finish. |
-| Active -> not started | SS/SF | Unsupported fixed predecessor start. |
+| Active -> not started or active | SF | Fixed actual predecessor start. |
+| Active -> not started or active | SS, explicit ActualStart basis under Retained Logic/Progress Override | Fixed actual predecessor start. |
+| Active -> not started | SS, other basis | Requires internal scheduling context. |
 | Not started or active -> active | Retained Logic FS | Predecessor remaining finish to successor explicit remaining restart. |
 | Not started or active -> active | Retained Logic FF | Remaining finish to remaining finish. |
-| Not started or active -> active | SS/SF | Unsupported progressed start relationship. |
+| Not started -> active | Retained Logic SF | Remaining predecessor start to successor remaining finish. |
+| Not started or active -> active | SS, excluding fixed case above | Requires progressed scheduling context. |
 | Not started or active -> active | Progress Override FS, zero lag | Ignored when valid successor actual start is on/before project Data Date. |
-| Not started or active -> active | Other Progress Override, or Actual Dates | Unsupported by this displacement model. |
+| Not started or active -> active | Other Progress Override, or Actual Dates, excluding fixed SF | Requires context under this displacement model. |
 | Any completed endpoint | Any | Historical fixed actual event. |
 
 Required missing or invalid exported settings are classified accordingly. Raw
@@ -111,8 +151,8 @@ because another input supplied that column.
 
 The optional `XerToCsvConverter.RelationshipAudit.Cli` accepts repeated `--input` arguments and an
 explicit `--output`, with `--overwrite` for an existing audit target. It provides
-relationship diagnostics on demand. Normal numbered schemas and file envelopes,
-Programme 3.0 and Tender 1.0 remain unchanged; the generalized companion is described above.
+relationship diagnostics on demand. Audit 1.1 is separate from the normal file
+envelope. Programme 4.0/Tender 2.0 add the table 06 metadata described above.
 See the portable [relationship assessment reference](skills/p6-numbered-xer-reporting/references/relationship-audit.md)
 for interpretation and [integration validation](review/RELATIONSHIP_ASSESSMENT_VALIDATION.md)
 for commands and their evidence limits.
@@ -349,13 +389,47 @@ assignment**, before any Tender Review task/resource/month aggregation:
 Named curves require `TASK.duration_type = DT_FixedDrtn` or `DT_FixedDUR2`.
 Nonlinear named curves support unstarted activities with unstarted assignments.
 A named linear curve is phase-independent and can also be used on active work.
-A progressed nonlinear curve whose complete remaining interval fits one calendar
-month has an exact total in that bucket, independently of its unknown curve phase.
-This includes an exclusive finish at next month's midnight; curve/calendar
-validation still applies and no intramonth shape is inferred. Across monthly
-buckets, a progressed nonlinear curve without explicit `remain_crv` remains
-unallocated with source/assignment/curve context: we do not restart its entire shape over the
-remaining period or infer a P6 curve phase from activity percent complete.
+A progressed nonlinear curve whose remaining working time fits one monthly
+bucket has an exact total in that bucket, independently of its unknown phase.
+Nonworking leading/trailing months and exclusive midnight finishes do not add
+working buckets; curve/calendar validation still applies. No intramonth shape is inferred.
+
+For `TK_Active` activities spanning working months, the shared Core automatically
+forecasts the remaining named curve using **assignment elapsed working time**:
+
+```text
+A = effective working hours from TASKRSRC.act_start_date to PROJECT.last_recalc_date
+R = effective working hours from TASKRSRC.restart_date to TASKRSRC.reend_date
+p = A / (A + R)
+G(t) = (F((A + t) / (A + R)) - F(p)) / (1 - F(p))
+```
+
+`F` is the named curve's cumulative share; `t` is cumulative remaining working time.
+Crop its bands at `p`, normalize their surviving quantities, and scale to `remain_qty`.
+This is an explicit **exporter forecasting policy**, not a claim of native P6 parity.
+For an 80/20 front-loaded curve, A=8 and R=24, two equal remaining working-time
+buckets receive 75/25 units out of 100. The entire curve is not restarted.
+Assignment dates and the effective task/resource calendar determine the clock;
+activity dates, planned duration, physical/units completion and actual-unit ratios
+do not. The future gap between Data Date and remaining restart advances neither A nor R.
+Zero actual units do not negate a valid actual start. Explicit blank actual dates
+and known zero actual units establish an unstarted assignment with p=0, even on
+an active task; absent headers/omitted cells are not explicit blank/zero evidence.
+
+Missing or contradictory phase evidence, or zero remaining curve weight, selects
+`Working Hours Fallback`: allocate uniformly over valid remaining working time.
+The fallback never bypasses invalid quantities, calendars, remaining dates,
+named definitions, duration types, explicit remaining profiles or completed activities.
+Unstarted activities with contradictory assignment actual dates retain their prior
+unsupported multi-month policy rather than being treated as active tasks.
+
+Active named curves exclude valid closed TASK suspend/resume intervals from A, R
+and monthly weights. Boundaries use the beginning of the recorded civil dates.
+An open suspension reaching the remaining interval, malformed bounds or zero
+remaining availability stays unallocated; no resume date is invented. The calendar
+diagnostic columns continue to report raw calendar hours, including hours excluded
+by suspension; effective forecast hours appear in the method diagnostic instead.
+This does not change actual allocation or explicit `remain_crv` parsing.
 Manual curve ID 9 without `remain_crv` is also rejected. Opaque `RSRCCURV.curv_data`
 alone is not decoded or substituted for the required numeric definition.
 
@@ -375,7 +449,8 @@ curve retains the same quantity arithmetic as the original uniform calculation.
 calendar measurements, not curve-weighted resource quantities.
 
 Standard's existing `distribution_type` distinguishes `Working Hours`,
-`Resource Curve`, `Remaining Units Profile`, `Actual Elapsed Time` and
+`Resource Curve`, `Remaining Units Profile`, `Resource Curve Forecast`,
+`Working Hours Fallback`, `Actual Elapsed Time` and
 `Actual Recorded Date`; no columns are added. Programme
 Review and Tender Review retain their fixed nine-column table 15 contracts and
 existing schema versions. Actual rows use the working-time estimate or explicitly
@@ -386,12 +461,23 @@ or actual units. Tables 06, 10, 11 and LongestPathVisual are unchanged.
 Curve issues appear with table/source/assignment context through Standard,
 Programme Review and Tender Review as unallocated-remaining warnings. Valid actual
 portions and other assignments continue without publishing partial failed portions.
+Successful estimates and fallbacks instead emit one method warning per assignment:
+`REMAINING_CURVE_ESTIMATED` or `REMAINING_CURVE_UNIFORM_FALLBACK`. These retain raw
+assignment evidence, keys and dates, plus A/R/p and the method/reason in the message.
+Their `allocation_portion` and both `unallocated_*_quantity` fields are **blank**;
+the units have already been allocated and must not be added back during reconciliation.
+They use the existing generic-warning convention and diagnostic schema 1.2.
+Only append a method warning once the entire allocation reconciles successfully.
+Review projections retain their nine columns; method evidence travels in the
+companion with governed keys and manifest counts. Exports containing estimates
+therefore report completed with warnings, not failed or missing quantities.
 Unused curve definitions and actual-only assignments do not require a valid
 remaining curve. Selecting unrelated raw tables does not invoke this calculation.
 
 References: Oracle's [curve-band and 0% semantics](https://docs.oracle.com/cd/G18296_01/client_help/en_US/modify_resource_curves_dialog_box.htm),
 [curve fields](https://docs.oracle.com/cd/F51301_01/English/Mapping_and_Schema/xer_import_export_data_map_project/97898.htm),
 and [exported assignment profiles](https://docs.oracle.com/cd/F88968_01/English/Mapping_and_Schema/xer_import_export_data_map_project/97916.htm).
+Recorded suspension semantics follow Oracle's [suspend/resume guidance](https://docs.oracle.com/cd/F25600_01/English/User_Guides/p6_pro_user/suspend_or_resume_an_activity_s_progress.htm).
 The manual profile serialization is corroborated by the primary
 [MPXJ reader](https://raw.githubusercontent.com/joniles/mpxj/master/src/main/java/org/mpxj/primavera/TimephasedHelper.java).
 The implementation is independently written; no MPXJ code or runtime dependency
@@ -406,10 +492,10 @@ days for this individual relationship**. It is not successor-calendar relationsh
 float, the predecessor activity's stored `TASK.free_float_hr_cnt`, or a promise of
 equality with P6's displayed relationship-gap metric under mixed calendars/lag.
 
-`TT_Rsrc` endpoints use the same relationship endpoint, status/progress and
-TASK-calendar movement rules as `TT_Task`. Resource assignments and the assigned
-RSRC calendar are not substituted into table 06; their calendar selection remains
-a separate table 15 distribution concern.
+`TT_Rsrc` endpoints use the same relationship endpoint and TASK-calendar movement
+rules as `TT_Task`, with public status `Estimated` whenever either endpoint is
+resource dependent. Assigned-resource calendars, date rollups and leveling are
+not substituted into table 06; table 15 retains its separate distribution rules.
 
 For a supported relationship:
 
@@ -418,7 +504,7 @@ For a supported relationship:
    An empty or whitespace remaining date can fall back to a valid early date for an unstarted
    activity; a malformed nonblank remaining date cannot. An active predecessor's
    finish must have an explicit valid `reend_date`. An active successor under
-   Retained Logic uses explicit `restart_date` for FS or `reend_date` for FF,
+   Retained Logic uses explicit `restart_date` for FS or `reend_date` for FF/SF,
    independently of the actual dates used by the display columns.
 2. Find the latest predecessor endpoint whose signed lag, applied on the configured
    lag calendar, does not exceed the unchanged successor endpoint. The inverse
@@ -465,13 +551,16 @@ Tender now follows the same denomination.
 
 - Missing/invalid required task, calendar, positive predecessor HPD, endpoint,
   numeric lag, or scheduling metadata; an unprojectable lag.
-- A completed endpoint, LOE/WBS summary or unsupported activity/relationship type.
+- A completed/fixed endpoint, an ignored WBS-summary relationship, or LOE/unknown
+  activity context or unsupported relationship type.
 - Duplicate/ambiguous task or scheduling identities, mismatched project endpoints,
   contradictory effective task date ranges or incompatible actual/status inputs.
 - An active successor whose exported mode/type is outside the supported matrix
   above. An ignored Progress Override edge remains blank, not a calculated zero.
-- An active predecessor on SS/SF. Original lag and actual start alone do not
-  establish remaining relationship lag and P6's internal early-start constraint.
+- An active predecessor on SF, or SS with explicit supported ActualStart basis,
+  is a fixed event. Other progressed SS cases require internal scheduling context.
+- Open, malformed, reversed or contradictory predecessor suspension bounds;
+  closed valid suspensions are excluded from movement and labeled in the basis.
 
 An active predecessor on FS/FF can use its remaining finish with an unstarted
 successor or a supported active successor under Retained Logic. Raw `aref/arls`
@@ -479,10 +568,10 @@ are not used as universal internal relationship dates:
 Oracle defines them as adjusted external-relationship values with type-dependent
 semantics. This parser is not a replacement P6 scheduling engine.
 
-The earlier free-float correction changes only derived `06.free_float` values and their input guards.
-Existing CSV column names/order, profile schema versions, other 06 values, native
-activity floats and table 10/11 contents are retained. Subsequent table 15 changes
-are documented in the separate section above.
+The earlier free-float arithmetic correction retained the old schemas. The
+2026-09-07 coverage/metadata change adds the three columns and profile versions
+described above while preserving native activity floats and table 10/11 contents.
+Table 15 changes remain documented in their separate sections.
 LongestPathVisual is not changed: its intentional least-float selection consumes
 the corrected column. This column does not independently certify P6 driving status.
 

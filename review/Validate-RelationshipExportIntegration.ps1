@@ -83,6 +83,9 @@ for ($index = 0; $index -lt $diskAssessments.Count; $index++) {
     Assert-Check ($assessment.RelationshipId -ceq $rows06[$index].task_pred_id) 'Audit row order/relationship identity differs from table 06.'
     Assert-Check ($assessment.FileName -ceq $rows06[$index].FileName) 'Audit changed original filename provenance.'
     Assert-Check ($assessment.FormattedDays -ceq $rows06[$index].free_float) 'Audit free_float differs from the normal export.'
+    Assert-Check ($assessment.AllowanceStatus.ToString() -ceq $rows06[$index].free_float_status) 'Audit allowance status differs from the normal export.'
+    Assert-Check ($assessment.CalculationBasis -ceq $rows06[$index].free_float_basis) 'Audit allowance basis differs from the normal export.'
+    Assert-Check ($assessment.ReasonCode -ceq $rows06[$index].free_float_reason) 'Audit allowance reason differs from the normal export.'
     Assert-Check (-not [string]::IsNullOrWhiteSpace($assessment.ReasonCode)) 'Audit omitted an explanation code.'
     if ($assessment.Classification.ToString() -ne 'Calculated') {
         Assert-Check ($null -eq $assessment.FloatHours -and $null -eq $assessment.FloatDays) 'A noncalculated audit result carries a numeric allowance.'
@@ -99,7 +102,7 @@ if ($BaselineHashes) {
         if ($name -in @('06_XER_PREDECESSOR','XER_DATA_QUALITY')) { continue }
         Assert-Check ((Get-BytesHash $diskExport.Files[$name]) -ceq $baseline.Hashes.$name) "Nonrelationship output changed from the recorded baseline: $name."
     }
-    $keptColumns = @((Get-CsvHeaders $diskExport.Files['06_XER_PREDECESSOR']) | Where-Object { $_ -cne 'free_float' })
+    $keptColumns = @((Get-CsvHeaders $diskExport.Files['06_XER_PREDECESSOR']) | Where-Object { $_ -cnotin @('free_float','free_float_status','free_float_basis','free_float_reason') })
     $canonical = ($rows06 | Select-Object -Property $keptColumns | ConvertTo-Csv -NoTypeInformation) -join "`n"
     Assert-Check ((Get-BytesHash ([Text.Encoding]::UTF8.GetBytes($canonical))) -ceq $baseline.Hashes.'06_WITHOUT_FREE_FLOAT') 'A table 06 field other than free_float changed.'
     $comparedBaseline = $true
@@ -173,9 +176,15 @@ foreach ($profile in @('Programme','Tender')) {
     $profile06 = Get-CsvRows $memoryResult.Files['06_XER_PREDECESSOR.csv']
     $expectedFloats = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
     foreach ($assessment in $fixture06) { $expectedFloats.Add($prefix + $assessment.RelationshipId, $assessment.FormattedDays) }
+    $expectedAssessments = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    foreach ($assessment in $fixture06) { $expectedAssessments.Add($prefix + $assessment.RelationshipId, $assessment) }
     Assert-Check ($profile06.Count -eq $expectedFloats.Count) "$profile changed the relationship count."
     foreach ($row in $profile06) {
         Assert-Check ($expectedFloats.ContainsKey($row.task_pred_id_key) -and $expectedFloats[$row.task_pred_id_key] -ceq $row.free_float) "$profile free_float differs from the shared assessment."
+        $expectedAssessment = $expectedAssessments[$row.task_pred_id_key]
+        Assert-Check ($row.free_float_status -ceq $expectedAssessment.AllowanceStatus.ToString()) "$profile allowance status differs from the shared assessment."
+        Assert-Check ($row.free_float_basis -ceq $expectedAssessment.CalculationBasis) "$profile allowance basis differs from the shared assessment."
+        Assert-Check ($row.free_float_reason -ceq $expectedAssessment.ReasonCode) "$profile allowance reason differs from the shared assessment."
     }
     $expectedQuantities = [Collections.Generic.Dictionary[string,decimal]]::new([StringComparer]::Ordinal)
     foreach ($row in $fixture15) {
@@ -204,6 +213,14 @@ foreach ($profile in @('Programme','Tender')) {
         Sort-Object FileName,source_row_number,allocation_portion | Select-Object -Property $allocationEvidence)
     Assert-Check ($expectedWarnings.Count -eq $actualWarnings.Count -and
         ($expectedWarnings | ConvertTo-Json -Depth 4 -Compress) -ceq ($actualWarnings | ConvertTo-Json -Depth 4 -Compress)) "$profile changed source allocation warning evidence."
+    $methodCodes = @('REMAINING_CURVE_ESTIMATED','REMAINING_CURVE_UNIFORM_FALLBACK')
+    $methodEvidence = $allocationEvidence + @('message','project_data_date','source_table','raw_row_json')
+    $expectedMethods = @($standardQuality | Where-Object issue_code -In $methodCodes |
+        Sort-Object FileName,source_row_number,issue_code | Select-Object -Property $methodEvidence)
+    $actualMethods = @($profileQuality | Where-Object issue_code -In $methodCodes |
+        Sort-Object FileName,source_row_number,issue_code | Select-Object -Property $methodEvidence)
+    Assert-Check ($expectedMethods.Count -eq $actualMethods.Count -and
+        ($expectedMethods | ConvertTo-Json -Depth 4 -Compress) -ceq ($actualMethods | ConvertTo-Json -Depth 4 -Compress)) "$profile changed successful resource forecast method evidence."
     # Review-only field/identity diagnostics legitimately differ from Standard:
     # numeric relationship agreement above remains exact for every relationship.
     $profileResults.Add([pscustomobject]@{ Profile = $profile; Files = $memoryResult.Files.Count; Relationships = $profile06.Count;

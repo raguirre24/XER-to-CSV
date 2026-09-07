@@ -29,7 +29,7 @@ public sealed record TenderReviewTableContract(
 /// <summary>Versioned, ordered schema for the independent Tender Review export profile.</summary>
 public static class TenderReviewContract
 {
-    public const string SchemaVersion = "1.0";
+    public const string SchemaVersion = "2.0";
     public const string BundleProfile = "tender_review";
     public const string ManifestFileName = "XER_CSV_MANIFEST.csv";
     public const string CompleteStatus = "COMPLETE";
@@ -129,6 +129,9 @@ public static class TenderReviewContract
                     C("predecessor_start", TenderReviewColumnType.Date),
                     C("predecessor_finish", TenderReviewColumnType.Date),
                     C("free_float", TenderReviewColumnType.Number, true, "Free Float"),
+                    C("free_float_status"),
+                    C("free_float_basis"),
+                    C("free_float_reason"),
                     C("pred_task_id_key", nullable: false),
                     C("status_code"),
                     C("total_float", TenderReviewColumnType.Number),

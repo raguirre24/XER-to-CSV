@@ -1,12 +1,12 @@
 # Export profiles and fixed contracts
 
-Corrected implementation snapshot: 2026-09-06. Read actual headers rather than inferring profile from a table number or assuming an older build has these fixes. Field names/case below are intentional.
+Corrected implementation snapshot: 2026-09-07. Read actual headers rather than inferring profile from a table number or assuming an older build has these fixes. Field names/case below are intentional.
 
 ## Profile identity
 
 | Property | Standard / legacy Enhanced | Programme Review | Tender Review |
 | --- | --- | --- | --- |
-| Versioned report contract | None | 3.0 | 1.0 |
+| Versioned report contract | None | 4.0 | 2.0 |
 | Numbered tables | 01,02,03,04,06,07,08,09,10,11,12,13,14,15 when generated/selected | 01,02,03,06,07,08,09,10,12,15 | Same ten as Programme |
 | 05 | Not defined | Not defined | Not defined |
 | Manifest | None | XER_CSV_MANIFEST.csv | XER_CSV_MANIFEST.csv |
@@ -18,7 +18,9 @@ Corrected implementation snapshot: 2026-09-06. Read actual headers rather than i
 | Table 10 | Raw CALENDAR plus keys/metadata | Key and name only | Key and name only |
 | Table 15 grain | Assignment x actual/remaining x month | Assignment x actual/remaining x month | Task x resource x actual/remaining x month within stage/project |
 
-Both review profiles emit all ten fixed numbered tables, the supplemental `XER_DATA_QUALITY.csv`, and a manifest: twelve files. Their numbered schemas remain Programme 3.0 / Tender 1.0; the companion is independently versioned `diagnostic_schema_version=1.2`. Standard emits the companion whenever any Enhanced numbered table is selected, alongside every selected numbered output, and leaves raw-only exports unchanged. Header-only output replaces stale data when no exportable rows exist; inspect warnings to distinguish unavailable input/calculations from genuinely empty source tables. Windows and Web make Enhanced tables available from their primary source alone: missing lookup tables do not hide available activity, relationship or assignment evidence.
+Both review profiles emit all ten fixed numbered tables, the supplemental `XER_DATA_QUALITY.csv`, and a manifest: twelve files. Their numbered schemas are Programme 4.0 / Tender 2.0 following the three new table 06 relationship-metadata columns; the companion is independently versioned `diagnostic_schema_version=1.2`. Standard emits the companion whenever any Enhanced numbered table is selected, alongside every selected numbered output, and leaves raw-only exports unchanged. Header-only output replaces stale data when no exportable rows exist; inspect warnings to distinguish unavailable input/calculations from genuinely empty source tables. Windows and Web make Enhanced tables available from their primary source alone: missing lookup tables do not hide available activity, relationship or assignment evidence.
+
+Loaders locked to Programme 3.0/Tender 1.0 or the old exact table 06 header must explicitly accept the new versions and `free_float_status`, `free_float_basis`, `free_float_reason` before refreshing a new bundle. Update field typing/projection without coalescing blank float to zero. No external report, SharePoint loader or LongestPathVisual migration is performed by this exporter change. The optional relationship audit is separately versioned 1.1 with 46 columns.
 
 Source-data problems are isolated to the affected rows, fields, calendar definitions or allocation portions across all Enhanced numbered tables. Available imported values and unaffected calculations remain exported; unresolved derived values stay blank with diagnostic evidence, not fabricated zeroes, calendars, dates or quantities. Malformed calendars and WBS identities must not suppress other valid rows or tables. Missing TASK/PROJWBS/CALENDAR sources produce their fixed header-only tables and warnings. Duplicate dimension keys and orphan references are preserved with warnings and may require source correction before a report can assert uniqueness. Programme leaves ambiguous task history blank; Tender retains individual contributions when an aggregate overflows or grouped labels conflict. Governed review PROJECT/request identity, snapshot/status metadata and safe publication remain separate: the exporter cannot guess these choices or claim success after unreadable input, cancellation or failed file writes. See the table dictionary for companion evidence and calculation rules for allocation reconciliation. A successful export with warnings is not a data-quality certification.
 
@@ -77,7 +79,7 @@ last_recalc_date,proj_id_key,monthupdate,ProjectCode,add_date,state,region,tende
 wbs_name,wbs_id_key,parent_wbs_id_key,ProjectCode
 
 06_XER_PREDECESSOR:
-task_id_key,pred_type,predecessor_status_code,task_type,predecessor_task_type,lag,start,finish,predecessor_start,predecessor_finish,free_float,pred_task_id_key,status_code,total_float,task_pred_id_key,ProjectCode
+task_id_key,pred_type,predecessor_status_code,task_type,predecessor_task_type,lag,start,finish,predecessor_start,predecessor_finish,free_float,free_float_status,free_float_basis,free_float_reason,pred_task_id_key,status_code,total_float,task_pred_id_key,ProjectCode
 
 07_XER_ACTVTYPE:
 actv_code_type_id_key,actv_code_type
@@ -114,4 +116,4 @@ Tender headers:
 schema_version,bundle_profile,bundle_id,bundle_status,parser_version,project_code,project_name,original_xer_filename,canonical_xer_filename,status_date,update_date,data_date,source_sha256,table_name,row_count,csv_sha256,exported_at_utc
 ```
 
-Programme completion literal remains `complete`; Tender uses `COMPLETE` and `bundle_profile=tender_review`. These indicate completed publication, not absence of warnings. Manifest rows describe each retained snapshot/stage and each exported table, including `table_name=XER_DATA_QUALITY`: eleven manifest rows per retained source. The companion's per-source row count is its warning count; its hash is validated like numbered CSVs. Validate the declared version/profile, source-stage coverage, row counts at the declared source/table grain, and CSV hashes against actual files. Consumers hard-coded to eleven bundle files or ten manifest rows per source must accept the approved supplemental artifact; numbered report columns have not changed. A CSV hash can repeat for the same combined table across manifest source rows; it does not make those source rows duplicates. Do not assemble one export from files belonging to different bundles or attach old files to a new manifest. Independently validated bundles can coexist in a comparison model when profile/bundle/scenario provenance remains explicit; public keys can recur across successive bundles, so do not accidentally join or sum duplicate snapshots across them.
+Programme completion literal remains `complete`; Tender uses `COMPLETE` and `bundle_profile=tender_review`. These indicate completed publication, not absence of warnings. Manifest rows describe each retained snapshot/stage and each exported table, including `table_name=XER_DATA_QUALITY`: eleven manifest rows per retained source. The companion's per-source row count is its warning count; its hash is validated like numbered CSVs. Validate the declared version/profile, source-stage coverage, row counts at the declared source/table grain, and CSV hashes against actual files. Consumers hard-coded to eleven bundle files or ten manifest rows per source must accept the approved supplemental artifact; Programme 4.0/Tender 2.0 also require the expanded table 06 headers shown above. A CSV hash can repeat for the same combined table across manifest source rows; it does not make those source rows duplicates. Do not assemble one export from files belonging to different bundles or attach old files to a new manifest. Independently validated bundles can coexist in a comparison model when profile/bundle/scenario provenance remains explicit; public keys can recur across successive bundles, so do not accidentally join or sum duplicate snapshots across them.

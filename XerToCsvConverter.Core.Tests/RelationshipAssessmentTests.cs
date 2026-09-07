@@ -4,7 +4,7 @@ using System.Text;
 
 namespace XerToCsvConverter.Core.Tests;
 
-public sealed class RelationshipAssessmentTests
+public sealed partial class RelationshipAssessmentTests
 {
     public static IEnumerable<object[]> ReleaseMatrix()
     {
@@ -27,12 +27,14 @@ public sealed class RelationshipAssessmentTests
         fixture.SetMode(mode);
         string expected = successor == "TK_Complete" ? "HistoricalSuccessor"
             : predecessor == "TK_Complete" ? "HistoricalFixedPredecessor"
+            : predecessor == "TK_Active" && type == "PR_SF" ? "FixedActualPredecessorStart"
             : successor == "TK_Active" ? mode switch
             {
                 "Unresolved" => "UnresolvedProgressMode",
                 "ActualDates" => "UnsupportedActualDatesProgressCase",
                 "ProgressOverride" => type == "PR_FS" ? "IgnoredUnderExportedProgressOverride" : "UnsupportedProgressOverrideCase",
-                _ => type is "PR_SS" or "PR_SF" ? "UnsupportedProgressedRelationship" : "CalculatedRetainedRemainingRelationship"
+                _ => type == "PR_SS" ? "UnsupportedProgressedRelationship"
+                    : type == "PR_SF" ? "CalculatedRetainedStartToFinish" : "CalculatedRetainedRemainingRelationship"
             }
             : predecessor == "TK_Active" && type is "PR_SS" or "PR_SF" ? "UnsupportedProgressedStartEndpoint"
             : "CalculatedRemainingRelationship";
@@ -118,7 +120,7 @@ public sealed class RelationshipAssessmentTests
     [InlineData("PR_FS", "CalculatedRemainingRelationship")]
     [InlineData("PR_FF", "CalculatedRemainingRelationship")]
     [InlineData("PR_SS", "UnsupportedProgressedStartEndpoint")]
-    [InlineData("PR_SF", "UnsupportedProgressedStartEndpoint")]
+    [InlineData("PR_SF", "FixedActualPredecessorStart")]
     public void Active_resource_dependent_predecessor_follows_task_progress_policy(string type, string reason)
     {
         var taskFixture = new Schedule();
@@ -139,7 +141,7 @@ public sealed class RelationshipAssessmentTests
     [InlineData("PR_FS", "CalculatedRetainedRemainingRelationship")]
     [InlineData("PR_FF", "CalculatedRetainedRemainingRelationship")]
     [InlineData("PR_SS", "UnsupportedProgressedRelationship")]
-    [InlineData("PR_SF", "UnsupportedProgressedRelationship")]
+    [InlineData("PR_SF", "CalculatedRetainedStartToFinish")]
     public void Active_resource_dependent_successor_follows_task_retained_logic_policy(string type, string reason)
     {
         var taskFixture = ActiveFixture();
@@ -309,9 +311,10 @@ public sealed class RelationshipAssessmentTests
         fixture.Relationship["pred_type"] = "PR_SS";
         fixture.Relationship["lag_hr_cnt"] = "48";
         fixture.Options["sched_lag_early_start_flag"] = flag;
-        RelationshipFloatAssessment result = Assess(fixture, "UnsupportedProgressedStartEndpoint");
+        RelationshipFloatAssessment result = Assess(fixture, flag == "N"
+            ? "FixedActualPredecessorStart" : "UnsupportedProgressedStartEndpoint");
         Assert.Equal(basis, result.SsLagBasis);
-        Assert.Equal(48m, result.EffectiveLagHours);
+        Assert.Equal(flag == "N" ? null : 48m, result.EffectiveLagHours);
         Assert.Equal(flag, result.InputEvidence["successor_options.sched_lag_early_start_flag"].RawValue);
     }
 
@@ -429,7 +432,7 @@ public sealed class RelationshipAssessmentTests
         XerTable table = store.GetTable(duplicateTable)!;
         table.AddRow(table.Rows[0]);
         RelationshipFloatAssessment result = Assert.Single(new XerTransformer(store).AssessRelationships());
-        Assert.Equal("UnresolvedProgressMode", result.ReasonCode);
+        Assert.Equal(duplicateTable == "PROJECT" ? "UnresolvedProjectDataDate" : "UnresolvedProgressMode", result.ReasonCode);
         Assert.Equal("Ambiguous", result.InputEvidence[duplicateTable == "PROJECT"
             ? "successor_project.identity" : "successor_options.identity"].State);
     }
@@ -437,14 +440,15 @@ public sealed class RelationshipAssessmentTests
     [Theory]
     [InlineData("2026-01-01 08:00", "2026-01-02 08:00", "CalculatedRemainingRelationship")]
     [InlineData("2026-01-07 08:00", "2026-01-08 08:00", "CalculatedRemainingRelationship")]
-    [InlineData("2026-01-06 10:00", "2026-01-06 11:00", "UnsupportedSuspensionMovement")]
-    [InlineData("2026-01-06 10:00", "", "UnsupportedSuspensionMovement")]
-    [InlineData("2026-01-06 10:00", "2026-01-06 09:00", "UnresolvedSuspensionBounds")]
-    [InlineData("invalid", "2026-01-06 11:00", "UnresolvedSuspensionBounds")]
+    [InlineData("2026-01-06 10:00", "2026-01-06 11:00", "CalculatedRemainingRelationship")]
+    [InlineData("2026-01-06 10:00", "", "UnresolvedSuspensionBounds")]
+    [InlineData("2026-01-06 10:00", "2026-01-06 09:00", "CalculatedRemainingRelationship")]
+    [InlineData("invalid", "2026-01-06 11:00", "InvalidSuspensionBounds")]
     [InlineData("", "2026-01-06 11:00", "UnresolvedSuspensionBounds")]
-    public void Suspension_only_blocks_potentially_affected_or_unresolved_movement(string suspend, string resume, string reason)
+    public void Closed_suspension_is_supported_and_unresolved_or_invalid_bounds_are_distinguished(string suspend, string resume, string reason)
     {
         var fixture = new Schedule();
+        SetStatus(fixture.Predecessor, "TK_Active");
         fixture.Successor["restart_date"] = "2026-01-06 17:00";
         fixture.Successor["reend_date"] = "2026-01-07 17:00";
         fixture.Predecessor["suspend_date"] = suspend;
@@ -453,32 +457,32 @@ public sealed class RelationshipAssessmentTests
     }
 
     [Fact]
-    public void Suspension_check_includes_the_start_boundary_snap_not_just_working_hour_addition()
+    public void Unstarted_activity_cannot_supply_a_historical_suspension()
     {
         var fixture = new Schedule();
         fixture.Relationship["pred_type"] = "PR_SS";
-        // Eight working hours moves a start from Monday 08:00 to Tuesday 08:00,
-        // not Monday 17:00. Suspension in that nonworking gap still crosses the
-        // projected event movement and cannot be silently omitted from its bounds.
+        // Suspension requires an actual start; the interval must not silently
+        // become calendar availability for an unstarted predecessor.
         fixture.Predecessor["suspend_date"] = "2026-01-05 20:00";
         fixture.Predecessor["resume_date"] = "2026-01-06 07:00";
-        Assess(fixture, "UnsupportedSuspensionMovement");
+        Assess(fixture, "InconsistentSuspensionState");
     }
 
     [Theory]
-    [InlineData("2026-01-05 08:00", "2026-01-05 17:00")]
-    [InlineData("2026-01-06 17:00", "2026-01-07 08:00")]
+    [InlineData("2026-01-04 08:00", "2026-01-05 17:00")]
+    [InlineData("2026-01-07 17:00", "2026-01-08 08:00")]
     public void Suspension_boundary_touch_does_not_block_movement_outside_the_suspended_interval(
         string suspend, string resume)
     {
         var fixture = new Schedule();
+        SetStatus(fixture.Predecessor, "TK_Active");
         fixture.Successor["restart_date"] = "2026-01-06 17:00";
         fixture.Successor["reend_date"] = "2026-01-07 17:00";
         fixture.Predecessor["suspend_date"] = suspend;
         fixture.Predecessor["resume_date"] = resume;
 
-        // The finish moves Jan 5 17:00 -> Jan 6 17:00. Work either starts exactly
-        // at resumption, or ends exactly at suspension; neither crosses the pause.
+        // Both intervals normalize to civil-day bounds outside the movement
+        // Jan 5 17:00 -> Jan 6 17:00 and therefore leave eight working hours.
         RelationshipFloatAssessment result = Assess(fixture, "CalculatedRemainingRelationship");
         Assert.Equal(RelationshipFloatClassification.Calculated, result.Classification);
         Assert.Equal(8m, result.FloatHours);
@@ -486,11 +490,12 @@ public sealed class RelationshipAssessmentTests
     }
 
     [Theory]
-    [InlineData("2026-01-05 08:00", "2026-01-05 17:00")]
-    [InlineData("2026-01-06 17:00", "2026-01-07 08:00")]
+    [InlineData("2026-01-04 08:00", "2026-01-05 17:00")]
+    [InlineData("2026-01-07 17:00", "2026-01-08 08:00")]
     public void Negative_movement_uses_the_same_half_open_suspension_boundaries(string suspend, string resume)
     {
         var fixture = new Schedule();
+        SetStatus(fixture.Predecessor, "TK_Active");
         fixture.Predecessor["restart_date"] = "2026-01-06 08:00";
         fixture.Predecessor["reend_date"] = "2026-01-06 17:00";
         fixture.Successor["restart_date"] = "2026-01-05 17:00";
@@ -504,17 +509,18 @@ public sealed class RelationshipAssessmentTests
     }
 
     [Theory]
-    [InlineData("2026-01-05 08:00", "")]
-    [InlineData("2026-01-05 08:00", "2026-01-06 17:00")]
-    [InlineData("invalid suspend", "invalid resume")]
-    public void Zero_movement_does_not_consume_or_cross_suspension(string suspend, string resume)
+    [InlineData("2026-01-05 08:00", "", "UnresolvedSuspensionBounds")]
+    [InlineData("2026-01-05 08:00", "2026-01-06 17:00", "CalculatedRemainingRelationship")]
+    [InlineData("invalid suspend", "invalid resume", "InvalidSuspensionBounds")]
+    public void Zero_movement_still_requires_valid_suspension_evidence(string suspend, string resume, string reason)
     {
         var fixture = new Schedule();
+        SetStatus(fixture.Predecessor, "TK_Active");
         fixture.Predecessor["suspend_date"] = suspend;
         fixture.Predecessor["resume_date"] = resume;
-        RelationshipFloatAssessment result = Assess(fixture, "CalculatedRemainingRelationship");
-        Assert.Equal(0m, result.FloatHours);
-        Assert.Equal(0m, result.FloatDays);
+        RelationshipFloatAssessment result = Assess(fixture, reason);
+        Assert.Equal(reason.StartsWith("Calculated", StringComparison.Ordinal) ? 0m : null, result.FloatHours);
+        Assert.Equal(reason.StartsWith("Calculated", StringComparison.Ordinal) ? 0m : null, result.FloatDays);
     }
 
     [Theory]
@@ -741,7 +747,12 @@ public sealed class RelationshipAssessmentTests
         XerTable table = Assert.IsType<XerTable>(transformer.Create06XerPredecessor(new ConcurrentDictionary<string, XerTable>()));
         Assert.Equal(assessments.Count, table.RowCount);
         for (int i = 0; i < table.RowCount; i++)
+        {
             Assert.Equal(assessments[i].FormattedDays, table.Rows[i].Fields[table.FieldIndexes["free_float"]]);
+            Assert.Equal(assessments[i].AllowanceStatus.ToString(), table.Rows[i].Fields[table.FieldIndexes["free_float_status"]]);
+            Assert.Equal(assessments[i].CalculationBasis, table.Rows[i].Fields[table.FieldIndexes["free_float_basis"]]);
+            Assert.Equal(assessments[i].ReasonCode, table.Rows[i].Fields[table.FieldIndexes["free_float_reason"]]);
+        }
     }
 
     private static void AssertEquivalentCalculation(

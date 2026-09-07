@@ -999,8 +999,11 @@ public XerTable? Create04XerBaselineTable(XerTable task01Table)
 ## 5. 06_XER_PREDECESSOR
 
 ### What Changed
+- Added 3 new columns to table 06 output: `free_float_status`, `free_float_basis`, and `free_float_reason`.
+- Added `RelationshipAllowanceStatus` (`Finite`, `Estimated`, `NoFiniteBound`, `Historical`, `FixedEvent`, `RequiresContext`, `MissingData`, `InvalidData`) and `CalculationBasis`.
 - Replaced forward date projection with inverse lag CPM calculator (`RelationshipFreeFloatCalculator`).
-- Added support for `TT_TASK`, `TT_RSRC`, `TT_MILE`, and `TT_FINMILE`.
+- Added support for activity-specific civil-day suspension adjustment (`WithNonWorkingPeriod`).
+- Added support for `TT_RSRC` estimates and active successor `PR_SF` (`CalculatedRetainedStartToFinish`).
 - Added support for 4 lag calendar modes (`rcal_Predecessor`, `rcal_Successor`, `rcal_24Hour`, `rcal_ProjectDefault`).
 - Added Retained Logic vs Progress Override handling (`use_actual_dates_flag`).
 - Preserved row ordering using deterministic array.
@@ -1994,6 +1997,58 @@ public XerTable? Create04XerBaselineTable(XerTable task01Table)
 
 #### New Implementation
 ```csharp
+private struct TaskData
+{
+    public string? ProjectId;
+    public string? CalendarId;
+    public string? ClndrIdKey;
+    public string? StatusCode;
+    public string? TaskType;
+    public DateTime? DisplayStartDate;
+    public DateTime? DisplayFinishDate;
+    public string? TotalFloatHrCnt;
+}
+
+private Dictionary<(string Source, string Task), TaskData[]> BuildTaskLookupDictionary(XerTable? table)
+{
+    var result = new Dictionary<(string Source, string Task), TaskData[]>();
+    if (!IsTableValid(table)) return result;
+    foreach (var group in table.Rows.GroupBy(row => (row.SourceToken,
+                 GetFieldValue(row.Fields, table.FieldIndexes, FieldNames.TaskId).Trim())))
+    {
+        if (group.Key.Item2.Length == 0) continue;
+        result.Add(group.Key, group.Select(row =>
+        {
+            string Read(string field) => GetFieldValue(row.Fields, table.FieldIndexes, field);
+            string status = Read(FieldNames.StatusCode).Trim();
+            DateTime start = CalculateStartDate(row.Fields, table.FieldIndexes, status);
+            DateTime finish = CalculateFinishDate(row.Fields, table.FieldIndexes, status);
+            return new TaskData
+            {
+                ProjectId = Read(FieldNames.ProjectId).Trim(),
+                CalendarId = Read(FieldNames.ClndrId).Trim(),
+                ClndrIdKey = CreateKey(row.SourceFilename, Read(FieldNames.ClndrId)),
+                StatusCode = status,
+                TaskType = Read(FieldNames.TaskType),
+                DisplayStartDate = start == DateTime.MinValue ? null : start,
+                DisplayFinishDate = finish == DateTime.MinValue ? null : finish,
+                TotalFloatHrCnt = Read(FieldNames.TotalFloatHrCnt)
+            };
+        }).ToArray());
+    }
+    return result;
+}
+
+private static TaskData ResolveDisplayTask(Dictionary<(string Source, string Task), TaskData[]> lookup,
+    string source, string taskId, string projectId)
+{
+    if (!lookup.TryGetValue((source, taskId.Trim()), out var rows) || rows.Length != 1) return new();
+    TaskData task = rows[0];
+    if (string.IsNullOrWhiteSpace(task.ProjectId)
+        || (!string.IsNullOrWhiteSpace(projectId) && task.ProjectId != projectId.Trim())) return new();
+    return task;
+}
+
 public XerTable? Create06XerPredecessor(ConcurrentDictionary<string, XerTable> cache)
 {
     ClearGenerationFailure(EnhancedTableNames.XerPredecessor06);
@@ -2012,15 +2067,29 @@ public XerTable? Create06XerPredecessor(ConcurrentDictionary<string, XerTable> c
         var sourceIndexes = taskPredTable.FieldIndexes;
         var finalHeadersList = new List<string>
         {
-            FieldNames.TaskIdKey, FieldNames.PredTaskIdKey, FieldNames.CalendarIdKey,
-            FieldNames.PredecessorClndrIdKey, FieldNames.StatusCode, FieldNames.PredecessorStatusCode,
-            FieldNames.TaskType, FieldNames.PredecessorTaskType, FieldNames.Lag,
-            FieldNames.TimePeriodHoursPerDay, FieldNames.Start, FieldNames.Finish,
-            FieldNames.PredecessorStart, FieldNames.PredecessorFinish, FieldNames.PredecessorFreeFloat,
-            FieldNames.TotalFloat, FieldNames.MonthUpdate
+            FieldNames.TaskIdKey,
+            FieldNames.PredTaskIdKey,
+            FieldNames.CalendarIdKey,
+            FieldNames.PredecessorClndrIdKey,
+            FieldNames.StatusCode,
+            FieldNames.PredecessorStatusCode,
+            FieldNames.TaskType,
+            FieldNames.PredecessorTaskType,
+            FieldNames.Lag,
+            FieldNames.TimePeriodHoursPerDay,
+            FieldNames.Start,
+            FieldNames.Finish,
+            FieldNames.PredecessorStart,
+            FieldNames.PredecessorFinish,
+            FieldNames.PredecessorFreeFloat,
+            FieldNames.FreeFloatStatus,
+            FieldNames.FreeFloatBasis,
+            FieldNames.FreeFloatReason,
+            FieldNames.TotalFloat,
+            FieldNames.MonthUpdate
         };
 
-        string[] finalHeaders = CreateEnhancedHeaders(taskPredTable.Headers, finalHeadersList.ToArray());
+        string[] finalHeaders = CreateEnhancedHeaders(taskPredTable, EnhancedTableNames.XerPredecessor06, finalHeadersList);
         var finalIndexes = finalHeaders
             .Select((name, index) => new { name, index })
             .ToDictionary(item => item.name, item => item.index, StringComparer.OrdinalIgnoreCase);
@@ -2036,6 +2105,7 @@ public XerTable? Create06XerPredecessor(ConcurrentDictionary<string, XerTable> c
 
         var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = PerformanceConfig.MaxParallelTransformations };
         var transformedRows = new DataRow[taskPredTable.RowCount];
+        int[] relationshipOrdinals = SourceOrdinals(taskPredTable);
 
         Parallel.For(0, taskPredTable.RowCount, parallelOptions, rowIndex =>
         {
@@ -2055,8 +2125,8 @@ public XerTable? Create06XerPredecessor(ConcurrentDictionary<string, XerTable> c
             TaskData predTask = ResolveDisplayTask(taskLookup, sourceRow.SourceToken, predTaskId,
                 GetFieldValue(row, sourceIndexes, "pred_proj_id"));
 
-            string taskIdKey = succTask.ProjectId is null ? "" : CreateKey(sourceRow.SourceToken, taskId);
-            string predTaskIdKey = predTask.ProjectId is null ? "" : CreateKey(sourceRow.SourceToken, predTaskId);
+            string taskIdKey = succTask.ProjectId is null ? "" : CreateKey(originalFilename, taskId);
+            string predTaskIdKey = predTask.ProjectId is null ? "" : CreateKey(originalFilename, predTaskId);
 
             SetTransformedField(transformed, finalIndexes, FieldNames.TaskIdKey, taskIdKey);
             SetTransformedField(transformed, finalIndexes, FieldNames.PredTaskIdKey, predTaskIdKey);
@@ -2077,7 +2147,9 @@ public XerTable? Create06XerPredecessor(ConcurrentDictionary<string, XerTable> c
 
             decimal hoursPerDay = 0;
             if (!string.IsNullOrEmpty(predClndrIdKey) && calendarHoursLookup.TryGetValue((sourceRow.SourceToken, predTask.CalendarId ?? ""), out decimal hpd))
+            {
                 hoursPerDay = hpd;
+            }
             SetTransformedField(transformed, finalIndexes, FieldNames.TimePeriodHoursPerDay, hoursPerDay > 0 ? hoursPerDay.ToString("F2", CultureInfo.InvariantCulture) : "");
 
             string lagHrCntStr = GetFieldValue(row, sourceIndexes, FieldNames.LagHrCnt);
@@ -2091,27 +2163,44 @@ public XerTable? Create06XerPredecessor(ConcurrentDictionary<string, XerTable> c
 
             decimal hoursPerDayForSuccessor = 0;
             if (calendarHoursLookup.TryGetValue((sourceRow.SourceToken, succTask.CalendarId ?? ""), out decimal succHpd))
+            {
                 hoursPerDayForSuccessor = succHpd;
+            }
 
             var assessment = AssessRelationship(sourceRow, relationshipTasks, relationshipCalendars,
-                schedOptionsLookup, rowIndex, false, default);
+                schedOptionsLookup, relationshipOrdinals[rowIndex], false, default);
             string freeFloatInDays = assessment.FormattedDays;
+            if (assessment.Classification is RelationshipFloatClassification.InvalidData
+                or RelationshipFloatClassification.MissingData or RelationshipFloatClassification.Unsupported)
+                RecordDataQualityWarning(EnhancedTableNames.XerPredecessor06,
+                    "RELATIONSHIP_" + assessment.ReasonCode, assessment.Message, sourceRow,
+                    relationshipOrdinals[rowIndex], TableNames.TaskPred, "free_float", "",
+                    XerDataQuality.RawRowJson(taskPredTable, sourceRow));
+
             SetTransformedField(transformed, finalIndexes, FieldNames.PredecessorFreeFloat, freeFloatInDays);
+            SetTransformedField(transformed, finalIndexes, FieldNames.FreeFloatStatus, assessment.AllowanceStatus.ToString());
+            SetTransformedField(transformed, finalIndexes, FieldNames.FreeFloatBasis, assessment.CalculationBasis);
+            SetTransformedField(transformed, finalIndexes, FieldNames.FreeFloatReason, assessment.ReasonCode);
 
             string totalFloatVal = "";
             if (!string.Equals(succTask.StatusCode, "TK_Complete", StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrEmpty(succTask.TotalFloatHrCnt) && hoursPerDayForSuccessor > 0)
             {
                 if (decimal.TryParse(succTask.TotalFloatHrCnt, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal tfHours))
+                {
                     totalFloatVal = FormatRelationshipDays(tfHours, hoursPerDayForSuccessor, "F1");
+                }
             }
             SetTransformedField(transformed, finalIndexes, FieldNames.TotalFloat, totalFloatVal);
-            SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(sourceRow.SourceFilename));
+
+            SetTransformedField(transformed, finalIndexes, FieldNames.MonthUpdate, ParseMonthUpdateFromFilename(sourceRow.OriginalSourceFilename));
 
             for (int k = 0; k < transformed.Length; k++)
+            {
                 transformed[k] = StringInternPool.Intern(transformed[k] ?? string.Empty);
+            }
 
-            transformedRows[rowIndex] = new DataRow(transformed, originalFilename, sourceRow.SourceToken);
+            transformedRows[rowIndex] = sourceRow.WithFields(transformed);
         });
 
         resultTable.AddRows(transformedRows);
@@ -2119,16 +2208,11 @@ public XerTable? Create06XerPredecessor(ConcurrentDictionary<string, XerTable> c
     }
     catch (Exception ex)
     {
-        RecordGenerationFailure(EnhancedTableNames.XerPredecessor06, ex.Message);
+        RecordGenerationFailure(EnhancedTableNames.XerPredecessor06, ex);
         return null;
     }
 }
 
-```csharp
-namespace XerToCsvConverter;
-
-/// <summary>
-/// The greatest signed predecessor working-time movement whose lagged endpoint does
 /// not exceed a fixed successor endpoint. This is a relationship delay allowance,
 /// not an activity float or a classification of P6 driving relationships.
 /// </summary>
@@ -2219,14 +2303,34 @@ public static class RelationshipFreeFloatCalculator
         CancellationToken cancellationToken) =>
         calendar.AddWorkingTicks(endpoint, -1, cancellationToken).AddTicks(1);
 }
-```
 
-```csharp
 public enum RelationshipFloatClassification
 {
     Calculated, Ignored, Historical, Unsupported, MissingData, InvalidData
 }
 
+/// <summary>Meaning of the relationship allowance, independent of the legacy audit classification.</summary>
+public enum RelationshipAllowanceStatus
+{
+    Finite, Estimated, NoFiniteBound, Historical, FixedEvent, RequiresContext, MissingData, InvalidData
+}
+
+/// <summary>Original input evidence; State also distinguishes malformed typed values.</summary>
+public sealed record RelationshipFieldEvidence(string RawValue, string State)
+{
+    // Parsed-data callers can edit existing cells. Keep original evidence distinct
+    // from the supplied evaluation value without repeating identical evidence.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EvaluationValue { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EvaluationState { get; init; }
+}
+
+/// <summary>
+/// A relationship-only remaining predecessor allowance, evaluated under exported settings.
+/// This is neither a reschedule nor a native P6 driving classification. No internal token
+/// is exposed; public namespace and the source-local row ordinal identify an occurrence.
+/// </summary>
 public sealed record RelationshipFloatAssessment
 {
     public string FileName { get; init; } = "";
@@ -2257,11 +2361,42 @@ public sealed record RelationshipFloatAssessment
     public decimal? FloatHours { get; init; }
     public decimal? FloatDays { get; init; }
     public RelationshipFloatClassification Classification { get; init; }
+    public RelationshipAllowanceStatus AllowanceStatus { get; init; } = RelationshipAllowanceStatus.RequiresContext;
+    public string CalculationBasis { get; init; } = "None";
     public string ReasonCode { get; init; } = "";
     public string Message { get; init; } = "";
+    public IReadOnlyDictionary<string, RelationshipFieldEvidence> InputEvidence { get; init; } =
+        new ReadOnlyDictionary<string, RelationshipFieldEvidence>(new Dictionary<string, RelationshipFieldEvidence>());
 
     public string FormattedDays => Classification == RelationshipFloatClassification.Calculated
+        && AllowanceStatus is RelationshipAllowanceStatus.Finite or RelationshipAllowanceStatus.Estimated
         ? FloatDays?.ToString("G29", CultureInfo.InvariantCulture) ?? "" : "";
+}
+
+// Scheduling availability is separate from the hours-per-day used to display lag or float.
+internal enum RelationshipLagCalendar
+{
+    Predecessor,
+    Successor,
+    TwentyFourHour,
+    ProjectDefault
+}
+
+internal static class RelationshipLagCalendarPolicy
+{
+    internal static bool TryParse(string? raw, out RelationshipLagCalendar calendar)
+    {
+        switch (raw?.Trim().ToUpperInvariant())
+        {
+            case "RCAL_PREDECESSOR": calendar = RelationshipLagCalendar.Predecessor; return true;
+            case "RCAL_SUCCESSOR": calendar = RelationshipLagCalendar.Successor; return true;
+            case "RCAL_24HOUR": calendar = RelationshipLagCalendar.TwentyFourHour; return true;
+            case "RCAL_PROJDEFAULT":
+            case "RCAL_PROJECT": // Compatibility alias accepted by earlier parser versions.
+                calendar = RelationshipLagCalendar.ProjectDefault; return true;
+            default: calendar = default; return false;
+        }
+    }
 }
 
 private sealed record RelationshipScheduleOptions(
@@ -2291,6 +2426,53 @@ private sealed record RelationshipScheduleOptions(
         RawText(OptionRow, "sched_lag_early_start_flag").ToUpperInvariant() switch
         { "Y" => "EarlyStart", "N" => "ActualStart", _ => "Unresolved" };
 }
+
+private Dictionary<(string Source, string Project), RelationshipScheduleOptions> BuildProjectScheduleOptionsLookup(XerTable? options)
+{
+    var result = new Dictionary<(string Source, string Project), RelationshipScheduleOptions>();
+    var projects = _dataStore.GetTable(TableNames.Project);
+    if (IsTableValid(projects))
+        foreach (var group in projects.Rows.GroupBy(row => (Source: row.SourceToken, Project: RawText(row, "proj_id"))))
+            if (group.Key.Project.Length > 0)
+                result[group.Key] = new(ProjectRow: group.First(), ProjectAmbiguous: group.Skip(1).Any());
+    if (IsTableValid(options))
+        foreach (var group in options.Rows.GroupBy(row => (Source: row.SourceToken, Project: RawText(row, "proj_id"))))
+            if (group.Key.Project.Length > 0)
+            {
+                result.TryGetValue(group.Key, out var prior);
+                result[group.Key] = (prior ?? new()) with { OptionRow = group.First(), OptionsAmbiguous = group.Skip(1).Any() };
+            }
+    return result;
+}
+
+/// <summary>One assessment per TASKPRED row in input order. Does not mutate the store or export any files.</summary>
+public IReadOnlyList<RelationshipFloatAssessment> AssessRelationships(CancellationToken cancellationToken = default)
+{
+    cancellationToken.ThrowIfCancellationRequested();
+    var relationships = _dataStore.GetTable(TableNames.TaskPred);
+    if (!IsTableValid(relationships)) return Array.Empty<RelationshipFloatAssessment>();
+    var tasks = BuildRelationshipTaskLookup(_dataStore.GetTable(TableNames.Task));
+    var calendars = BuildRelationshipCalendars();
+    var options = BuildProjectScheduleOptionsLookup(_dataStore.GetTable("SCHEDOPTIONS"));
+    var ordinals = new Dictionary<string, int>(StringComparer.Ordinal);
+    var results = new List<RelationshipFloatAssessment>(relationships.RowCount);
+    foreach (var row in relationships.Rows)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ordinals.TryGetValue(row.SourceToken, out int ordinal);
+        ordinals[row.SourceToken] = ++ordinal;
+        results.Add(AssessRelationship(row, tasks, calendars, options, ordinal, true, cancellationToken));
+    }
+    return results.AsReadOnly();
+}
+
+// Existing export entry point uses exactly the same evaluator, without materialising
+// the potentially large optional audit evidence for every edge in a browser export.
+private string CalculateFreeFloat(DataRow relationship, IReadOnlyDictionary<string, int> predIndexes,
+    Dictionary<(string Source, string Task), RelationshipTask[]> tasks,
+    Dictionary<(string Source, string Calendar), RelationshipCalendar> calendars,
+    Dictionary<(string Source, string Project), RelationshipScheduleOptions> options) =>
+    AssessRelationship(relationship, tasks, calendars, options, 0, false, default).FormattedDays;
 
 private RelationshipFloatAssessment AssessRelationship(DataRow row,
     Dictionary<(string Source, string Task), RelationshipTask[]> tasks,
@@ -2322,9 +2504,28 @@ private RelationshipFloatAssessment AssessRelationship(DataRow row,
         ProjectDataDate = options?.DataDate,
         PredecessorCalendarKey = predecessor is null ? "" : Key(predecessor.CalendarId)
     };
-
+    if (includeEvidence)
+        assessment = assessment with { InputEvidence = BuildRelationshipEvidence(row, predecessor, successor, otherOptions, options) };
     RelationshipFloatAssessment Result(RelationshipFloatClassification classification, string reason, string message) =>
-        assessment with { Classification = classification, ReasonCode = reason, Message = message };
+        assessment with
+        {
+            Classification = classification, ReasonCode = reason, Message = message,
+            AllowanceStatus = classification switch
+            {
+                RelationshipFloatClassification.Ignored => RelationshipAllowanceStatus.NoFiniteBound,
+                RelationshipFloatClassification.Historical => RelationshipAllowanceStatus.Historical,
+                RelationshipFloatClassification.MissingData => RelationshipAllowanceStatus.MissingData,
+                RelationshipFloatClassification.InvalidData => RelationshipAllowanceStatus.InvalidData,
+                _ => RelationshipAllowanceStatus.RequiresContext
+            },
+            CalculationBasis = classification switch
+            {
+                RelationshipFloatClassification.Ignored => "IgnoredRelationship",
+                RelationshipFloatClassification.Historical => "HistoricalActualEvent",
+                RelationshipFloatClassification.Unsupported => "UnresolvedContext",
+                _ => "None"
+            }
+        };
     RelationshipFloatAssessment Missing(string reason, string message) => Result(RelationshipFloatClassification.MissingData, reason, message);
     RelationshipFloatAssessment Invalid(string reason, string message) => Result(RelationshipFloatClassification.InvalidData, reason, message);
     RelationshipFloatAssessment Unsupported(string reason, string message) => Result(RelationshipFloatClassification.Unsupported, reason, message);
@@ -2352,9 +2553,14 @@ private RelationshipFloatAssessment AssessRelationship(DataRow row,
         return Result(RelationshipFloatClassification.Historical, "HistoricalSuccessor", "The successor is complete; there is no remaining successor event for this metric.");
     if (predecessor.Status == "TK_COMPLETE")
         return Result(RelationshipFloatClassification.Historical, "HistoricalFixedPredecessor", "There is no movable remaining predecessor event. A fixed historical release or unexpired lag may still affect the successor.");
+    if (predecessor.Type == "TT_WBS" || successor.Type == "TT_WBS")
+        return Result(RelationshipFloatClassification.Ignored, "IgnoredSummaryRelationship",
+            "Direct WBS-summary relationships are ignored during scheduling; summary rollups are a separate dependency mechanism.");
     if (predecessor.Type is not ("TT_TASK" or "TT_RSRC" or "TT_MILE" or "TT_FINMILE") ||
         successor.Type is not ("TT_TASK" or "TT_RSRC" or "TT_MILE" or "TT_FINMILE"))
-        return Unsupported("UnsupportedActivityType", "LOE, WBS-summary or unknown activity types do not establish task-calendar movement.");
+        return Unsupported("UnsupportedActivityType", predecessor.Type == "TT_LOE" || successor.Type == "TT_LOE"
+            ? "LOE movement depends on its linked activity network; an independent remaining endpoint allowance cannot be established."
+            : "The exported activity type has no supported remaining endpoint movement model.");
     foreach (var task in new[] { predecessor, successor })
     {
         if (RawText(task.Row, "act_end_date").Length > 0 ||
@@ -2365,6 +2571,45 @@ private RelationshipFloatAssessment AssessRelationship(DataRow row,
         if (start.Date.HasValue && finish.Date.HasValue && finish.Date < start.Date)
             return Invalid("ReversedRemainingPeriod", "An exported remaining finish precedes its remaining start.");
     }
+
+    // An active predecessor needs the same evidence as an active successor.
+    // Validate chronology before scheduling-mode exclusions so contradictory
+    // actuals cannot receive a numeric finish allowance or a fixed-event label.
+    foreach (var task in new[] { predecessor, successor }.Where(task => task.Status == "TK_ACTIVE"))
+    {
+        DateTime? actual = RawDate(task.Row, "act_start_date");
+        if (!actual.HasValue)
+            return Result(RawText(task.Row, "act_start_date").Length > 0
+                    ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
+                "UnresolvedActualStart", "Every active endpoint requires an explicit valid actual start; no source dates are repaired.");
+        foreach (bool startEndpoint in new[] { true, false })
+        {
+            var remaining = RemainingEndpoint(task, startEndpoint);
+            if (remaining.Date.HasValue && actual > remaining.Date)
+                return Invalid("ActualStartAfterRemainingEndpoint", "An active endpoint's actual start is after its exported remaining start or finish.");
+        }
+        var owningOptions = ReferenceEquals(task, predecessor) ? otherOptions : options;
+        if (owningOptions?.ProjectAmbiguous == true || owningOptions?.DataDate is null)
+            return Result(owningOptions?.ProjectAmbiguous == true || RawText(owningOptions?.ProjectRow, "last_recalc_date").Length > 0
+                    ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
+                "UnresolvedProjectDataDate", "Every active endpoint requires a valid unambiguous owning project Data Date.");
+        if (actual > owningOptions.DataDate)
+            return Unsupported("ActualStartAfterDataDate", "The recorded actual start is after its owning project's Data Date; remaining scheduling context is not established.");
+    }
+    if (external && (predecessor.Status == "TK_ACTIVE" || successor.Status == "TK_ACTIVE"))
+        return Unsupported("UnverifiedMultiProjectProgressContext", "A progressed cross-project relationship needs the governing scheduling project and progress context; matching flags alone is insufficient.");
+
+    if (predecessor.Status == "TK_ACTIVE" && (type == "PR_SF" ||
+        (type == "PR_SS" && options is { Mode: "RetainedLogic" or "ProgressOverride", SsBasis: "ActualStart" })))
+        return Result(RelationshipFloatClassification.Unsupported, "FixedActualPredecessorStart",
+            "The relationship uses the predecessor's fixed actual start; remaining work delay cannot move this event. Any fixed release or unexpired lag is separate from remaining allowance.") with
+        {
+            AllowanceStatus = RelationshipAllowanceStatus.FixedEvent,
+            CalculationBasis = "FixedActualStart",
+            PredecessorEndpoint = RawDate(predecessor.Row, "act_start_date"),
+            PredecessorEndpointField = "act_start_date"
+        };
+
     var rawLag = row.GetEvaluationField("lag_hr_cnt");
     if (rawLag.State != XerRawFieldState.Present)
         return Missing("MissingRelationshipLag", "An absent, truncated or blank lag cannot establish zero lag.");
@@ -2375,8 +2620,6 @@ private RelationshipFloatAssessment AssessRelationship(DataRow row,
     bool activeSuccessor = successor.Status == "TK_ACTIVE";
     if (activeSuccessor)
     {
-        if (external)
-            return Unsupported("UnverifiedMultiProjectProgressContext", "A progressed cross-project relationship needs a verified governing scheduling context.");
         if (options?.Mode is null or "Unresolved")
         {
             bool invalid = options?.IsAmbiguous == true ||
@@ -2387,27 +2630,13 @@ private RelationshipFloatAssessment AssessRelationship(DataRow row,
         }
         if (options.Mode == "ActualDates")
             return Unsupported("UnsupportedActualDatesProgressCase", "This progressed Actual Dates case is not verified; actual events are never moved or replaced by invented remaining events.");
-        if (options.DataDate is null)
-            return Result(RawText(options.ProjectRow, "last_recalc_date").Length > 0
-                    ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
-                "UnresolvedProjectDataDate", "Progress-sensitive evaluation needs a valid owning project Data Date.");
-        foreach (var task in new[] { predecessor, successor }.Where(task => task.Status == "TK_ACTIVE"))
-        {
-            DateTime? actual = RawDate(task.Row, "act_start_date");
-            if (!actual.HasValue)
-                return Result(RawText(task.Row, "act_start_date").Length > 0
-                        ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
-                    "UnresolvedActualStart", "Progress-sensitive evaluation needs explicit valid actual starts for active endpoints.");
-            if (actual > options.DataDate)
-                return Unsupported("ActualStartAfterDataDate", "The recorded actual start is after the Data Date; demonstrated progress semantics cannot be established.");
-        }
         if (options.Mode == "ProgressOverride")
             return type == "PR_FS" && lagHours == 0
                 ? Result(RelationshipFloatClassification.Ignored, "IgnoredUnderExportedProgressOverride",
                     "Zero-lag FS has an unfinished predecessor and a successor started by the Data Date; ignored under the exported Progress Override setting.")
                 : Unsupported("UnsupportedProgressOverrideCase", "This progressed relationship is not the verified zero-lag FS override case; it is not assumed to be ignored.");
-        if (type is "PR_SS" or "PR_SF")
-            return Unsupported("UnsupportedProgressedRelationship", "Progressed SS/SF remaining-event semantics are not verified, including expired/remaining lag.");
+        if (type == "PR_SS")
+            return Unsupported("UnsupportedProgressedRelationship", "The successor's actual start is fixed; substituting a remaining restart for SS requires an unverified progressed relationship rule.");
     }
     if (predecessor.Status == "TK_ACTIVE" && type is "PR_SS" or "PR_SF")
         return Unsupported("UnsupportedProgressedStartEndpoint", "An actual predecessor start cannot be substituted into the movable remaining-start solver; remaining SS/SF lag semantics are not verified.");
@@ -2461,25 +2690,35 @@ private RelationshipFloatAssessment AssessRelationship(DataRow row,
         }
     }
     assessment = assessment with { LagCalendarKey = lagHours == 0 ? "NotRequired" : lagKey };
+    var suspension = ResolveRelationshipSuspension(predecessor);
+    if (suspension.Failure.HasValue)
+        return Result(suspension.Failure.Value, suspension.Reason!,
+            "Predecessor suspension requires active task/resource work, a coherent actual start and valid closed suspend/resume dates. Open or absent bounds are not invented.");
     try
     {
-        decimal hours = RelationshipFreeFloatCalculator.CalculateHours(predecessorCalendar.Calculator, lagCalendar,
+        bool suspensionAdjusted = suspension.Start.HasValue && suspension.Finish > suspension.Start;
+        WorkingDayCalculator movementCalendar = suspensionAdjusted
+            ? predecessorCalendar.Calculator.WithNonWorkingPeriod(suspension.Start!.Value, suspension.Finish!.Value)
+            : predecessorCalendar.Calculator;
+        decimal hours = RelationshipFreeFloatCalculator.CalculateHours(movementCalendar, lagCalendar,
             from.Date.Value, to.Date.Value, lagHours, type is "PR_SS" or "PR_SF", cancellationToken);
-
-        long movementTicks = checked((long)decimal.Round(hours * TimeSpan.TicksPerHour, 0));
-        DateTime moved = predecessorCalendar.Calculator.AddWorkingTicks(from.Date.Value, movementTicks, cancellationToken);
-        if (movementTicks != 0)
-            moved = type is "PR_SS" or "PR_SF"
-                ? predecessorCalendar.Calculator.AddWorkingTicks(moved, 1, cancellationToken).AddTicks(-1)
-                : predecessorCalendar.Calculator.AddWorkingTicks(moved, -1, cancellationToken).AddTicks(1);
-        string? suspension = SuspensionIssue(predecessor.Row, from.Date.Value, moved);
-        if (suspension is not null)
-            return Unsupported(suspension, "Predecessor movement may cross activity suspension, or its bounds are unresolved. No suspension work is invented.");
         decimal days = hours / predecessorCalendar.HoursPerDay.Value;
+        bool resourceEstimate = predecessor.Type == "TT_RSRC" || successor.Type == "TT_RSRC";
         return assessment with { Classification = RelationshipFloatClassification.Calculated,
-            ReasonCode = activeSuccessor ? "CalculatedRetainedRemainingRelationship" : "CalculatedRemainingRelationship",
+            AllowanceStatus = resourceEstimate ? RelationshipAllowanceStatus.Estimated : RelationshipAllowanceStatus.Finite,
+            CalculationBasis = (resourceEstimate, suspensionAdjusted) switch
+            {
+                (true, true) => "TaskCalendarResourceEstimateSuspensionAdjusted",
+                (true, false) => "TaskCalendarResourceEstimate",
+                (false, true) => "TaskCalendarSuspensionAdjusted",
+                _ => "TaskCalendarRemainingEndpoint"
+            },
+            ReasonCode = activeSuccessor ? type == "PR_SF" ? "CalculatedRetainedStartToFinish"
+                : "CalculatedRetainedRemainingRelationship" : "CalculatedRemainingRelationship",
             FloatHours = hours, FloatDays = days,
-            Message = "Signed predecessor-working-time allowance evaluated under exported settings with fixed successor endpoint; not a reschedule or native P6 driving flag." };
+            Message = resourceEstimate
+                ? "Task-calendar estimate with a fixed successor endpoint; assigned-resource calendars, date rollups and leveling are not simulated."
+                : "Signed predecessor-working-time allowance with a fixed successor endpoint and any valid closed suspension removed from movement availability; not a reschedule or native P6 driving flag." };
     }
     catch (Exception ex) when (ex is InvalidDataException or ArgumentOutOfRangeException or OverflowException)
     {
@@ -2490,37 +2729,98 @@ private RelationshipFloatAssessment AssessRelationship(DataRow row,
 private static (DateTime? Date, string Field) RemainingEndpoint(RelationshipTask task, bool start)
 {
     string field = start ? "restart_date" : "reend_date";
+    // Only unstarted activities may use an early date when a preferred value is absent/blank.
+    // Malformed nonblank values are authoritative invalid evidence, never repaired.
     if (task.Status == "TK_NOTSTART" && RawText(task.Row, field).Length == 0)
         field = start ? "early_start_date" : "early_end_date";
     return (RawDate(task.Row, field), field);
 }
 
-private static string? SuspensionIssue(DataRow task, DateTime original, DateTime moved)
+private static (DateTime? Start, DateTime? Finish, RelationshipFloatClassification? Failure, string? Reason)
+    ResolveRelationshipSuspension(RelationshipTask task)
 {
-    if (original == moved) return null;
-    string suspendText = RawText(task, "suspend_date"), resumeText = RawText(task, "resume_date");
-    if (suspendText.Length == 0 && resumeText.Length == 0) return null;
-    var suspend = RawDate(task, "suspend_date");
-    var resume = RawDate(task, "resume_date");
-    if (!suspend.HasValue || (resumeText.Length > 0 && (!resume.HasValue || resume < suspend)))
-        return "UnresolvedSuspensionBounds";
-    DateTime first = original < moved ? original : moved, last = original > moved ? original : moved;
-    return suspend < last && (!resume.HasValue || resume > first) ? "UnsupportedSuspensionMovement" : null;
+    string suspendText = RawText(task.Row, "suspend_date"), resumeText = RawText(task.Row, "resume_date");
+    if (suspendText.Length == 0 && resumeText.Length == 0) return default;
+    if (task.Status != "TK_ACTIVE" || task.Type is not ("TT_TASK" or "TT_RSRC"))
+        return (null, null, RelationshipFloatClassification.InvalidData, "InconsistentSuspensionState");
+    DateTime? suspend = RawDate(task.Row, "suspend_date"), resume = RawDate(task.Row, "resume_date");
+    if ((suspendText.Length > 0 && !suspend.HasValue) || (resumeText.Length > 0 && !resume.HasValue))
+        return (null, null, RelationshipFloatClassification.InvalidData, "InvalidSuspensionBounds");
+    if (!suspend.HasValue || !resume.HasValue)
+        return (null, null, RelationshipFloatClassification.Unsupported, "UnresolvedSuspensionBounds");
+    // P6 suspension/resumption takes effect at the beginning of each recorded day.
+    // A same-day pair excludes no time; raw intraday clock differences do not reverse it.
+    if (resume.Value.Date < suspend.Value.Date)
+        return (null, null, RelationshipFloatClassification.InvalidData, "InvalidSuspensionBounds");
+    if (suspend.Value.Date < RawDate(task.Row, "act_start_date")!.Value.Date)
+        return (null, null, RelationshipFloatClassification.InvalidData, "InconsistentSuspensionState");
+    return (suspend.Value.Date, resume.Value.Date, null, null);
 }
-```
 
-```csharp
-public readonly record struct P6WorkInterval(TimeSpan Start, TimeSpan End);
+private static IReadOnlyDictionary<string, RelationshipFieldEvidence> BuildRelationshipEvidence(DataRow relationship,
+    RelationshipTask? predecessor, RelationshipTask? successor,
+    RelationshipScheduleOptions? predecessorOptions, RelationshipScheduleOptions? successorOptions)
+{
+    var evidence = new Dictionary<string, RelationshipFieldEvidence>(StringComparer.Ordinal);
+    Add("relationship", relationship, ["task_pred_id", "task_id", "pred_task_id", "proj_id", "pred_proj_id", "pred_type", "lag_hr_cnt", "aref", "arls"]);
+    foreach (var (prefix, task, options) in new[] { ("predecessor", predecessor, predecessorOptions), ("successor", successor, successorOptions) })
+    {
+        Add(prefix, task?.Row, ["task_id", "proj_id", "clndr_id", "task_type", "status_code", "act_start_date", "act_end_date",
+            "restart_date", "reend_date", "early_start_date", "early_end_date", "remain_drtn_hr_cnt", "suspend_date", "resume_date",
+            "expect_end_date", "cstr_type", "cstr_date", "cstr_type2", "cstr_date2"]);
+        Add(prefix + "_project", options?.ProjectRow, ["proj_id", "clndr_id", "last_recalc_date"]);
+        Add(prefix + "_options", options?.OptionRow, ["sched_retained_logic", "sched_progress_override", "sched_lag_early_start_flag",
+            "sched_calendar_on_relationship_lag", "sched_outer_depend_type", "sched_use_expect_end_flag", "level_all_rsrc_flag",
+            "level_keep_sched_date_flag", "level_within_float_flag", "sched_float_type", "sched_use_project_end_date_for_float"]);
+        evidence[prefix + "_project.identity"] = new("", options?.ProjectAmbiguous == true ? "Ambiguous" : options?.ProjectRow is null ? "Missing" : "Unique");
+        evidence[prefix + "_options.identity"] = new("", options?.OptionsAmbiguous == true ? "Ambiguous" : options?.OptionRow is null ? "Missing" : "Unique");
+    }
+    return new ReadOnlyDictionary<string, RelationshipFieldEvidence>(evidence);
 
+    void Add(string prefix, DataRow? row, string[] fields)
+    {
+        foreach (string field in fields)
+        {
+            var raw = row?.GetRawField(field) ?? new XerRawField("", XerRawFieldState.AbsentHeader);
+            var evaluation = row?.GetEvaluationField(field) ?? raw;
+            evidence[prefix + "." + field] = new(raw.RawValue, EvidenceState(field, raw))
+            {
+                EvaluationValue = evaluation == raw ? null : evaluation.RawValue,
+                EvaluationState = evaluation == raw ? null : EvidenceState(field, evaluation)
+            };
+        }
+    }
+}
+
+private static string EvidenceState(string field, XerRawField raw)
+{
+    if (raw.State != XerRawFieldState.Present) return raw.State.ToString();
+    bool invalid = field.EndsWith("_date", StringComparison.Ordinal) || field is "aref" or "arls" or "cstr_date2"
+        ? !DateParser.TryParse(raw.RawValue).HasValue
+        : field is "lag_hr_cnt" or "remain_drtn_hr_cnt"
+            ? !decimal.TryParse(raw.RawValue, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
+            : field == "sched_calendar_on_relationship_lag"
+                ? !RelationshipLagCalendarPolicy.TryParse(raw.RawValue, out _)
+                : field.EndsWith("_flag", StringComparison.Ordinal) || field is "sched_retained_logic" or "sched_progress_override" or "sched_use_project_end_date_for_float"
+                    ? raw.RawValue.Trim().ToUpperInvariant() is not ("Y" or "N") : false;
+    return invalid ? "Malformed" : "Valid";
+}
+}
+
+/// <summary>Exact working-time arithmetic over normalized half-open civil-day intervals.</summary>
 public sealed class WorkingDayCalculator
 {
     private const int MaximumProjectionDays = 366_000;
     private readonly IReadOnlyList<IReadOnlyList<P6WorkInterval>> _week;
     private readonly IReadOnlyDictionary<DateTime, IReadOnlyList<P6WorkInterval>> _exceptions;
     private readonly bool _hasWeeklyWork;
+    private readonly DateTime? _nonWorkingStart;
+    private readonly DateTime? _nonWorkingFinish;
 
+    /// <summary>An explicit conventional calendar for callers that deliberately request one.</summary>
     public static WorkingDayCalculator Default { get; } = CreateDefault();
 
+    // Retained for existing callers. Availability always comes from slots, never total-hour hints.
     public WorkingDayCalculator(Dictionary<DateTime, decimal> exceptionHours,
         Dictionary<DateTime, List<(TimeSpan Start, TimeSpan End)>> exceptionTimeSlots,
         decimal[] standardWeekHours, List<(TimeSpan Start, TimeSpan End)>[] standardWeekTimeSlots)
@@ -2552,11 +2852,22 @@ public sealed class WorkingDayCalculator
     }
 
     internal WorkingDayCalculator(IReadOnlyList<IReadOnlyList<P6WorkInterval>> week,
-        IReadOnlyDictionary<DateTime, IReadOnlyList<P6WorkInterval>> exceptions)
+        IReadOnlyDictionary<DateTime, IReadOnlyList<P6WorkInterval>> exceptions,
+        DateTime? nonWorkingStart = null, DateTime? nonWorkingFinish = null)
     {
         _week = week;
         _exceptions = exceptions;
         _hasWeeklyWork = week.Any(day => day.Count > 0);
+        _nonWorkingStart = nonWorkingStart;
+        _nonWorkingFinish = nonWorkingFinish;
+    }
+
+    /// <summary>Activity-specific civil-day exclusion; shared calendar definitions and lag clocks stay unchanged.</summary>
+    internal WorkingDayCalculator WithNonWorkingPeriod(DateTime start, DateTime finish)
+    {
+        if (finish.Date < start.Date)
+            throw new ArgumentException("A nonworking period cannot finish before it starts.", nameof(finish));
+        return finish.Date == start.Date ? this : new WorkingDayCalculator(_week, _exceptions, start.Date, finish.Date);
     }
 
     public bool IsWorkingDay(DateTime date) => GetIntervals(date.Date).Count > 0;
@@ -2599,6 +2910,11 @@ public sealed class WorkingDayCalculator
         return ProjectWorkingTicks(startDate, ticksRemaining, forward, cancellationToken);
     }
 
+    /// <summary>
+    /// Integral-tick projection for relationship inverse and endpoint-boundary checks.
+    /// Avoids decimal hours round trips changing which side of a work boundary is used.
+    /// Existing hour-based callers retain their original arithmetic and behaviour.
+    /// </summary>
     internal DateTime AddWorkingTicks(DateTime startDate, long ticks,
         CancellationToken cancellationToken = default)
     {
@@ -2651,7 +2967,9 @@ public sealed class WorkingDayCalculator
     }
 
     private IReadOnlyList<P6WorkInterval> GetIntervals(DateTime date) =>
-        _exceptions.TryGetValue(date, out var intervals) ? intervals : _week[(int)date.DayOfWeek];
+        _nonWorkingStart.HasValue && date >= _nonWorkingStart.Value && date < _nonWorkingFinish!.Value
+            ? Array.Empty<P6WorkInterval>()
+            : _exceptions.TryGetValue(date, out var intervals) ? intervals : _week[(int)date.DayOfWeek];
 
     private static P6WorkInterval ConvertSlot((TimeSpan Start, TimeSpan End) slot)
     {
@@ -2674,7 +2992,6 @@ public sealed class WorkingDayCalculator
     }
 }
 ```
-
 ---
 
 ## 6. 07_XER_ACTVTYPE, 08_XER_ACTVCODE, 09_XER_TASKACTV
@@ -3778,6 +4095,10 @@ public XerTable? Create14XerUmeasure() => CreateSimpleKeyedTable(
 ## 10. 15_XER_RESOURCE_DISTRIBUTION
 
 ### What Changed
+- Active-activity curve forecasting (`ResourceCurveForecast`) estimating phase $p = A / (A + R)$ and cropping curve tails (`RemainingTail`).
+- Uniform working hours fallback when curve phase cannot be resolved.
+- Activity suspension tracking via `ResourceForecastClock`.
+- Diagnostic method warnings: `REMAINING_CURVE_ESTIMATED` and `REMAINING_CURVE_UNIFORM_FALLBACK`.
 - Added P6 21-point curves (1..20) and manual curve profile resolution via curve repository.
 - Cumulative monthly reconciliation guarantees zero rounding residue drift against `totalQty`.
 - Separate handling for point actuals and elapsed actuals.
@@ -4141,376 +4462,403 @@ public XerTable? Create14XerUmeasure() => CreateSimpleKeyedTable(
 
 #### New Implementation
 ```csharp
-    public XerTable? Create15XerResourceDistribution()
+internal static readonly string[] ResourceDistributionColumns =
+[
+    FieldNames.TaskIdKey, FieldNames.RsrcIdKey, FieldNames.ClndrIdKey, FieldNames.ProjIdKey,
+    FieldNames.DistributionMonth, FieldNames.MonthStartDate, FieldNames.MonthEndDate,
+    FieldNames.MonthlyQuantity, FieldNames.DistributionType,
+    FieldNames.MonthWorkingHours, FieldNames.TotalWorkingHours, FieldNames.CalendarHoursPerDay,
+    FieldNames.MonthWorkingDays, FieldNames.TotalWorkingDays,
+    FieldNames.MonthCalendarDays, FieldNames.TotalCalendarDays,
+    FieldNames.Start, FieldNames.Finish, FieldNames.IsActual, FieldNames.StatusCode, FieldNames.Unit,
+    FieldNames.TaskCode, FieldNames.RsrcShortName, FieldNames.RsrcName, FieldNames.RsrcType,
+    FieldNames.MonthUpdate
+];
+
+public XerTable? Create15XerResourceDistribution()
+{
+    ClearGenerationFailure(EnhancedTableNames.XerResourceDist15);
+    _resourceDataQualityRows = Array.Empty<DataRow>();
+    XerTable? assignments = _dataStore.GetTable(TableNames.TaskRsrc);
+    if (!IsTableValid(assignments)) return null;
+    var tasks = new DistributionInputIndex(_dataStore.GetTable(TableNames.Task), FieldNames.TaskId);
+    var projects = new DistributionInputIndex(_dataStore.GetTable(TableNames.Project), FieldNames.ProjectId);
+    var resources = new DistributionInputIndex(_dataStore.GetTable(TableNames.Rsrc), FieldNames.RsrcId);
+    var units = new DistributionInputIndex(_dataStore.GetTable(TableNames.Umeasure), FieldNames.UnitId);
+    P6CalendarRepository? calendars = null;
+    ResourceCurveRepository? curves = null;
+    var calendarCache = new Dictionary<(string Source, string Id), (P6CalendarDefinition Definition, WorkingDayCalculator Calculator)>();
+    var calendarFailures = new Dictionary<(string Source, string Id), InvalidDataException>();
+    // All occurrences of a duplicate assignment are ambiguous, not just the later
+    // occurrence. Never distribute one arbitrarily by input order.
+    var duplicateAssignments = assignments.Rows
+        .GroupBy(row => (row.SourceToken, Id: GetFieldValue(row.Fields, assignments.FieldIndexes, "taskrsrc_id").Trim()))
+        .Where(group => group.Key.Id.Length > 0 && group.Skip(1).Any()).Select(group => group.Key).ToHashSet();
+    var sourceRowNumbers = new Dictionary<string, int>(StringComparer.Ordinal);
+    var issues = new List<DataRow>();
+    var result = new XerTable(EnhancedTableNames.XerResourceDist15);
+    result.SetHeaders(ResourceDistributionColumns.ToArray());
+
+    foreach (DataRow assignment in assignments.Rows)
     {
-        ClearGenerationFailure(EnhancedTableNames.XerResourceDist15);
-        _resourceDataQualityRows = Array.Empty<DataRow>();
-        XerTable? assignments = _dataStore.GetTable(TableNames.TaskRsrc);
-        if (!IsTableValid(assignments)) return null;
-        var tasks = new DistributionInputIndex(_dataStore.GetTable(TableNames.Task), FieldNames.TaskId);
-        var projects = new DistributionInputIndex(_dataStore.GetTable(TableNames.Project), FieldNames.ProjectId);
-        var resources = new DistributionInputIndex(_dataStore.GetTable(TableNames.Rsrc), FieldNames.RsrcId);
-        var units = new DistributionInputIndex(_dataStore.GetTable(TableNames.Umeasure), FieldNames.UnitId);
-        P6CalendarRepository? calendars = null;
-        ResourceCurveRepository? curves = null;
-        var calendarCache = new Dictionary<(string Source, string Id), (P6CalendarDefinition Definition, WorkingDayCalculator Calculator)>();
-        var calendarFailures = new Dictionary<(string Source, string Id), InvalidDataException>();
-        // All occurrences of a duplicate assignment are ambiguous, not just the later
-        // occurrence. Never distribute one arbitrarily by input order.
-        var duplicateAssignments = assignments.Rows
-            .GroupBy(row => (row.SourceToken, Id: GetFieldValue(row.Fields, assignments.FieldIndexes, "taskrsrc_id").Trim()))
-            .Where(group => group.Key.Id.Length > 0 && group.Skip(1).Any()).Select(group => group.Key).ToHashSet();
-        var sourceRowNumbers = new Dictionary<string, int>(StringComparer.Ordinal);
-        var issues = new List<DataRow>();
-        var result = new XerTable(EnhancedTableNames.XerResourceDist15);
-        result.SetHeaders(ResourceDistributionColumns.ToArray());
+        string source = assignment.SourceToken;
+        sourceRowNumbers.TryGetValue(source, out int sourceRowNumber);
+        sourceRowNumbers[source] = ++sourceRowNumber;
+        string Read(string field) => GetFieldValue(assignment.Fields, assignments.FieldIndexes, field);
+        string assignmentId = Read("taskrsrc_id").Trim();
+        string taskId = Read(FieldNames.TaskId).Trim(), resourceId = Read(FieldNames.RsrcId).Trim();
+        DistributionQuantity actual = DistributionQuantity.Sum(
+            ReadDistributionQuantity(Read(FieldNames.ActRegQty), FieldNames.ActRegQty),
+            ReadDistributionQuantity(Read(FieldNames.ActOtQty), FieldNames.ActOtQty));
+        DistributionQuantity remaining = ReadDistributionQuantity(Read(FieldNames.RemainQty), FieldNames.RemainQty);
+        if (actual.IsZero && remaining.IsZero) continue;
 
-        foreach (DataRow assignment in assignments.Rows)
+        // Resolve descriptive evidence only when unique. Raw assignment identities
+        // remain visible even when they cannot safely resolve a distribution row.
+        DataRow? task = tasks.Optional(source, taskId), resource = resources.Optional(source, resourceId);
+        string TaskRead(string field) => task.HasValue ? tasks.Read(task.Value, field) : "";
+        string ResourceRead(string field) => resource.HasValue ? resources.Read(resource.Value, field) : "";
+        string projectId = TaskRead(FieldNames.ProjectId).Trim();
+        if (projectId.Length == 0) projectId = Read(FieldNames.ProjectId).Trim();
+        DataRow? project = projects.Optional(source, projectId);
+        string ProjectRead(string field) => project.HasValue ? projects.Read(project.Value, field) : "";
+        string status = TaskRead(FieldNames.StatusCode).Trim(), normalizedStatus = status.ToUpperInvariant();
+        string type = TaskRead(FieldNames.TaskType).Trim().ToUpperInvariant();
+        string calendarId = (type == "TT_RSRC" ? ResourceRead(FieldNames.ClndrId) : TaskRead(FieldNames.ClndrId)).Trim();
+        string resourceType = ResourceRead(FieldNames.RsrcType);
+        string unit = resource.HasValue ? "unit/time" : "";
+        if (string.Equals(resourceType, "RT_Mat", StringComparison.OrdinalIgnoreCase))
         {
-            string source = assignment.SourceToken;
-            sourceRowNumbers.TryGetValue(source, out int sourceRowNumber);
-            sourceRowNumbers[source] = ++sourceRowNumber;
-            string Read(string field) => GetFieldValue(assignment.Fields, assignments.FieldIndexes, field);
-            string assignmentId = Read("taskrsrc_id").Trim();
-            string taskId = Read(FieldNames.TaskId).Trim(), resourceId = Read(FieldNames.RsrcId).Trim();
-            DistributionQuantity actual = DistributionQuantity.Sum(
-                ReadDistributionQuantity(Read(FieldNames.ActRegQty), FieldNames.ActRegQty),
-                ReadDistributionQuantity(Read(FieldNames.ActOtQty), FieldNames.ActOtQty));
-            DistributionQuantity remaining = ReadDistributionQuantity(Read(FieldNames.RemainQty), FieldNames.RemainQty);
-            if (actual.IsZero && remaining.IsZero) continue;
+            DataRow? unitRow = units.Optional(source, ResourceRead(FieldNames.UnitId).Trim());
+            unit = unitRow.HasValue ? units.Read(unitRow.Value, FieldNames.UnitAbbr) : "";
+            if (unit.Length == 0 && unitRow.HasValue) unit = units.Read(unitRow.Value, FieldNames.UnitName);
+        }
+        var metadata = new DistributionMetadata(assignment, CreateKey(assignment.SourceFilename, taskId),
+            CreateKey(assignment.SourceFilename, resourceId), CreateKey(assignment.SourceFilename, calendarId),
+            CreateKey(assignment.SourceFilename, projectId), status, TaskRead(FieldNames.TaskCode),
+            ResourceRead(FieldNames.RsrcShortName), ResourceRead(FieldNames.RsrcName), resourceType, unit);
+        (P6CalendarDefinition Definition, WorkingDayCalculator Calculator) calendar = default;
+        bool contextResolved = false;
+        string? contextIssue = null, contextMessage = null;
 
-            // Resolve descriptive evidence only when unique. Raw assignment identities
-            // remain visible even when they cannot safely resolve a distribution row.
-            DataRow? task = tasks.Optional(source, taskId), resource = resources.Optional(source, resourceId);
-            string TaskRead(string field) => task.HasValue ? tasks.Read(task.Value, field) : "";
-            string ResourceRead(string field) => resource.HasValue ? resources.Read(resource.Value, field) : "";
-            string projectId = TaskRead(FieldNames.ProjectId).Trim();
-            if (projectId.Length == 0) projectId = Read(FieldNames.ProjectId).Trim();
-            DataRow? project = projects.Optional(source, projectId);
-            string ProjectRead(string field) => project.HasValue ? projects.Read(project.Value, field) : "";
-            string status = TaskRead(FieldNames.StatusCode).Trim(), normalizedStatus = status.ToUpperInvariant();
-            string type = TaskRead(FieldNames.TaskType).Trim().ToUpperInvariant();
-            string calendarId = (type == "TT_RSRC" ? ResourceRead(FieldNames.ClndrId) : TaskRead(FieldNames.ClndrId)).Trim();
-            string resourceType = ResourceRead(FieldNames.RsrcType);
-            string unit = resource.HasValue ? "unit/time" : "";
-            if (string.Equals(resourceType, "RT_Mat", StringComparison.OrdinalIgnoreCase))
+        AddPortion(actual, isActual: true);
+        AddPortion(remaining, isActual: false);
+
+        void ResolveContext()
+        {
+            if (contextResolved) return;
+            contextResolved = true;
+            string issueCode = "ASSIGNMENT_CONTEXT_INVALID";
+            try
             {
-                DataRow? unitRow = units.Optional(source, ResourceRead(FieldNames.UnitId).Trim());
-                unit = unitRow.HasValue ? units.Read(unitRow.Value, FieldNames.UnitAbbr) : "";
-                if (unit.Length == 0 && unitRow.HasValue) unit = units.Read(unitRow.Value, FieldNames.UnitName);
-            }
-            var metadata = new DistributionMetadata(assignment, CreateKey(assignment.SourceFilename, taskId),
-                CreateKey(assignment.SourceFilename, resourceId), CreateKey(assignment.SourceFilename, calendarId),
-                CreateKey(assignment.SourceFilename, projectId), status, TaskRead(FieldNames.TaskCode),
-                ResourceRead(FieldNames.RsrcShortName), ResourceRead(FieldNames.RsrcName), resourceType, unit);
-            (P6CalendarDefinition Definition, WorkingDayCalculator Calculator) calendar = default;
-            bool contextResolved = false;
-            string? contextIssue = null, contextMessage = null;
-
-            AddPortion(actual, isActual: true);
-            AddPortion(remaining, isActual: false);
-
-            void ResolveContext()
-            {
-                if (contextResolved) return;
-                contextResolved = true;
-                string issueCode = "ASSIGNMENT_CONTEXT_INVALID";
-                try
+                if (assignmentId.Length == 0)
+                    throw new InvalidDataException("Assignment identity is missing; its source occurrence is preserved as unallocated.");
+                if (duplicateAssignments.Contains((source, assignmentId)))
+                    throw new InvalidDataException("Duplicate assignment identity; every occurrence is preserved as unallocated.");
+                task = tasks.Require(source, taskId, Read(FieldNames.ProjectId));
+                project = projects.Require(source, projectId);
+                resource = resources.Require(source, resourceId);
+                if (normalizedStatus is not ("TK_NOTSTART" or "TK_ACTIVE" or "TK_COMPLETE"))
+                    throw new InvalidDataException($"Unknown activity status '{status}'.");
+                if (type is not ("TT_TASK" or "TT_RSRC" or "TT_LOE" or "TT_WBS" or "TT_MILE" or "TT_FINMILE"))
+                    throw new InvalidDataException($"Unknown activity type '{type}'.");
+                issueCode = "RESOURCE_CALENDAR_INVALID";
+                if (!calendarCache.TryGetValue((source, calendarId), out calendar))
                 {
-                    if (assignmentId.Length == 0)
-                        throw new InvalidDataException("Assignment identity is missing; its source occurrence is preserved as unallocated.");
-                    if (duplicateAssignments.Contains((source, assignmentId)))
-                        throw new InvalidDataException("Duplicate assignment identity; every occurrence is preserved as unallocated.");
-                    task = tasks.Require(source, taskId, Read(FieldNames.ProjectId));
-                    project = projects.Require(source, projectId);
-                    resource = resources.Require(source, resourceId);
-                    if (normalizedStatus is not ("TK_NOTSTART" or "TK_ACTIVE" or "TK_COMPLETE"))
-                        throw new InvalidDataException($"Unknown activity status '{status}'.");
-                    if (type is not ("TT_TASK" or "TT_RSRC" or "TT_LOE" or "TT_WBS" or "TT_MILE" or "TT_FINMILE"))
-                        throw new InvalidDataException($"Unknown activity type '{type}'.");
-                    issueCode = "RESOURCE_CALENDAR_INVALID";
-                    if (!calendarCache.TryGetValue((source, calendarId), out calendar))
+                    if (calendarFailures.TryGetValue((source, calendarId), out var priorFailure)) throw priorFailure;
+                    try
                     {
-                        if (calendarFailures.TryGetValue((source, calendarId), out var priorFailure)) throw priorFailure;
-                        try
-                        {
-                            calendars ??= new P6CalendarRepository(_dataStore, isolateInvalidIdentities: true);
-                            var definition = calendars.Get(source, calendarId);
-                            calendar = (definition, definition.CreateCalculator());
-                            calendarCache.Add((source, calendarId), calendar);
-                        }
-                        catch (InvalidDataException ex) { calendarFailures[(source, calendarId)] = ex; throw; }
+                        calendars ??= new P6CalendarRepository(_dataStore, isolateInvalidIdentities: true);
+                        var definition = calendars.Get(source, calendarId);
+                        calendar = (definition, definition.CreateCalculator());
+                        calendarCache.Add((source, calendarId), calendar);
+                    }
+                    catch (InvalidDataException ex) { calendarFailures[(source, calendarId)] = ex; throw; }
+                }
+            }
+            catch (InvalidDataException ex) { contextIssue = issueCode; contextMessage = ex.Message; }
+        }
+
+        void AddPortion(DistributionQuantity quantity, bool isActual)
+        {
+            if (quantity.IsZero) return;
+            if (quantity.Error is not null)
+            {
+                AddIssue(isActual ? "ACTUAL_QUANTITY_INVALID" : "REMAINING_QUANTITY_INVALID", quantity, isActual, quantity.Error);
+                return;
+            }
+            ResolveContext();
+            if (contextIssue is not null)
+            {
+                AddIssue(contextIssue, quantity, isActual, contextMessage!);
+                return;
+            }
+            var definition = calendar.Definition
+                ?? throw new InvalidOperationException("Resolved assignment context has no calendar definition.");
+            var calculator = calendar.Calculator
+                ?? throw new InvalidOperationException("Resolved assignment context has no working-time calculator.");
+            string issueCode = isActual ? "ACTUAL_PERIOD_INVALID" : "REMAINING_PERIOD_INVALID";
+            try
+            {
+                DateTime start, finish;
+                RemainingResourceProfile? profile = null;
+                RemainingDistributionPlan? remainingPlan = null;
+                if (isActual)
+                {
+                    if (normalizedStatus == "TK_NOTSTART")
+                    {
+                        issueCode = "ACTUAL_ON_UNSTARTED";
+                        throw new InvalidDataException("Actual quantity exists on an unstarted activity; its source state is preserved.");
+                    }
+                    start = ParseDistributionDate(Read(FieldNames.ActStartDate), FieldNames.ActStartDate);
+                    string rawFinish = Read(FieldNames.ActEndDate);
+                    finish = !string.IsNullOrWhiteSpace(rawFinish)
+                        ? ParseDistributionDate(rawFinish, FieldNames.ActEndDate)
+                        : normalizedStatus == "TK_ACTIVE"
+                            ? ParseDistributionDate(ProjectRead(FieldNames.LastRecalcDate), "PROJECT.last_recalc_date")
+                            : throw new InvalidDataException("Completed actual allocation requires TASKRSRC.act_end_date.");
+                    if (finish < start)
+                    {
+                        issueCode = "ACTUAL_FINISH_BEFORE_START";
+                        string finishField = string.IsNullOrWhiteSpace(rawFinish) ? "PROJECT.last_recalc_date" : "TASKRSRC.act_end_date";
+                        throw new InvalidDataException($"Actual allocation finish {finishField} '{DateParser.Format(finish)}' precedes TASKRSRC.act_start_date '{DateParser.Format(start)}'. Actual quantity is unallocated; original dates are preserved.");
                     }
                 }
-                catch (InvalidDataException ex) { contextIssue = issueCode; contextMessage = ex.Message; }
-            }
-
-            void AddPortion(DistributionQuantity quantity, bool isActual)
-            {
-                if (quantity.IsZero) return;
-                if (quantity.Error is not null)
+                else
                 {
-                    AddIssue(isActual ? "ACTUAL_QUANTITY_INVALID" : "REMAINING_QUANTITY_INVALID", quantity, isActual, quantity.Error);
-                    return;
-                }
-                ResolveContext();
-                if (contextIssue is not null)
-                {
-                    AddIssue(contextIssue, quantity, isActual, contextMessage!);
-                    return;
-                }
-                var definition = calendar.Definition
-                    ?? throw new InvalidOperationException("Resolved assignment context has no calendar definition.");
-                var calculator = calendar.Calculator
-                    ?? throw new InvalidOperationException("Resolved assignment context has no working-time calculator.");
-                string issueCode = isActual ? "ACTUAL_PERIOD_INVALID" : "REMAINING_PERIOD_INVALID";
-                try
-                {
-                    DateTime start, finish;
-                    RemainingResourceProfile? profile = null;
-                    if (isActual)
+                    if (normalizedStatus == "TK_COMPLETE")
                     {
-                        if (normalizedStatus == "TK_NOTSTART")
-                        {
-                            issueCode = "ACTUAL_ON_UNSTARTED";
-                            throw new InvalidDataException("Actual quantity exists on an unstarted activity; its source state is preserved.");
-                        }
-                        start = ParseDistributionDate(Read(FieldNames.ActStartDate), FieldNames.ActStartDate);
-                        string rawFinish = Read(FieldNames.ActEndDate);
-                        finish = !string.IsNullOrWhiteSpace(rawFinish)
-                            ? ParseDistributionDate(rawFinish, FieldNames.ActEndDate)
-                            : normalizedStatus == "TK_ACTIVE"
-                                ? ParseDistributionDate(ProjectRead(FieldNames.LastRecalcDate), "PROJECT.last_recalc_date")
-                                : throw new InvalidDataException("Completed actual allocation requires TASKRSRC.act_end_date.");
-                        if (finish < start)
-                        {
-                            issueCode = "ACTUAL_FINISH_BEFORE_START";
-                            string finishField = string.IsNullOrWhiteSpace(rawFinish) ? "PROJECT.last_recalc_date" : "TASKRSRC.act_end_date";
-                            throw new InvalidDataException($"Actual allocation finish {finishField} '{DateParser.Format(finish)}' precedes TASKRSRC.act_start_date '{DateParser.Format(start)}'. Actual quantity is unallocated; original dates are preserved.");
-                        }
+                        issueCode = "REMAINING_ON_COMPLETED";
+                        throw new InvalidDataException("Remaining quantity exists on a completed activity; no remaining period or completion month is invented.");
                     }
-                    else
-                    {
-                        if (normalizedStatus == "TK_COMPLETE")
-                        {
-                            issueCode = "REMAINING_ON_COMPLETED";
-                            throw new InvalidDataException("Remaining quantity exists on a completed activity; no remaining period or completion month is invented.");
-                        }
-                        start = ParseDistributionDate(Read(FieldNames.RestartDate), FieldNames.RestartDate);
-                        finish = ParseDistributionDate(Read(FieldNames.ReendDate), FieldNames.ReendDate);
-                        if (finish <= start)
-                            throw new InvalidDataException("Positive remaining quantity requires a finish after its remaining start; original dates are preserved.");
-                        issueCode = "REMAINING_NO_WORKING_TIME";
-                        if (calculator.CountWorkingHours(start, finish) <= 0)
-                            throw new InvalidDataException($"Calendar '{metadata.CalendarKey}' has no working time in the positive-quantity period.");
-                        issueCode = "REMAINING_PROFILE_INVALID";
-                        profile = ResolveRemainingProfile(start, finish, quantity.Value!.Value);
-                    }
-                    issueCode = isActual ? "ACTUAL_DISTRIBUTION_INVALID" : "REMAINING_DISTRIBUTION_INVALID";
-                    // Commit only a completely reconciled portion. A recoverable source
-                    // failure cannot leave early-month rows plus its full unallocated units.
-                    var portionRows = new List<DataRow>();
-                    AddResourceDistributionRows(portionRows, metadata, definition, calculator,
-                        start, finish, quantity.Value!.Value, isActual, profile);
-                    result.AddRows(portionRows);
+                    start = ParseDistributionDate(Read(FieldNames.RestartDate), FieldNames.RestartDate);
+                    finish = ParseDistributionDate(Read(FieldNames.ReendDate), FieldNames.ReendDate);
+                    if (finish <= start)
+                        throw new InvalidDataException("Positive remaining quantity requires a finish after its remaining start; original dates are preserved.");
+                    issueCode = "REMAINING_NO_WORKING_TIME";
+                    if (calculator.CountWorkingHours(start, finish) <= 0)
+                        throw new InvalidDataException($"Calendar '{metadata.CalendarKey}' has no working time in the positive-quantity period.");
+                    issueCode = "REMAINING_PROFILE_INVALID";
+                    remainingPlan = ResolveRemainingProfile(start, finish, quantity.Value!.Value);
+                    profile = remainingPlan.Profile;
                 }
-                catch (Exception ex) when (ex is InvalidDataException or OverflowException or ArgumentOutOfRangeException)
-                {
-                    AddIssue(issueCode, quantity, isActual, ex.Message);
-                }
+                issueCode = isActual ? "ACTUAL_DISTRIBUTION_INVALID" : "REMAINING_DISTRIBUTION_INVALID";
+                // Commit only a completely reconciled portion. A recoverable source
+                // failure cannot leave early-month rows plus its full unallocated units.
+                var portionRows = new List<DataRow>();
+                AddResourceDistributionRows(portionRows, metadata, definition, calculator,
+                    start, finish, quantity.Value!.Value, isActual, profile, remainingPlan?.Clock);
+                DataRow? methodNote = remainingPlan?.MethodCode is { } methodCode
+                    ? CreateDiagnostic(methodCode, remainingPlan.MethodMessage!, null, "") : null;
+                result.AddRows(portionRows);
+                if (methodNote.HasValue) issues.Add(methodNote.Value);
             }
-
-            RemainingResourceProfile? ResolveRemainingProfile(DateTime start, DateTime finish, decimal quantity)
+            catch (Exception ex) when (ex is InvalidDataException or OverflowException or ArgumentOutOfRangeException)
             {
-                string manual = Read("remain_crv");
-                if (!string.IsNullOrWhiteSpace(manual))
-                    return RemainingResourceProfile.FromManual(manual, quantity, calendar.Calculator.CountWorkingHours(start, finish));
-                string curveId = Read("curv_id").Trim();
-                if (curveId.Length == 0) return null;
-                if (curveId == "9")
-                    throw new InvalidDataException("Manual curve '9' requires an exported remain_crv profile.");
-                string durationType = TaskRead("duration_type").Trim().ToUpperInvariant();
-                if (durationType is not ("DT_FIXEDDRTN" or "DT_FIXEDDUR2"))
-                    throw new InvalidDataException($"Curve '{curveId}' requires Fixed Duration & Units/Time or Fixed Duration & Units; got duration_type '{durationType}'.");
-                curves ??= new ResourceCurveRepository(_dataStore);
-                var named = curves.Get(source, curveId);
-                // Preserve the verified single-month and phase-independent exceptions;
-                // unsupported multi-month curve tails become warnings, not uniform guesses.
-                bool singleMonth = start.Year == finish.AddTicks(-1).Year && start.Month == finish.AddTicks(-1).Month;
-                if (!named.IsUniform && (normalizedStatus != "TK_NOTSTART"
-                    || !string.IsNullOrWhiteSpace(Read(FieldNames.ActStartDate))
-                    || !string.IsNullOrWhiteSpace(Read(FieldNames.ActEndDate))) && !singleMonth)
-                    throw new InvalidDataException($"Curve '{curveId}' on a progressed assignment requires an exported remain_crv profile; its remaining curve phase cannot be established from this XER.");
-                return named;
+                AddIssue(issueCode, quantity, isActual, ex.Message);
             }
+        }
 
-            void AddIssue(string code, DistributionQuantity quantity, bool isActual, string message)
+        RemainingDistributionPlan ResolveRemainingProfile(DateTime start, DateTime finish, decimal quantity)
+        {
+            string manual = Read("remain_crv");
+            if (!string.IsNullOrWhiteSpace(manual))
+                return new(RemainingResourceProfile.FromManual(manual, quantity, calendar.Calculator.CountWorkingHours(start, finish)));
+            string curveId = Read("curv_id").Trim();
+            if (curveId.Length == 0) return new(null);
+            if (curveId == "9")
+                throw new InvalidDataException("Manual curve '9' requires an exported remain_crv profile.");
+            string durationType = TaskRead("duration_type").Trim().ToUpperInvariant();
+            if (durationType is not ("DT_FIXEDDRTN" or "DT_FIXEDDUR2"))
+                throw new InvalidDataException($"Curve '{curveId}' requires Fixed Duration & Units/Time or Fixed Duration & Units; got duration_type '{durationType}'.");
+            curves ??= new ResourceCurveRepository(_dataStore);
+            var named = curves.Get(source, curveId);
+            if (normalizedStatus == "TK_ACTIVE")
             {
-                string amount = quantity.Value.HasValue
-                    ? decimal.Round(quantity.Value.Value, 4, MidpointRounding.ToEven).ToString("F4", CultureInfo.InvariantCulture) : "";
-                // Repository diagnostics can include private occurrence annotations.
-                // Public namespace plus assignment ordinal already supplies provenance.
-                message = message.Replace($" (input occurrence '{source}')", "", StringComparison.Ordinal);
-                string[] values =
-                [
-                    XerDataQuality.SchemaVersion, "Warning", code, EnhancedTableNames.XerResourceDist15,
-                    assignment.SourceFilename, sourceRowNumber.ToString(CultureInfo.InvariantCulture), metadata.ProjectKey,
-                    metadata.TaskKey, metadata.ResourceKey, CreateKey(assignment.SourceFilename, assignmentId), assignmentId,
-                    metadata.TaskCode, metadata.ResourceName, metadata.ResourceType, metadata.Unit, metadata.Status,
-                    Read(FieldNames.ActStartDate), Read(FieldNames.ActEndDate), ProjectRead(FieldNames.LastRecalcDate),
-                    Read(FieldNames.ActRegQty), Read(FieldNames.ActOtQty), isActual ? amount : "", message,
-                    isActual ? "Actual" : "Remaining", Read(FieldNames.RestartDate), Read(FieldNames.ReendDate),
-                    Read(FieldNames.RemainQty), Read("curv_id"), Read("remain_crv"), isActual ? "" : amount,
-                    TableNames.TaskRsrc, "", "", XerDataQuality.RawRowJson(assignments, assignment)
-                ];
-                issues.Add(assignment.WithFields(values));
+                var clock = new ResourceForecastClock(calendar.Calculator,
+                    TaskRead("suspend_date"), TaskRead("resume_date"), finish);
+                return ResourceCurveForecast.Resolve(named, clock, start, finish,
+                    assignment.GetEvaluationField, ProjectRead(FieldNames.LastRecalcDate), actual.IsZero);
             }
+            // Preserve the existing unstarted-activity contract when contradictory
+            // assignment actual dates exist. The new forecast applies to active tasks.
+            if (!named.IsUniform && (!string.IsNullOrWhiteSpace(Read(FieldNames.ActStartDate))
+                || !string.IsNullOrWhiteSpace(Read(FieldNames.ActEndDate)))
+                && !ResourceForecastClock.HasSingleWorkingMonth(start, finish,
+                    (left, right) => calendar.Calculator.CountWorkingHours(left, right)))
+                throw new InvalidDataException($"Curve '{curveId}' on a progressed assignment requires an exported remain_crv profile; its remaining curve phase cannot be established from this XER.");
+            return new(named);
         }
-        _resourceDataQualityRows = issues.AsReadOnly();
-        return result;
-    }
 
-    private readonly record struct DistributionQuantity(decimal? Value, string? Error = null)
-    {
-        internal bool IsZero => Error is null && Value == 0;
-        internal static DistributionQuantity Sum(DistributionQuantity first, DistributionQuantity second)
+        void AddIssue(string code, DistributionQuantity quantity, bool isActual, string message)
         {
-            decimal? total;
-            try { total = first.Value + second.Value; }
-            catch (OverflowException) { return new(null, "Actual regular plus overtime quantity exceeds the supported numeric range; raw components are preserved."); }
-            string[] errors = new[] { first.Error, second.Error }.OfType<string>().ToArray();
-            return new(total, errors.Length == 0 ? null : string.Join(" ", errors));
+            string amount = quantity.Value.HasValue
+                ? decimal.Round(quantity.Value.Value, 4, MidpointRounding.ToEven).ToString("F4", CultureInfo.InvariantCulture) : "";
+            issues.Add(CreateDiagnostic(code, message, isActual, amount));
+        }
+
+        // A null portion is a successful method notice, not an unallocated amount.
+        DataRow CreateDiagnostic(string code, string message, bool? isActual, string amount)
+        {
+            // Repository diagnostics can include private occurrence annotations.
+            // Public namespace plus assignment ordinal already supplies provenance.
+            message = message.Replace($" (input occurrence '{source}')", "", StringComparison.Ordinal);
+            string[] values =
+            [
+                XerDataQuality.SchemaVersion, "Warning", code, EnhancedTableNames.XerResourceDist15,
+                assignment.SourceFilename, sourceRowNumber.ToString(CultureInfo.InvariantCulture), metadata.ProjectKey,
+                metadata.TaskKey, metadata.ResourceKey, CreateKey(assignment.SourceFilename, assignmentId), assignmentId,
+                metadata.TaskCode, metadata.ResourceName, metadata.ResourceType, metadata.Unit, metadata.Status,
+                Read(FieldNames.ActStartDate), Read(FieldNames.ActEndDate), ProjectRead(FieldNames.LastRecalcDate),
+                Read(FieldNames.ActRegQty), Read(FieldNames.ActOtQty), isActual == true ? amount : "", message,
+                isActual.HasValue ? (isActual.Value ? "Actual" : "Remaining") : "", Read(FieldNames.RestartDate), Read(FieldNames.ReendDate),
+                Read(FieldNames.RemainQty), Read("curv_id"), Read("remain_crv"), isActual == false ? amount : "",
+                TableNames.TaskRsrc, "", "", XerDataQuality.RawRowJson(assignments, assignment)
+            ];
+            return assignment.WithFields(values);
         }
     }
+    _resourceDataQualityRows = issues.AsReadOnly();
+    return result;
+}
 
-    private static DistributionQuantity ReadDistributionQuantity(string raw, string field)
+
+private readonly record struct DistributionQuantity(decimal? Value, string? Error = null)
+{
+    internal bool IsZero => Error is null && Value == 0;
+    internal static DistributionQuantity Sum(DistributionQuantity first, DistributionQuantity second)
     {
-        if (string.IsNullOrWhiteSpace(raw)) return new(0);
-        if (!decimal.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out decimal value))
-            return new(null, $"{field} must be a finite nonnegative invariant number; got '{raw}'. Raw data is preserved, not treated as zero.");
-        return new(value, value < 0 ? $"{field} must be nonnegative; got '{raw}'. The signed source quantity is preserved as unallocated." : null);
-    }
-
-    private static DateTime ParseDistributionDate(string raw, string field) =>
-        DateParser.TryParse(raw) ?? throw new InvalidDataException($"{field} requires a valid assignment-period date; got '{raw}'.");
-
-    private sealed record DistributionMetadata(DataRow SourceRow, string TaskKey, string ResourceKey,
-        string CalendarKey, string ProjectKey, string Status, string TaskCode, string ResourceShortName,
-        string ResourceName, string ResourceType, string Unit);
-
-    private void AddResourceDistributionRows(List<DataRow> result, DistributionMetadata metadata,
-        P6CalendarDefinition definition, WorkingDayCalculator calculator, DateTime start, DateTime finish,
-        decimal quantity, bool isActual, RemainingResourceProfile? profile = null)
-    {
-        if (finish < start || (!isActual && finish == start))
-            throw new InvalidDataException("Positive quantity requires finish after start, except recorded actuals at a single instant.");
-        decimal totalHours = finish == start ? 0 : calculator.CountWorkingHours(start, finish);
-        long totalTicks = checked((long)decimal.Round(totalHours * TimeSpan.TicksPerHour, 0));
-        if (totalTicks <= 0 && !isActual)
-            throw new InvalidDataException($"Calendar '{metadata.CalendarKey}' has no working time in the positive-quantity period.");
-        // Actual units are historical observations, not calendar capacity. A valid
-        // calendar can have no scheduled work in their recorded period (overtime,
-        // weekends, milestones). Preserve these actuals in their recorded month, or
-        // estimate multi-month shares by elapsed time only when ALL work hours are zero.
-        // Never apply this fallback to forecast remaining units or malformed calendars.
-        bool pointActual = isActual && finish == start;
-        bool elapsedActual = isActual && totalTicks == 0 && !pointActual;
-        string distributionType = pointActual ? "Actual Recorded Date"
-            : elapsedActual ? "Actual Elapsed Time" : profile?.DistributionType ?? "Working Hours";
-        decimal target = decimal.Round(quantity, 4, MidpointRounding.ToEven);
-        decimal allocated = 0;
-        long cumulativeTicks = 0;
-        DateTime month = new(start.Year, start.Month, 1);
-        while (month < finish || pointActual)
-        {
-            bool lastMonth = month.Year == finish.Year && month.Month == finish.Month;
-            DateTime periodEnd = lastMonth ? finish : month.AddMonths(1);
-            DateTime periodStart = start > month ? start : month;
-            decimal hours = periodStart == periodEnd ? 0 : calculator.CountWorkingHours(periodStart, periodEnd);
-            long ticks = checked((long)decimal.Round(hours * TimeSpan.TicksPerHour, 0));
-            cumulativeTicks = checked(cumulativeTicks + ticks);
-            decimal roundedCumulative = periodEnd == finish ? target
-                : decimal.Round(quantity * (elapsedActual
-                    ? (periodEnd - start).Ticks / (decimal)(finish - start).Ticks
-                    : profile?.CumulativeShare(cumulativeTicks, totalTicks)
-                        ?? cumulativeTicks / (decimal)totalTicks), 4, MidpointRounding.ToEven);
-            decimal monthlyQuantity = roundedCumulative - allocated;
-            allocated = roundedCumulative;
-
-            // Preserve zero actual slices and working remaining slices. In working-
-            // time mode, a closed month cannot receive another month's rounding residue.
-            if (ticks > 0 || isActual)
-            {
-                string Days(decimal workingHours) => definition.HoursPerDay is > 0
-                    ? FormatRelationshipDays(workingHours, definition.HoursPerDay.Value, "F2") : "";
-                string[] values =
-                [
-                    metadata.TaskKey, metadata.ResourceKey, metadata.CalendarKey, metadata.ProjectKey,
-                    month.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), DateParser.Format(periodStart),
-                    DateParser.Format(periodEnd), monthlyQuantity.ToString("F4", CultureInfo.InvariantCulture), distributionType,
-                    hours.ToString("F2", CultureInfo.InvariantCulture), totalHours.ToString("F2", CultureInfo.InvariantCulture),
-                    definition.HoursPerDay?.ToString("F2", CultureInfo.InvariantCulture) ?? "", Days(hours), Days(totalHours),
-                    OccupiedCalendarDays(periodStart, periodEnd), OccupiedCalendarDays(start, finish),
-                    DateParser.Format(start), DateParser.Format(finish), isActual ? "1" : "0", metadata.Status,
-                    metadata.Unit, metadata.TaskCode, metadata.ResourceShortName, metadata.ResourceName,
-                    metadata.ResourceType, ParseMonthUpdateFromFilename(metadata.SourceRow.OriginalSourceFilename)
-                ];
-                result.Add(metadata.SourceRow.WithFields(values.Select(value => StringInternPool.Intern(value)).ToArray()));
-            }
-            if (periodEnd == finish) break; // Also supports December 9999 without AddMonths overflow.
-            month = periodEnd;
-        }
-        if (cumulativeTicks != totalTicks || allocated != target)
-            throw new InvalidOperationException("Monthly distribution did not reconcile to the assignment period and rounded quantity.");
-    }
-
-    private static string OccupiedCalendarDays(DateTime start, DateTime exclusiveFinish) =>
-        exclusiveFinish == start ? "0"
-            : ((exclusiveFinish.AddTicks(-1).Date - start.Date).Days + 1).ToString(CultureInfo.InvariantCulture);
-
-    private sealed class DistributionInputIndex
-    {
-        private readonly XerTable? _table;
-        private readonly Dictionary<(string Source, string Id), DataRow[]> _rows;
-
-        internal DistributionInputIndex(XerTable? table, string identityField)
-        {
-            _table = table;
-            _rows = table?.Rows.GroupBy(row => (row.SourceToken, Read(row, identityField).Trim()))
-                .ToDictionary(group => group.Key, group => group.ToArray()) ?? new();
-        }
-
-        internal string Read(DataRow row, string field) => _table is null ? ""
-            : GetFieldValue(row.Fields, _table.FieldIndexes, field);
-
-        internal DataRow Require(string source, string id, string? projectId = null)
-        {
-            if (id.Length == 0 || !_rows.TryGetValue((source, id), out var candidates))
-                throw new InvalidDataException($"Missing {_table?.Name ?? "required source table"} identity '{id}'.");
-            // Public keys do not include project ID: project filtering cannot make
-            // duplicate source-local identities safe to join to exported dimensions.
-            if (candidates.Length != 1)
-                throw new InvalidDataException($"Ambiguous {_table?.Name} identity '{id}'.");
-            if (!string.IsNullOrWhiteSpace(projectId))
-                candidates = candidates.Where(row => Read(row, FieldNames.ProjectId).Trim() == projectId.Trim()).ToArray();
-            if (candidates.Length != 1)
-                throw new InvalidDataException($"Ambiguous or mismatched {_table?.Name} identity '{id}' for project '{projectId}'.");
-            return candidates[0];
-        }
-
-        internal DataRow? Optional(string source, string id) =>
-            id.Length > 0 && _rows.TryGetValue((source, id), out var candidates) && candidates.Length == 1
-                ? candidates[0] : null;
+        decimal? total;
+        try { total = first.Value + second.Value; }
+        catch (OverflowException) { return new(null, "Actual regular plus overtime quantity exceeds the supported numeric range; raw components are preserved."); }
+        string[] errors = new[] { first.Error, second.Error }.OfType<string>().ToArray();
+        return new(total, errors.Length == 0 ? null : string.Join(" ", errors));
     }
 }
 
-```csharp
-using System.Globalization;
+private static DistributionQuantity ReadDistributionQuantity(string raw, string field)
+{
+    if (string.IsNullOrWhiteSpace(raw)) return new(0);
+    if (!decimal.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out decimal value))
+        return new(null, $"{field} must be a finite nonnegative invariant number; got '{raw}'. Raw data is preserved, not treated as zero.");
+    return new(value, value < 0 ? $"{field} must be nonnegative; got '{raw}'. The signed source quantity is preserved as unallocated." : null);
+}
 
-namespace XerToCsvConverter;
+private static DateTime ParseDistributionDate(string raw, string field) =>
+    DateParser.TryParse(raw) ?? throw new InvalidDataException($"{field} requires a valid assignment-period date; got '{raw}'.");
 
-// A piecewise-constant allocation over working time, represented cumulatively.
-// P6's pct_usage_1..20 are band quantities, not spline/control-point heights.
+private sealed record DistributionMetadata(DataRow SourceRow, string TaskKey, string ResourceKey,
+    string CalendarKey, string ProjectKey, string Status, string TaskCode, string ResourceShortName,
+    string ResourceName, string ResourceType, string Unit);
+
+private void AddResourceDistributionRows(List<DataRow> result, DistributionMetadata metadata,
+    P6CalendarDefinition definition, WorkingDayCalculator calculator, DateTime start, DateTime finish,
+    decimal quantity, bool isActual, RemainingResourceProfile? profile = null, ResourceForecastClock? forecastClock = null)
+{
+    if (finish < start || (!isActual && finish == start))
+        throw new InvalidDataException("Positive quantity requires finish after start, except recorded actuals at a single instant.");
+    decimal totalHours = finish == start ? 0 : calculator.CountWorkingHours(start, finish);
+    decimal allocationHours = forecastClock?.CountHours(start, finish) ?? totalHours;
+    long totalTicks = checked((long)decimal.Round(allocationHours * TimeSpan.TicksPerHour, 0));
+    if (totalTicks <= 0 && !isActual)
+        throw new InvalidDataException($"Calendar '{metadata.CalendarKey}' has no working time in the positive-quantity period.");
+    // Actual units are historical observations, not calendar capacity. A valid
+    // calendar can have no scheduled work in their recorded period (overtime,
+    // weekends, milestones). Preserve these actuals in their recorded month, or
+    // estimate multi-month shares by elapsed time only when ALL work hours are zero.
+    // Never apply this fallback to forecast remaining units or malformed calendars.
+    bool pointActual = isActual && finish == start;
+    bool elapsedActual = isActual && totalTicks == 0 && !pointActual;
+    string distributionType = pointActual ? "Actual Recorded Date"
+        : elapsedActual ? "Actual Elapsed Time" : profile?.DistributionType ?? "Working Hours";
+    decimal target = decimal.Round(quantity, 4, MidpointRounding.ToEven);
+    decimal allocated = 0;
+    long cumulativeTicks = 0;
+    DateTime month = new(start.Year, start.Month, 1);
+    while (month < finish || pointActual)
+    {
+        bool lastMonth = month.Year == finish.Year && month.Month == finish.Month;
+        DateTime periodEnd = lastMonth ? finish : month.AddMonths(1);
+        DateTime periodStart = start > month ? start : month;
+        decimal hours = periodStart == periodEnd ? 0 : calculator.CountWorkingHours(periodStart, periodEnd);
+        decimal allocationMonthHours = forecastClock?.CountHours(periodStart, periodEnd) ?? hours;
+        long ticks = checked((long)decimal.Round(allocationMonthHours * TimeSpan.TicksPerHour, 0));
+        cumulativeTicks = checked(cumulativeTicks + ticks);
+        decimal roundedCumulative = periodEnd == finish ? target
+            : decimal.Round(quantity * (elapsedActual
+                ? (periodEnd - start).Ticks / (decimal)(finish - start).Ticks
+                : profile?.CumulativeShare(cumulativeTicks, totalTicks)
+                    ?? cumulativeTicks / (decimal)totalTicks), 4, MidpointRounding.ToEven);
+        decimal monthlyQuantity = roundedCumulative - allocated;
+        allocated = roundedCumulative;
+
+        // Preserve zero actual slices and working remaining slices. In working-
+        // time mode, a closed month cannot receive another month's rounding residue.
+        if (ticks > 0 || isActual)
+        {
+            string Days(decimal workingHours) => definition.HoursPerDay is > 0
+                ? FormatRelationshipDays(workingHours, definition.HoursPerDay.Value, "F2") : "";
+            string[] values =
+            [
+                metadata.TaskKey, metadata.ResourceKey, metadata.CalendarKey, metadata.ProjectKey,
+                month.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), DateParser.Format(periodStart),
+                DateParser.Format(periodEnd), monthlyQuantity.ToString("F4", CultureInfo.InvariantCulture), distributionType,
+                hours.ToString("F2", CultureInfo.InvariantCulture), totalHours.ToString("F2", CultureInfo.InvariantCulture),
+                definition.HoursPerDay?.ToString("F2", CultureInfo.InvariantCulture) ?? "", Days(hours), Days(totalHours),
+                OccupiedCalendarDays(periodStart, periodEnd), OccupiedCalendarDays(start, finish),
+                DateParser.Format(start), DateParser.Format(finish), isActual ? "1" : "0", metadata.Status,
+                metadata.Unit, metadata.TaskCode, metadata.ResourceShortName, metadata.ResourceName,
+                metadata.ResourceType, ParseMonthUpdateFromFilename(metadata.SourceRow.OriginalSourceFilename)
+            ];
+            result.Add(metadata.SourceRow.WithFields(values.Select(value => StringInternPool.Intern(value)).ToArray()));
+        }
+        if (periodEnd == finish) break; // Also supports December 9999 without AddMonths overflow.
+        month = periodEnd;
+    }
+    if (cumulativeTicks != totalTicks || allocated != target)
+        throw new InvalidOperationException("Monthly distribution did not reconcile to the assignment period and rounded quantity.");
+}
+
+private static string OccupiedCalendarDays(DateTime start, DateTime exclusiveFinish) =>
+    exclusiveFinish == start ? "0"
+        : ((exclusiveFinish.AddTicks(-1).Date - start.Date).Days + 1).ToString(CultureInfo.InvariantCulture);
+
+private sealed class DistributionInputIndex
+{
+    private readonly XerTable? _table;
+    private readonly Dictionary<(string Source, string Id), DataRow[]> _rows;
+
+    internal DistributionInputIndex(XerTable? table, string identityField)
+    {
+        _table = table;
+        _rows = table?.Rows.GroupBy(row => (row.SourceToken, Read(row, identityField).Trim()))
+            .ToDictionary(group => group.Key, group => group.ToArray()) ?? new();
+    }
+
+    internal string Read(DataRow row, string field) => _table is null ? ""
+        : GetFieldValue(row.Fields, _table.FieldIndexes, field);
+
+    internal DataRow Require(string source, string id, string? projectId = null)
+    {
+        if (id.Length == 0 || !_rows.TryGetValue((source, id), out var candidates))
+            throw new InvalidDataException($"Missing {_table?.Name ?? "required source table"} identity '{id}'.");
+        // Public keys do not include project ID: project filtering cannot make
+        // duplicate source-local identities safe to join to exported dimensions.
+        if (candidates.Length != 1)
+            throw new InvalidDataException($"Ambiguous {_table?.Name} identity '{id}'.");
+        if (!string.IsNullOrWhiteSpace(projectId))
+            candidates = candidates.Where(row => Read(row, FieldNames.ProjectId).Trim() == projectId.Trim()).ToArray();
+        if (candidates.Length != 1)
+            throw new InvalidDataException($"Ambiguous or mismatched {_table?.Name} identity '{id}' for project '{projectId}'.");
+        return candidates[0];
+    }
+
+    internal DataRow? Optional(string source, string id) =>
+        id.Length > 0 && _rows.TryGetValue((source, id), out var candidates) && candidates.Length == 1
+            ? candidates[0] : null;
+}
+}
+
 internal sealed class RemainingResourceProfile
 {
     private readonly decimal[] _ends;
@@ -4549,6 +4897,32 @@ internal sealed class RemainingResourceProfile
         decimal share = (before + (_quantities[band] - before)
             * ((position - start) / (_ends[band] - start))) / _quantity;
         return Math.Clamp(share, 0, 1);
+    }
+
+    internal static RemainingResourceProfile Uniform(string type) => new([1m], [1m], type, uniform: true);
+
+    // Crop each duration band at the estimated phase, then normalize the surviving
+    // band quantities. This is equivalent to (F(p + x*(1-p))-F(p))/(1-F(p)),
+    // without subtracting two nearly equal cumulative shares. Never mutate the
+    // source-cached definition: different assignments can have different phases.
+    internal RemainingResourceProfile? RemainingTail(decimal phase)
+    {
+        if (_usesTicks || phase < 0 || phase >= 1)
+            throw new ArgumentOutOfRangeException(nameof(phase));
+        decimal position = phase * _duration;
+        var ends = new List<decimal>();
+        var quantities = new List<decimal>();
+        decimal quantity = 0;
+        for (int i = 0; i < _ends.Length; i++)
+        {
+            decimal bandStart = i == 0 ? 0 : _ends[i - 1];
+            if (_ends[i] <= position) continue;
+            decimal bandQuantity = _quantities[i] - (i == 0 ? 0 : _quantities[i - 1]);
+            quantity += bandQuantity * ((_ends[i] - Math.Max(position, bandStart)) / (_ends[i] - bandStart));
+            ends.Add(_ends[i] - position);
+            quantities.Add(quantity);
+        }
+        return quantity <= 0 ? null : new RemainingResourceProfile(ends.ToArray(), quantities.ToArray(), "Resource Curve Forecast");
     }
 
     internal static RemainingResourceProfile FromCurve(Func<string, string> read, string id)
@@ -4613,6 +4987,111 @@ internal sealed class RemainingResourceProfile
     }
 }
 
+internal sealed record RemainingDistributionPlan(RemainingResourceProfile? Profile,
+    ResourceForecastClock? Clock = null, string? MethodCode = null, string? MethodMessage = null);
+
+// Forecast availability is separate from the raw calendar diagnostics and from
+// the historical actuals allocator. Only active named-curve allocations use it.
+internal sealed class ResourceForecastClock
+{
+    private readonly WorkingDayCalculator _calendar;
+    private readonly DateTime? _suspend;
+    private readonly DateTime? _resume;
+
+    internal ResourceForecastClock(WorkingDayCalculator calendar, string suspend, string resume, DateTime remainingFinish)
+    {
+        _calendar = calendar;
+        if (string.IsNullOrWhiteSpace(suspend) && string.IsNullOrWhiteSpace(resume)) return;
+        _suspend = DateParser.TryParse(suspend)?.Date;
+        _resume = DateParser.TryParse(resume)?.Date;
+        if (!_suspend.HasValue || (!string.IsNullOrWhiteSpace(resume) && (!_resume.HasValue || _resume < _suspend)))
+            throw new InvalidDataException("Malformed suspend/resume dates prevent establishing remaining working availability.");
+        if (!_resume.HasValue && _suspend < remainingFinish)
+            throw new InvalidDataException("An open suspension overlaps the remaining period; no resume date or working availability is invented.");
+    }
+
+    internal decimal CountHours(DateTime start, DateTime finish)
+    {
+        decimal hours = _calendar.CountWorkingHours(start, finish);
+        if (_suspend.HasValue && _resume.HasValue)
+        {
+            DateTime left = start > _suspend.Value ? start : _suspend.Value;
+            DateTime right = finish < _resume.Value ? finish : _resume.Value;
+            if (right > left) hours -= _calendar.CountWorkingHours(left, right);
+        }
+        return hours;
+    }
+
+    internal string Description => _suspend.HasValue
+        ? $"suspend_date={DateParser.Format(_suspend.Value)}; resume_date={(_resume.HasValue ? DateParser.Format(_resume.Value) : "blank")}; "
+        : "";
+
+    internal static bool HasSingleWorkingMonth(DateTime start, DateTime finish, Func<DateTime, DateTime, decimal> hours)
+    {
+        int workingMonths = 0;
+        DateTime cursor = start;
+        while (cursor < finish)
+        {
+            DateTime end = cursor.Year == finish.Year && cursor.Month == finish.Month
+                ? finish : new DateTime(cursor.Year, cursor.Month, 1).AddMonths(1);
+            if (hours(cursor, end) > 0 && ++workingMonths > 1) return false;
+            cursor = end;
+        }
+        return workingMonths == 1;
+    }
+}
+
+internal static class ResourceCurveForecast
+{
+    internal static RemainingDistributionPlan Resolve(RemainingResourceProfile named, ResourceForecastClock clock,
+        DateTime remainingStart, DateTime remainingFinish, Func<string, XerRawField> assignment,
+        string dataDateText, bool actualQuantityIsZero)
+    {
+        decimal remainingHours = clock.CountHours(remainingStart, remainingFinish);
+        if (remainingHours <= 0)
+            throw new InvalidDataException("The remaining period has no working availability after recorded suspensions.");
+        // These allocations need no estimated phase, even if actual dates are missing.
+        if (named.IsUniform || ResourceForecastClock.HasSingleWorkingMonth(remainingStart, remainingFinish, clock.CountHours))
+            return new(named, clock);
+
+        decimal? elapsedHours = null, phase = null;
+        string? reason = null;
+        XerRawField actualStart = assignment("act_start_date"), actualFinish = assignment("act_end_date");
+        bool Known(string field) => assignment(field).State is XerRawFieldState.Blank or XerRawFieldState.Present;
+        if (actualStart.State == XerRawFieldState.Blank && actualFinish.State == XerRawFieldState.Blank
+            && actualQuantityIsZero && Known("act_reg_qty") && Known("act_ot_qty"))
+        {
+            elapsedHours = 0;
+        }
+        else
+        {
+            DateTime? start = DateParser.TryParse(actualStart.RawValue);
+            DateTime? dataDate = DateParser.TryParse(dataDateText);
+            if (!start.HasValue || !dataDate.HasValue || !Known("act_end_date"))
+                reason = "Assignment actual-start, actual-finish presence or project Data Date evidence is missing/invalid.";
+            else if (actualFinish.State != XerRawFieldState.Blank || start > dataDate || dataDate > remainingStart)
+                reason = "Assignment progress dates conflict with its Data Date or remaining period.";
+            else elapsedHours = clock.CountHours(start.Value, dataDate.Value);
+        }
+
+        RemainingResourceProfile? profile = null;
+        if (elapsedHours.HasValue)
+        {
+            phase = elapsedHours.Value / (elapsedHours.Value + remainingHours);
+            profile = named.RemainingTail(phase.Value);
+            if (profile is null) reason = "The named curve has no weight remaining after the calculated progress point.";
+        }
+        bool fallback = profile is null;
+        string Number(decimal? value) => value?.ToString("G29", CultureInfo.InvariantCulture) ?? "unavailable";
+        string method = fallback ? "Working Hours Fallback" : "Resource Curve Forecast";
+        string message = $"Allocated remaining units using {method}; this is an exporter forecast, not native P6 timephased output. "
+            + $"A={Number(elapsedHours)} working hours; R={Number(remainingHours)} working hours; p={Number(phase)}; "
+            + clock.Description + (reason is null ? "Retained and normalized the remaining curve bands." : $"Reason: {reason}");
+        return new(profile ?? RemainingResourceProfile.Uniform(method), clock,
+            fallback ? "REMAINING_CURVE_UNIFORM_FALLBACK" : "REMAINING_CURVE_ESTIMATED", message);
+    }
+}
+
 internal sealed class ResourceCurveRepository
 {
     private readonly XerTable? _table;
@@ -4642,7 +5121,6 @@ internal sealed class ResourceCurveRepository
             ? row.Fields[index] : "";
 }
 ```
-
 ---
 
 ## Summary Checklist for Upgrade
@@ -4654,9 +5132,9 @@ internal sealed class ResourceCurveRepository
 | **02_XER_PROJECT** | Map via `CreateSimpleKeyedTable` using `CreateEnhancedHeaders`. |
 | **03_XER_PROJWBS** | Add $O(V)$ cycle detection. Check same-project matching (`proj_id`). Nullify invalid/cyclic `ParentWbsIdKey`. |
 | **04_XER_BASELINE** | Return empty initialized `XerTable` (not `null`) on missing date match. |
-| **06_XER_PREDECESSOR** | Replace float engine with `RelationshipFreeFloatCalculator` (inverse lag CPM solver). Support `TT_TASK`, `TT_RSRC`, `TT_MILE`, `TT_FINMILE`. Support 4 lag calendar modes and Retained Logic vs. Progress Override. |
+| **06_XER_PREDECESSOR** | Replace float engine with `RelationshipFreeFloatCalculator` (inverse lag CPM solver). Add `free_float_status`, `free_float_basis`, `free_float_reason`. Support `TT_TASK`, `TT_RSRC`, `TT_MILE`, `TT_FINMILE`. Support 4 lag calendar modes, Retained Logic vs. Progress Override, and suspension adjustments. |
 | **07, 08, 09** | Map via `CreateSimpleKeyedTable` with `CreateEnhancedHeaders`. |
 | **10_XER_CALENDAR** | Map via `CreateSimpleKeyedTable` with `CreateEnhancedHeaders`. |
 | **11_XER_CALENDAR_DETAILED** | Resolve base calendar inheritance up to depth 256 (`ResolveRaw`). Use `P6CalendarParser` AST reader and `P6CalendarReportingNormalization` for midnight shifts. |
 | **12, 13, 14** | Map via `CreateSimpleKeyedTable` with `CreateEnhancedHeaders`. |
-| **15_XER_RESOURCE_DISTRIBUTION** | Integrate P6 curve repository (21-point curves 1..20). Use cumulative reconciliation for zero residual drift. |
+| **15_XER_RESOURCE_DISTRIBUTION** | Integrate P6 curve repository (21-point curves 1..20) with active-activity forecasting (`ResourceCurveForecast`), tail cropping, and uniform fallbacks. Use cumulative reconciliation for zero residual drift. |

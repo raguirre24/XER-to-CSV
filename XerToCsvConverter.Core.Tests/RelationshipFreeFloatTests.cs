@@ -548,7 +548,7 @@ public sealed class RelationshipFreeFloatTests
         {
             // The copied raw input lag is also blank, intentionally, but derived lag
             // retains its pre-existing display behaviour while free_float is unknown.
-            if (field is "free_float" or "lag_hr_cnt") continue;
+            if (field is "free_float" or "free_float_status" or "free_float_basis" or "free_float_reason" or "lag_hr_cnt") continue;
             Assert.Equal(knownRow.Fields[known.FieldIndexes[field]], unknownRow.Fields[unknown.FieldIndexes[field]]);
         }
         Assert.Equal(string.Empty, unknownRow.Fields[unknown.FieldIndexes["free_float"]]);

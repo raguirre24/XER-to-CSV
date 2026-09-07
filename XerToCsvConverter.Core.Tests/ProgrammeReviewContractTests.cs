@@ -15,12 +15,15 @@ public sealed class ProgrammeReviewContractTests
             "15_XER_RESOURCE_DISTRIBUTION.csv"
         };
 
-        Assert.Equal("3.0", ProgrammeReviewContract.SchemaVersion);
+        Assert.Equal("4.0", ProgrammeReviewContract.SchemaVersion);
         Assert.Equal(expectedFiles, ProgrammeReviewContract.Tables.Select(t => t.FileName));
         Assert.Equal(47, ProgrammeReviewContract.GetTable("01_XER_TASK").Columns.Count);
         Assert.Equal(
             "status_code,task_code,total_float,task_type,id_name,early_start_date,calendar_id_key,task_id_key,driving_path_flag,remaining_duration,early_end_date,monthupdate,task_name,data_date,act_end_date,Finish,proj_id_key,wbs_id_key,free_float,cstr_type,Start,filename,late_end_date,ProjectCode,UpdateDate,ProjectName,Finish_Variance_Previous_Month,Driven_DataDate,Variance_Finish_BL,Variance_Finish_Adjusted_BL,Baseline Finish,Baseline Start,Previous Month Start,Previous Month Finish,Planned Not Completed Last Period,Start_Variance_Previous_Month,PreviousDataDate,Previous Remaining Working Days,Planned Last Period,Completed Last Period,Completed of Planned Last Period,Baseline Effective_Early_End,Baseline Effective_Late_End,Adjusted Baseline Finish,Adjusted Baseline Start,Adjusted Baseline Source Month,Adjusted Baseline Source",
             string.Join(',', ProgrammeReviewContract.GetTable("01_XER_TASK").Columns.Select(c => c.Name)));
+        Assert.Equal(
+            "task_id_key,pred_type,predecessor_status_code,task_type,predecessor_task_type,lag,start,finish,predecessor_start,predecessor_finish,free_float,free_float_status,free_float_basis,free_float_reason,pred_task_id_key,status_code,total_float,task_pred_id_key,ProjectCode",
+            string.Join(',', ProgrammeReviewContract.GetTable("06_XER_PREDECESSOR").Columns.Select(c => c.Name)));
     }
 
     [Fact]

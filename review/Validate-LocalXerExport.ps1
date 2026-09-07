@@ -547,7 +547,10 @@ foreach ($row in $distribution.Rows) {
     $month = [DateTime]::ParseExact($row[$distribution.Indexes['distribution_month']], 'yyyy-MM-dd', $culture)
     Assert-Audit ($month.Day -eq 1) '15 distribution month is not a month-start bucket.'
     $kind = $row[$distribution.Indexes['distribution_type']]
-    Assert-Audit ($kind -cin @('Working Hours','Resource Curve','Remaining Units Profile','Actual Recorded Date','Actual Elapsed Time')) '15 has an unrecognized distribution type.'
+    Assert-Audit ($kind -cin @('Working Hours','Resource Curve','Remaining Units Profile','Resource Curve Forecast','Working Hours Fallback','Actual Recorded Date','Actual Elapsed Time')) '15 has an unrecognized distribution type.'
+    if ($kind -cin @('Resource Curve Forecast','Working Hours Fallback')) {
+        Assert-Audit ($actualFlag -ceq '0') '15 applied a remaining forecast method to actual units.'
+    }
     if ($kind -in @('Actual Recorded Date','Actual Elapsed Time')) {
         Assert-Audit ($actualFlag -ceq '1' -and $hours -eq 0 -and $totalHours -eq 0) '15 actual fallback invented calendar work hours or affected remaining units.'
         $fallbackRows++

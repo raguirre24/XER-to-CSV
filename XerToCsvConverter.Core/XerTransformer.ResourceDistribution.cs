@@ -165,6 +165,7 @@ public partial class XerTransformer
                 {
                     DateTime start, finish;
                     RemainingResourceProfile? profile = null;
+                    RemainingDistributionPlan? remainingPlan = null;
                     if (isActual)
                     {
                         if (normalizedStatus == "TK_NOTSTART")
@@ -201,15 +202,19 @@ public partial class XerTransformer
                         if (calculator.CountWorkingHours(start, finish) <= 0)
                             throw new InvalidDataException($"Calendar '{metadata.CalendarKey}' has no working time in the positive-quantity period.");
                         issueCode = "REMAINING_PROFILE_INVALID";
-                        profile = ResolveRemainingProfile(start, finish, quantity.Value!.Value);
+                        remainingPlan = ResolveRemainingProfile(start, finish, quantity.Value!.Value);
+                        profile = remainingPlan.Profile;
                     }
                     issueCode = isActual ? "ACTUAL_DISTRIBUTION_INVALID" : "REMAINING_DISTRIBUTION_INVALID";
                     // Commit only a completely reconciled portion. A recoverable source
                     // failure cannot leave early-month rows plus its full unallocated units.
                     var portionRows = new List<DataRow>();
                     AddResourceDistributionRows(portionRows, metadata, definition, calculator,
-                        start, finish, quantity.Value!.Value, isActual, profile);
+                        start, finish, quantity.Value!.Value, isActual, profile, remainingPlan?.Clock);
+                    DataRow? methodNote = remainingPlan?.MethodCode is { } methodCode
+                        ? CreateDiagnostic(methodCode, remainingPlan.MethodMessage!, null, "") : null;
                     result.AddRows(portionRows);
+                    if (methodNote.HasValue) issues.Add(methodNote.Value);
                 }
                 catch (Exception ex) when (ex is InvalidDataException or OverflowException or ArgumentOutOfRangeException)
                 {
@@ -217,13 +222,13 @@ public partial class XerTransformer
                 }
             }
 
-            RemainingResourceProfile? ResolveRemainingProfile(DateTime start, DateTime finish, decimal quantity)
+            RemainingDistributionPlan ResolveRemainingProfile(DateTime start, DateTime finish, decimal quantity)
             {
                 string manual = Read("remain_crv");
                 if (!string.IsNullOrWhiteSpace(manual))
-                    return RemainingResourceProfile.FromManual(manual, quantity, calendar.Calculator.CountWorkingHours(start, finish));
+                    return new(RemainingResourceProfile.FromManual(manual, quantity, calendar.Calculator.CountWorkingHours(start, finish)));
                 string curveId = Read("curv_id").Trim();
-                if (curveId.Length == 0) return null;
+                if (curveId.Length == 0) return new(null);
                 if (curveId == "9")
                     throw new InvalidDataException("Manual curve '9' requires an exported remain_crv profile.");
                 string durationType = TaskRead("duration_type").Trim().ToUpperInvariant();
@@ -231,20 +236,33 @@ public partial class XerTransformer
                     throw new InvalidDataException($"Curve '{curveId}' requires Fixed Duration & Units/Time or Fixed Duration & Units; got duration_type '{durationType}'.");
                 curves ??= new ResourceCurveRepository(_dataStore);
                 var named = curves.Get(source, curveId);
-                // Preserve the verified single-month and phase-independent exceptions;
-                // unsupported multi-month curve tails become warnings, not uniform guesses.
-                bool singleMonth = start.Year == finish.AddTicks(-1).Year && start.Month == finish.AddTicks(-1).Month;
-                if (!named.IsUniform && (normalizedStatus != "TK_NOTSTART"
-                    || !string.IsNullOrWhiteSpace(Read(FieldNames.ActStartDate))
-                    || !string.IsNullOrWhiteSpace(Read(FieldNames.ActEndDate))) && !singleMonth)
+                if (normalizedStatus == "TK_ACTIVE")
+                {
+                    var clock = new ResourceForecastClock(calendar.Calculator,
+                        TaskRead("suspend_date"), TaskRead("resume_date"), finish);
+                    return ResourceCurveForecast.Resolve(named, clock, start, finish,
+                        assignment.GetEvaluationField, ProjectRead(FieldNames.LastRecalcDate), actual.IsZero);
+                }
+                // Preserve the existing unstarted-activity contract when contradictory
+                // assignment actual dates exist. The new forecast applies to active tasks.
+                if (!named.IsUniform && (!string.IsNullOrWhiteSpace(Read(FieldNames.ActStartDate))
+                    || !string.IsNullOrWhiteSpace(Read(FieldNames.ActEndDate)))
+                    && !ResourceForecastClock.HasSingleWorkingMonth(start, finish,
+                        (left, right) => calendar.Calculator.CountWorkingHours(left, right)))
                     throw new InvalidDataException($"Curve '{curveId}' on a progressed assignment requires an exported remain_crv profile; its remaining curve phase cannot be established from this XER.");
-                return named;
+                return new(named);
             }
 
             void AddIssue(string code, DistributionQuantity quantity, bool isActual, string message)
             {
                 string amount = quantity.Value.HasValue
                     ? decimal.Round(quantity.Value.Value, 4, MidpointRounding.ToEven).ToString("F4", CultureInfo.InvariantCulture) : "";
+                issues.Add(CreateDiagnostic(code, message, isActual, amount));
+            }
+
+            // A null portion is a successful method notice, not an unallocated amount.
+            DataRow CreateDiagnostic(string code, string message, bool? isActual, string amount)
+            {
                 // Repository diagnostics can include private occurrence annotations.
                 // Public namespace plus assignment ordinal already supplies provenance.
                 message = message.Replace($" (input occurrence '{source}')", "", StringComparison.Ordinal);
@@ -255,12 +273,12 @@ public partial class XerTransformer
                     metadata.TaskKey, metadata.ResourceKey, CreateKey(assignment.SourceFilename, assignmentId), assignmentId,
                     metadata.TaskCode, metadata.ResourceName, metadata.ResourceType, metadata.Unit, metadata.Status,
                     Read(FieldNames.ActStartDate), Read(FieldNames.ActEndDate), ProjectRead(FieldNames.LastRecalcDate),
-                    Read(FieldNames.ActRegQty), Read(FieldNames.ActOtQty), isActual ? amount : "", message,
-                    isActual ? "Actual" : "Remaining", Read(FieldNames.RestartDate), Read(FieldNames.ReendDate),
-                    Read(FieldNames.RemainQty), Read("curv_id"), Read("remain_crv"), isActual ? "" : amount,
+                    Read(FieldNames.ActRegQty), Read(FieldNames.ActOtQty), isActual == true ? amount : "", message,
+                    isActual.HasValue ? (isActual.Value ? "Actual" : "Remaining") : "", Read(FieldNames.RestartDate), Read(FieldNames.ReendDate),
+                    Read(FieldNames.RemainQty), Read("curv_id"), Read("remain_crv"), isActual == false ? amount : "",
                     TableNames.TaskRsrc, "", "", XerDataQuality.RawRowJson(assignments, assignment)
                 ];
-                issues.Add(assignment.WithFields(values));
+                return assignment.WithFields(values);
             }
         }
         _resourceDataQualityRows = issues.AsReadOnly();
@@ -297,12 +315,13 @@ public partial class XerTransformer
 
     private void AddResourceDistributionRows(List<DataRow> result, DistributionMetadata metadata,
         P6CalendarDefinition definition, WorkingDayCalculator calculator, DateTime start, DateTime finish,
-        decimal quantity, bool isActual, RemainingResourceProfile? profile = null)
+        decimal quantity, bool isActual, RemainingResourceProfile? profile = null, ResourceForecastClock? forecastClock = null)
     {
         if (finish < start || (!isActual && finish == start))
             throw new InvalidDataException("Positive quantity requires finish after start, except recorded actuals at a single instant.");
         decimal totalHours = finish == start ? 0 : calculator.CountWorkingHours(start, finish);
-        long totalTicks = checked((long)decimal.Round(totalHours * TimeSpan.TicksPerHour, 0));
+        decimal allocationHours = forecastClock?.CountHours(start, finish) ?? totalHours;
+        long totalTicks = checked((long)decimal.Round(allocationHours * TimeSpan.TicksPerHour, 0));
         if (totalTicks <= 0 && !isActual)
             throw new InvalidDataException($"Calendar '{metadata.CalendarKey}' has no working time in the positive-quantity period.");
         // Actual units are historical observations, not calendar capacity. A valid
@@ -324,7 +343,8 @@ public partial class XerTransformer
             DateTime periodEnd = lastMonth ? finish : month.AddMonths(1);
             DateTime periodStart = start > month ? start : month;
             decimal hours = periodStart == periodEnd ? 0 : calculator.CountWorkingHours(periodStart, periodEnd);
-            long ticks = checked((long)decimal.Round(hours * TimeSpan.TicksPerHour, 0));
+            decimal allocationMonthHours = forecastClock?.CountHours(periodStart, periodEnd) ?? hours;
+            long ticks = checked((long)decimal.Round(allocationMonthHours * TimeSpan.TicksPerHour, 0));
             cumulativeTicks = checked(cumulativeTicks + ticks);
             decimal roundedCumulative = periodEnd == finish ? target
                 : decimal.Round(quantity * (elapsedActual
