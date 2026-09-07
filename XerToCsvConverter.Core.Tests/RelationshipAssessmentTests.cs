@@ -53,6 +53,147 @@ public sealed class RelationshipAssessmentTests
         }
     }
 
+    [Theory]
+    [InlineData("PR_FS", true)]
+    [InlineData("PR_FS", false)]
+    [InlineData("PR_SS", true)]
+    [InlineData("PR_SS", false)]
+    [InlineData("PR_FF", true)]
+    [InlineData("PR_FF", false)]
+    [InlineData("PR_SF", true)]
+    [InlineData("PR_SF", false)]
+    public void Resource_dependent_endpoint_uses_the_same_unstarted_calculation_as_a_task(
+        string type, bool resourceIsPredecessor)
+    {
+        var taskFixture = new Schedule();
+        taskFixture.Relationship["pred_type"] = type;
+        RelationshipFloatAssessment expected = Assess(taskFixture, "CalculatedRemainingRelationship");
+
+        var resourceFixture = new Schedule();
+        resourceFixture.Relationship["pred_type"] = type;
+        (resourceIsPredecessor ? resourceFixture.Predecessor : resourceFixture.Successor)["task_type"] = "TT_Rsrc";
+        RelationshipFloatAssessment actual = Assess(resourceFixture, "CalculatedRemainingRelationship");
+
+        AssertEquivalentCalculation(expected, actual);
+    }
+
+    [Fact]
+    public void Resource_dependent_relationship_uses_task_calendar_not_assigned_resource_calendar()
+    {
+        var taskFixture = new Schedule();
+        taskFixture.Successor["restart_date"] = taskFixture.Successor["early_start_date"] = "2026-01-06 12:00";
+        RelationshipFloatAssessment expected = Assess(taskFixture, "CalculatedRemainingRelationship");
+        Assert.Equal(4m, expected.FloatHours);
+        Assert.Equal(0.5m, expected.FloatDays);
+
+        var resourceFixture = new Schedule();
+        resourceFixture.Predecessor["task_type"] = "TT_Rsrc";
+        resourceFixture.Successor["restart_date"] = resourceFixture.Successor["early_start_date"] = "2026-01-06 12:00";
+        resourceFixture.Resource = new()
+        {
+            ["rsrc_id"] = "R1", ["rsrc_short_name"] = "LAB", ["rsrc_name"] = "Labour",
+            ["rsrc_type"] = "RT_Labor", ["clndr_id"] = "C3"
+        };
+        resourceFixture.Assignment = new()
+        {
+            ["taskrsrc_id"] = "A1", ["task_id"] = "T1", ["proj_id"] = "P1", ["rsrc_id"] = "R1",
+            ["restart_date"] = "2026-01-05 08:00", ["reend_date"] = "2026-01-05 17:00",
+            ["remain_qty"] = "8"
+        };
+
+        var transformer = new XerTransformer(resourceFixture.Store());
+        IReadOnlyList<RelationshipFloatAssessment> assessments = transformer.AssessRelationships();
+        RelationshipFloatAssessment actual = Assert.Single(assessments);
+        Assert.Equal("CalculatedRemainingRelationship", actual.ReasonCode);
+        AssertEquivalentCalculation(expected, actual);
+        Assert.Equal("2601.xer.C1", actual.PredecessorCalendarKey);
+
+        XerTable output = Assert.IsType<XerTable>(transformer.Create06XerPredecessor(new()));
+        DataRow row = Assert.Single(output.Rows);
+        Assert.Equal("0.5", row.Fields[output.FieldIndexes["free_float"]]);
+        Assert.Equal("2601.xer.C1", row.Fields[output.FieldIndexes["predecessor_clndr_id_key"]]);
+    }
+
+    [Theory]
+    [InlineData("PR_FS", "CalculatedRemainingRelationship")]
+    [InlineData("PR_FF", "CalculatedRemainingRelationship")]
+    [InlineData("PR_SS", "UnsupportedProgressedStartEndpoint")]
+    [InlineData("PR_SF", "UnsupportedProgressedStartEndpoint")]
+    public void Active_resource_dependent_predecessor_follows_task_progress_policy(string type, string reason)
+    {
+        var taskFixture = new Schedule();
+        taskFixture.Relationship["pred_type"] = type;
+        SetStatus(taskFixture.Predecessor, "TK_Active");
+        RelationshipFloatAssessment expected = Assess(taskFixture, reason);
+
+        var resourceFixture = new Schedule();
+        resourceFixture.Relationship["pred_type"] = type;
+        resourceFixture.Predecessor["task_type"] = "TT_Rsrc";
+        SetStatus(resourceFixture.Predecessor, "TK_Active");
+        RelationshipFloatAssessment actual = Assess(resourceFixture, reason);
+
+        AssertEquivalentCalculation(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("PR_FS", "CalculatedRetainedRemainingRelationship")]
+    [InlineData("PR_FF", "CalculatedRetainedRemainingRelationship")]
+    [InlineData("PR_SS", "UnsupportedProgressedRelationship")]
+    [InlineData("PR_SF", "UnsupportedProgressedRelationship")]
+    public void Active_resource_dependent_successor_follows_task_retained_logic_policy(string type, string reason)
+    {
+        var taskFixture = ActiveFixture();
+        taskFixture.Relationship["pred_type"] = type;
+        RelationshipFloatAssessment expected = Assess(taskFixture, reason);
+
+        var resourceFixture = ActiveFixture();
+        resourceFixture.Relationship["pred_type"] = type;
+        resourceFixture.Successor["task_type"] = "TT_Rsrc";
+        RelationshipFloatAssessment actual = Assess(resourceFixture, reason);
+
+        AssertEquivalentCalculation(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("RetainedLogic", "CalculatedRetainedRemainingRelationship")]
+    [InlineData("ProgressOverride", "IgnoredUnderExportedProgressOverride")]
+    [InlineData("ActualDates", "UnsupportedActualDatesProgressCase")]
+    [InlineData("Unresolved", "UnresolvedProgressMode")]
+    public void Resource_dependent_endpoints_follow_task_progress_mode_policy(string mode, string reason)
+    {
+        var taskFixture = ActiveFixture();
+        taskFixture.SetMode(mode);
+        RelationshipFloatAssessment expected = Assess(taskFixture, reason);
+
+        var resourceFixture = ActiveFixture();
+        resourceFixture.Predecessor["task_type"] = "TT_Rsrc";
+        resourceFixture.Successor["task_type"] = "TT_Rsrc";
+        resourceFixture.SetMode(mode);
+        RelationshipFloatAssessment actual = Assess(resourceFixture, reason);
+
+        AssertEquivalentCalculation(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(true, "HistoricalFixedPredecessor")]
+    [InlineData(false, "HistoricalSuccessor")]
+    public void Completed_resource_dependent_endpoint_is_historical_like_a_task(
+        bool resourceIsPredecessor, string reason)
+    {
+        var taskFixture = new Schedule();
+        SetStatus(resourceIsPredecessor ? taskFixture.Predecessor : taskFixture.Successor, "TK_Complete");
+        RelationshipFloatAssessment expected = Assess(taskFixture, reason);
+
+        var resourceFixture = new Schedule();
+        Dictionary<string, string> resource = resourceIsPredecessor
+            ? resourceFixture.Predecessor : resourceFixture.Successor;
+        resource["task_type"] = "TT_Rsrc";
+        SetStatus(resource, "TK_Complete");
+        RelationshipFloatAssessment actual = Assess(resourceFixture, reason);
+
+        AssertEquivalentCalculation(expected, actual);
+    }
+
     [Fact]
     public void July_relationship_8639741_is_zero_with_retained_remaining_dates_and_unchanged_actual_display()
     {
@@ -603,6 +744,23 @@ public sealed class RelationshipAssessmentTests
             Assert.Equal(assessments[i].FormattedDays, table.Rows[i].Fields[table.FieldIndexes["free_float"]]);
     }
 
+    private static void AssertEquivalentCalculation(
+        RelationshipFloatAssessment expected, RelationshipFloatAssessment actual)
+    {
+        Assert.Equal(expected.Classification, actual.Classification);
+        Assert.Equal(expected.ReasonCode, actual.ReasonCode);
+        Assert.Equal(expected.FloatHours, actual.FloatHours);
+        Assert.Equal(expected.FloatDays, actual.FloatDays);
+        Assert.Equal(expected.FormattedDays, actual.FormattedDays);
+        Assert.Equal(expected.PredecessorEndpoint, actual.PredecessorEndpoint);
+        Assert.Equal(expected.PredecessorEndpointField, actual.PredecessorEndpointField);
+        Assert.Equal(expected.SuccessorEndpoint, actual.SuccessorEndpoint);
+        Assert.Equal(expected.SuccessorEndpointField, actual.SuccessorEndpointField);
+        Assert.Equal(expected.EffectiveLagHours, actual.EffectiveLagHours);
+        Assert.Equal(expected.PredecessorHoursPerDay, actual.PredecessorHoursPerDay);
+        Assert.Equal(expected.LagCalendarKey, actual.LagCalendarKey);
+    }
+
     private static Schedule ActiveFixture()
     {
         var fixture = new Schedule();
@@ -672,6 +830,8 @@ public sealed class RelationshipAssessmentTests
         internal Dictionary<string, string>[] Calendars { get; } = [Calendar("C1", "8"), Calendar("C2", "8"), Calendar("C3", "24")];
         internal Dictionary<string, string>? ExtraProject { get; set; }
         internal Dictionary<string, string>? ExtraOptions { get; set; }
+        internal Dictionary<string, string>? Resource { get; set; }
+        internal Dictionary<string, string>? Assignment { get; set; }
 
         internal void SetMode(string mode)
         {
@@ -692,6 +852,8 @@ public sealed class RelationshipAssessmentTests
             Add("CALENDAR", Calendars);
             Add("TASK", [Predecessor, Successor]);
             Add("TASKPRED", [Relationship]);
+            if (Resource is not null) Add("RSRC", [Resource]);
+            if (Assignment is not null) Add("TASKRSRC", [Assignment]);
             if (includeOptions) Add("SCHEDOPTIONS", ExtraOptions is null ? [Options] : [Options, ExtraOptions]);
             return text.ToString();
 

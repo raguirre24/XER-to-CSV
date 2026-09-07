@@ -121,7 +121,9 @@ tab delimiters. Git emitted only LF-to-CRLF normalization notices.
   compatible; collision qualification applies only where needed.
 - Table 04 remains a global earliest filename-month snapshot, Programme history
   remains weekday-based, and LongestPathVisual's least-float policy is unchanged.
-- Unsupported progressed/resource-dependent relationship float stays blank. Actual
+- At this 2026-09-05 review point, unsupported progressed/resource-dependent
+  relationship float stayed blank; the later `TT_Rsrc` contract is documented in
+  [CALENDAR_CALCULATIONS.md](../CALENDAR_CALCULATIONS.md). Actual
   resource spread is a working-time estimate; unsupported progressed nonlinear
   curves require an explicit remaining profile. No native P6 golden parity claimed.
 - Standard publication is rollback-protected and atomic per file, not an atomic

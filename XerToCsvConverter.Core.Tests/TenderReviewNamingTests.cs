@@ -36,7 +36,6 @@ public sealed class TenderReviewNamingTests
     }
 
     [Theory]
-    [InlineData("J_5001")]
     [InlineData("J-5001")]
     [InlineData("J.5001")]
     [InlineData("Å5001")]
@@ -45,7 +44,18 @@ public sealed class TenderReviewNamingTests
     {
         TenderReviewValidationException error = Assert.Throws<TenderReviewValidationException>(() =>
             TenderReviewNaming.NormalizeProjectCode(value));
-        Assert.Contains("underscores and punctuation", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("only A-Z, 0-9, and underscore", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("J_5001", "J_5001")]
+    [InlineData("  j_5001  ", "J_5001")]
+    [InlineData("NE Part B", "NE_PART_B")]
+    [InlineData("  ne   part   b  ", "NE_PART_B")]
+    [InlineData("C5001", "C5001")]
+    public void Project_code_normalizes_whitespace_and_accepts_underscores(string input, string expected)
+    {
+        Assert.Equal(expected, TenderReviewNaming.NormalizeProjectCode(input));
     }
 
     [Fact]
@@ -53,8 +63,22 @@ public sealed class TenderReviewNamingTests
     {
         Assert.True(TenderReviewNaming.IsSameProjectIdentity("C5001", "j5001"));
         Assert.True(TenderReviewNaming.IsSameProjectIdentity("J5001", "C5001"));
+        Assert.True(TenderReviewNaming.IsSameProjectIdentity("NE Part B", "NE_PART_B"));
+        Assert.True(TenderReviewNaming.IsSameProjectIdentity("NE_PART_B", "NE Part B"));
         Assert.False(TenderReviewNaming.IsSameProjectIdentity("5001", "J5001"));
         Assert.False(TenderReviewNaming.IsSameProjectIdentity("CJ5001", "J5001"));
+    }
+
+    [Fact]
+    public async Task Metadata_reader_reads_project_code_and_name_from_xer_stream()
+    {
+        string xer = "ERMHDR\t23.12\t2026-09-05\n%T\tPROJECT\n%F\tproj_id\tproj_short_name\n%R\tP1\tNE Part B\n%T\tPROJWBS\n%F\twbs_id\tparent_wbs_id\twbs_name\n%R\tW1\t\tNorth East Highway Part B\n%E\n";
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(xer));
+        TenderReviewProjectIdentity? identity = await TenderReviewXerMetadataReader.ReadProjectIdentityAsync(stream);
+        Assert.NotNull(identity);
+        Assert.Equal("NE Part B", identity.ProjectCode);
+        Assert.Equal("North East Highway Part B", identity.ProjectName);
+        Assert.Equal("NE_PART_B", TenderReviewNaming.NormalizeProjectCode(identity.ProjectCode));
     }
 
     [Fact]

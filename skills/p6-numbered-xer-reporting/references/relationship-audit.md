@@ -4,7 +4,7 @@ Use this reference when investigating `06.free_float` or a relationship whose pr
 
 ## Progress and endpoint matrix
 
-N means not started; A means active. All calculated cases still require unambiguous identities, supported activity types, valid endpoints, calendars, HPD and lag evidence.
+N means not started; A means active. Supported endpoint types are `TT_Task`, `TT_Rsrc`, `TT_Mile` and `TT_FinMile`. `TT_Rsrc` follows the same relationship endpoint, status/progress and TASK-calendar movement rules as `TT_Task`; assigned-resource calendars remain a separate table 15 concern. All calculated cases still require unambiguous identities, valid endpoints, calendars, HPD and lag evidence.
 
 | Predecessor -> successor | Type and exported mode | Assessment basis |
 | --- | --- | --- |

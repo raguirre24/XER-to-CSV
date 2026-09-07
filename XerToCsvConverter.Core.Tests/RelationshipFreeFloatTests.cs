@@ -350,9 +350,7 @@ public sealed class RelationshipFreeFloatTests
     [InlineData("T2", "task_type", "TT_LOE")]
     [InlineData("T1", "task_type", "TT_WBS")]
     [InlineData("T2", "task_type", "TT_WBS")]
-    [InlineData("T1", "task_type", "TT_Rsrc")]
-    [InlineData("T2", "task_type", "TT_Rsrc")]
-    public void Completed_derived_or_resource_calendar_dependent_activities_have_no_assumed_float(
+    public void Completed_or_derived_activities_have_no_assumed_float(
         string taskId, string field, string value)
     {
         var fixture = new Fixture();

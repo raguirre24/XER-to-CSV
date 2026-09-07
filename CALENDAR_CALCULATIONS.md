@@ -406,6 +406,11 @@ days for this individual relationship**. It is not successor-calendar relationsh
 float, the predecessor activity's stored `TASK.free_float_hr_cnt`, or a promise of
 equality with P6's displayed relationship-gap metric under mixed calendars/lag.
 
+`TT_Rsrc` endpoints use the same relationship endpoint, status/progress and
+TASK-calendar movement rules as `TT_Task`. Resource assignments and the assigned
+RSRC calendar are not substituted into table 06; their calendar selection remains
+a separate table 15 distribution concern.
+
 For a supported relationship:
 
 1. Select Finish->Start for FS, Start->Start for SS, Finish->Finish for FF and
@@ -461,9 +466,6 @@ Tender now follows the same denomination.
 - Missing/invalid required task, calendar, positive predecessor HPD, endpoint,
   numeric lag, or scheduling metadata; an unprojectable lag.
 - A completed endpoint, LOE/WBS summary or unsupported activity/relationship type.
-- A resource-dependent endpoint: TASK calendar alone does not establish how its
-  resource-driven dates can move. Table 15's resource-calendar selection is a
-  separate concern; its distribution corrections are documented above.
 - Duplicate/ambiguous task or scheduling identities, mismatched project endpoints,
   contradictory effective task date ranges or incompatible actual/status inputs.
 - An active successor whose exported mode/type is outside the supported matrix

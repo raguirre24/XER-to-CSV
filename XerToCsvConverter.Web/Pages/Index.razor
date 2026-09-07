@@ -195,7 +195,7 @@
                             <span>Project code</span>
                             <input class="form-control" @bind="_projectCode" disabled="@_isProcessing"
                                    placeholder="Example: C5001" autocomplete="off" />
-                            <small>Letters and numbers only; underscores and punctuation are rejected.</small>
+                            <small>Letters, numbers, and underscores only.</small>
                         </label>
                         <label>
                             <span>Project name</span>
@@ -759,14 +759,15 @@
     {
         request = null;
         error = string.Empty;
-        string projectCode = _projectCode.Trim().ToUpperInvariant();
+        string rawCode = _projectCode.Trim();
+        string projectCode = System.Text.RegularExpressions.Regex.Replace(rawCode, @"\s+", "_").ToUpperInvariant();
         if (projectCode.Length == 0) { error = "Project code is required."; return false; }
         if (!System.Text.RegularExpressions.Regex.IsMatch(
                 projectCode,
-                "^[A-Z0-9]+$",
+                "^[A-Z0-9_]+$",
                 System.Text.RegularExpressions.RegexOptions.CultureInvariant))
         {
-            error = "Tender project code must contain only ASCII letters A-Z and digits 0-9; underscores and punctuation are not allowed.";
+            error = "Tender project code must contain only ASCII letters, digits, and underscores.";
             return false;
         }
         if (_projectName.Trim().Length == 0) { error = "Project name is required."; return false; }

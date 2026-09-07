@@ -5,7 +5,7 @@ description: Interpret and use the numbered XER-to-CSV Power BI tables in report
 
 # Numbered XER tables for reporting
 
-Help an agent build, review, or explain reports using this parser's numbered CSVs without confusing raw P6 fields, calculated columns, or export profiles. This portable reference describes the corrected working-tree implementation on 2026-09-06; it is not an Oracle schema specification, a release identifier, or proof of native P6 scheduling parity.
+Help an agent build, review, or explain reports using this parser's numbered CSVs without confusing raw P6 fields, calculated columns, or export profiles. This portable reference describes the corrected working-tree implementation on 2026-09-07; it is not an Oracle schema specification, a release identifier, or proof of native P6 scheduling parity.
 
 ## Establish the actual contract
 

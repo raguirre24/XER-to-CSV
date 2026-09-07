@@ -141,9 +141,9 @@ public partial class XerTransformer
             return Result(RelationshipFloatClassification.Historical, "HistoricalSuccessor", "The successor is complete; there is no remaining successor event for this metric.");
         if (predecessor.Status == "TK_COMPLETE")
             return Result(RelationshipFloatClassification.Historical, "HistoricalFixedPredecessor", "There is no movable remaining predecessor event. A fixed historical release or unexpired lag may still affect the successor.");
-        if (predecessor.Type is not ("TT_TASK" or "TT_MILE" or "TT_FINMILE") ||
-            successor.Type is not ("TT_TASK" or "TT_MILE" or "TT_FINMILE"))
-            return Unsupported("UnsupportedActivityType", "Resource-dependent, LOE, WBS-summary or unknown activity types do not establish task-calendar movement.");
+        if (predecessor.Type is not ("TT_TASK" or "TT_RSRC" or "TT_MILE" or "TT_FINMILE") ||
+            successor.Type is not ("TT_TASK" or "TT_RSRC" or "TT_MILE" or "TT_FINMILE"))
+            return Unsupported("UnsupportedActivityType", "LOE, WBS-summary or unknown activity types do not establish task-calendar movement.");
         foreach (var task in new[] { predecessor, successor })
         {
             if (RawText(task.Row, "act_end_date").Length > 0 ||

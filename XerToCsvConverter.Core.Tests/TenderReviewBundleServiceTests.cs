@@ -267,6 +267,27 @@ public sealed class TenderReviewBundleServiceTests
     }
 
     [Fact]
+    public async Task Project_code_with_spaces_and_underscores_builds_tender_bundle_successfully()
+    {
+        TenderReviewSource source = TenderReviewNamingTests.Source(0, "stage.xer", "2026-09-05");
+        TenderReviewBundleRequest request = new()
+        {
+            ProjectCode = "NE Part B",
+            ProjectName = "North East Highway Part B",
+            Sources = new[] { source }
+        };
+        XerDataStore store = BuildDataStore(
+            new Stage(source, "2026-08-31", null, "8", RawProjectCode: "NE Part B"));
+
+        TenderReviewInMemoryBundleResult result = await new TenderReviewBundleService()
+            .BuildFromParsedDataToMemoryAsync(store, request);
+
+        Assert.All(result.ManifestRows, row => Assert.Equal("NE_PART_B", row.ProjectCode));
+        Assert.StartsWith("NE_PART_B_TENDER_", result.BundleId);
+        Assert.All(result.ManifestRows, row => Assert.Equal("NE_PART_B-TENDER-20260905.xer", row.CanonicalXerFilename));
+    }
+
+    [Fact]
     public async Task Task_start_finish_follow_raw_status_dependent_rules_and_completed_floats_are_blank()
     {
         TenderReviewSource source = TenderReviewNamingTests.Source(0, "stage.xer", "2026-09-05");

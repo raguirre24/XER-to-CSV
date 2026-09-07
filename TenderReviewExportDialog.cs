@@ -11,7 +11,7 @@ namespace XerToCsvConverter;
 internal sealed class TenderReviewExportDialog : Form
 {
     private static readonly Regex ProjectCodePattern = new(
-        "^[A-Z0-9]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        "^[A-Z0-9_]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly Func<DateOnly> _localStatusDateProvider;
     private readonly TextBox _projectCode = new();
@@ -245,7 +245,7 @@ internal sealed class TenderReviewExportDialog : Form
     {
         _projectCode.CharacterCasing = CharacterCasing.Upper;
         _projectCode.AccessibleName = "Tender project code";
-        _projectCode.PlaceholderText = "ASCII letters and digits only";
+        _projectCode.PlaceholderText = "For example J1234 or NE_PART_B";
         _projectName.PlaceholderText = "Project name recorded in Tender output";
         _projectName.AccessibleName = "Tender project name";
         _parserVersion.Text =
@@ -301,6 +301,46 @@ internal sealed class TenderReviewExportDialog : Form
         if (_sources.Rows.Count > 0)
             _sources.CurrentCell = _sources.Rows[_sources.Rows.Count - 1].Cells["StatusDate"];
         UpdateSourceButtons();
+        TrySuggestProjectIdentity(paths);
+    }
+
+    private void TrySuggestProjectIdentity(IReadOnlyList<string> paths)
+    {
+        if (!string.IsNullOrWhiteSpace(_projectCode.Text) && !string.IsNullOrWhiteSpace(_projectName.Text))
+            return;
+
+        foreach (string path in paths)
+        {
+            if (!File.Exists(path)) continue;
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096);
+                var identity = TenderReviewXerMetadataReader.ReadProjectIdentityAsync(stream).GetAwaiter().GetResult();
+                if (identity is not null)
+                {
+                    if (string.IsNullOrWhiteSpace(_projectCode.Text) && !string.IsNullOrWhiteSpace(identity.ProjectCode))
+                    {
+                        try
+                        {
+                            _projectCode.Text = TenderReviewNaming.NormalizeProjectCode(identity.ProjectCode);
+                        }
+                        catch
+                        {
+                            // Non-blocking fallback for invalid raw codes
+                        }
+                    }
+                    if (string.IsNullOrWhiteSpace(_projectName.Text) && !string.IsNullOrWhiteSpace(identity.ProjectName))
+                    {
+                        _projectName.Text = identity.ProjectName.Trim();
+                    }
+                    break;
+                }
+            }
+            catch
+            {
+                // Non-blocking best-effort prefill
+            }
+        }
     }
 
     private void RemoveButton_Click(object? sender, EventArgs e)
@@ -361,11 +401,11 @@ internal sealed class TenderReviewExportDialog : Form
         _sources.EndEdit();
         ClearGridErrors();
 
-        string projectCode = _projectCode.Text.Trim().ToUpperInvariant();
-        if (!ProjectCodePattern.IsMatch(projectCode))
+        string rawCode = _projectCode.Text.Trim();
+        string projectCode = Regex.Replace(rawCode, @"\s+", "_").ToUpperInvariant();
+        if (projectCode.Length == 0 || !ProjectCodePattern.IsMatch(projectCode))
             return Fail(
-                "Project code is required and may contain only ASCII A-Z and 0-9. " +
-                "Underscores and other punctuation are not allowed for Tender Review.",
+                "Project code is required and may contain only ASCII letters, digits, and underscores.",
                 _projectCode);
         string projectName = _projectName.Text.Trim();
         if (projectName.Length == 0)

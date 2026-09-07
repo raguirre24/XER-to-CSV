@@ -108,8 +108,11 @@ public static partial class TenderReviewNaming
 {
     internal const string NamespaceDelimiter = "::";
 
-    [GeneratedRegex("^[A-Z0-9]+$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^[A-Z0-9_]+$", RegexOptions.CultureInvariant)]
     private static partial Regex ProjectCodeRegex();
+
+    [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
+    private static partial Regex WhitespaceRegex();
 
     [GeneratedRegex("^[A-Za-z0-9-]+$", RegexOptions.CultureInvariant)]
     private static partial Regex SourceTokenRegex();
@@ -250,10 +253,15 @@ public static partial class TenderReviewNaming
 
     public static string NormalizeProjectCode(string? value)
     {
-        string result = value?.Trim().ToUpperInvariant() ?? string.Empty;
+        string trimmed = value?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0)
+            throw new TenderReviewValidationException(
+                "Project code must contain only A-Z, 0-9, and underscore.");
+
+        string result = WhitespaceRegex().Replace(trimmed, "_").ToUpperInvariant();
         if (!ProjectCodeRegex().IsMatch(result))
             throw new TenderReviewValidationException(
-                "Project code must contain one or more ASCII A-Z or 0-9 characters; underscores and punctuation are not allowed for Tender Review.");
+                "Project code must contain only A-Z, 0-9, and underscore.");
         return result;
     }
 
