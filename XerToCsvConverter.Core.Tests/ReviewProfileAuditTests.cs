@@ -24,9 +24,9 @@ public sealed class ReviewProfileAuditTests
         Add(store, source, "ACTVTYPE", ["actv_code_type_id", "actv_code_type"], ["CAT", "Category"], ["CAT", "Repeated category"]);
         Add(store, source, "ACTVCODE", ["actv_code_id", "actv_code_type_id", "actv_code_name"], ["VAL", "MISSING", "Orphan code"]);
 
-        var files = await Export(store, tender);
+        var (files, qualityBytes) = await Export(store, tender);
 
-        Assert.Equal(12, files.Count);
+        Assert.Equal(11, files.Count);
         Assert.Equal(2, Rows(files["03_XER_PROJWBS.csv"]).Length);
         Assert.Equal(2, Rows(files["07_XER_ACTVTYPE.csv"]).Length);
         Assert.Single(Rows(files["08_XER_ACTVCODE.csv"]));
@@ -40,7 +40,7 @@ public sealed class ReviewProfileAuditTests
         Assert.Equal("1", good["remaining_duration"]);
         Assert.Equal("2026-01-05", good["Start"]);
         Assert.Single(Rows(files["06_XER_PREDECESSOR.csv"]));
-        string warnings = Encoding.UTF8.GetString(files[XerDataQuality.FileName]);
+        string warnings = Encoding.UTF8.GetString(qualityBytes);
         Assert.Contains("not-a-date", warnings, StringComparison.Ordinal);
         Assert.Contains("bad-preferred-start", warnings, StringComparison.Ordinal);
         Assert.Contains("REVIEW_KEY_AMBIGUOUS", warnings, StringComparison.Ordinal);
@@ -60,11 +60,11 @@ public sealed class ReviewProfileAuditTests
         var original = Store(Source(tender), tender ? "J5001" : "J123");
         var store = new XerDataStore();
         foreach (string table in original.TableNames.Where(n => n != missing)) store.AddTable(original.GetTable(table)!);
-        var files = await Export(store, tender);
-        Assert.Equal(12, files.Count);
+        var (files, qualityBytes) = await Export(store, tender);
+        Assert.Equal(11, files.Count);
         Assert.Single(Rows(files["02_XER_PROJECT.csv"]));
         Assert.Equal(missing == "TASK" ? 0 : 2, Rows(files["01_XER_TASK.csv"]).Length);
-        Assert.NotEmpty(Rows(files[XerDataQuality.FileName]));
+        Assert.NotEmpty(Rows(qualityBytes));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public sealed class ReviewProfileAuditTests
         string[] duplicate = tasks.Rows[0].Fields.ToArray();
         duplicate[tasks.FieldIndexes["task_id"]] = "T3";
         tasks.AddRow(new DataRow(duplicate, Source(false)));
-        var files = await Export(store, false);
+        var (files, qualityBytes) = await Export(store, false);
         var rows = Rows(files["01_XER_TASK.csv"]);
         Assert.Equal(3, rows.Length);
         Assert.All(rows.Where(r => r["task_code"] == "A100"), row =>
@@ -86,7 +86,7 @@ public sealed class ReviewProfileAuditTests
             Assert.Equal("2026-01-02", row["Finish"]);
         });
         Assert.Equal("2026-01-05", rows.Single(r => r["task_code"] == "A200")["Baseline Finish"]);
-        Assert.Contains("REVIEW_HISTORY_AMBIGUOUS", Encoding.UTF8.GetString(files[XerDataQuality.FileName]), StringComparison.Ordinal);
+        Assert.Contains("REVIEW_HISTORY_AMBIGUOUS", Encoding.UTF8.GetString(qualityBytes), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -96,14 +96,14 @@ public sealed class ReviewProfileAuditTests
     {
         var store = Store(Source(false), "J123");
         Set(store, "TASK", 0, field, value);
-        var files = await Export(store, false);
+        var (files, qualityBytes) = await Export(store, false);
         var tasks = Rows(files["01_XER_TASK.csv"]);
         Assert.Equal(2, tasks.Length);
         var bad = tasks.Single(r => r["task_code"] == "A100");
         Assert.Equal("", bad["Finish_Variance_Previous_Month"]);
         Assert.Equal("", bad["Planned Last Period"]);
         if (field == "remain_drtn_hr_cnt") Assert.Equal("-1", bad["remaining_duration"]);
-        Assert.Contains("REVIEW_HISTORY_INPUT_INVALID", Encoding.UTF8.GetString(files[XerDataQuality.FileName]), StringComparison.Ordinal);
+        Assert.Contains("REVIEW_HISTORY_INPUT_INVALID", Encoding.UTF8.GetString(qualityBytes), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -128,10 +128,11 @@ public sealed class ReviewProfileAuditTests
         var disk = await service.BuildFromXerFilesAsync(request, Path.Combine(temp.Path, "out"));
         foreach (var pair in memory.Files) Assert.Equal(pair.Value, await File.ReadAllBytesAsync(Path.Combine(disk.BundlePath, pair.Key)));
         Assert.Equal(4, Rows(memory.Files["01_XER_TASK.csv"]).Length);
-        var warnings = Rows(memory.Files[XerDataQuality.FileName]);
+        byte[] qualityBytes = XerDataQuality.WriteToBytes(memory.DataQualityTable!, CancellationToken.None);
+        var warnings = Rows(qualityBytes);
         Assert.Equal(2, warnings.Select(r => r["source_namespace"]).Distinct().Count());
         Assert.All(warnings, row => Assert.Equal("repeated.xer", row["FileName"]));
-        Assert.All(sources, s => Assert.DoesNotContain(s.SourceToken, Encoding.UTF8.GetString(memory.Files[XerDataQuality.FileName]), StringComparison.Ordinal));
+        Assert.All(sources, s => Assert.DoesNotContain(s.SourceToken, Encoding.UTF8.GetString(qualityBytes), StringComparison.Ordinal));
     }
 
     private sealed class TemporaryReviewDirectory : IDisposable
@@ -153,9 +154,9 @@ public sealed class ReviewProfileAuditTests
         AddRelationship(store, source, "P1");
         Set(store, "TASKPRED", 0, projectField, "P2");
 
-        var files = await Export(store, tender);
+        var (files, qualityBytes) = await Export(store, tender);
         Assert.Equal("", Assert.Single(Rows(files["06_XER_PREDECESSOR.csv"]))["free_float"]);
-        string warning = Encoding.UTF8.GetString(files[XerDataQuality.FileName]);
+        string warning = Encoding.UTF8.GetString(qualityBytes);
         Assert.Contains(projectField, warning, StringComparison.Ordinal);
         Assert.Contains("P2", warning, StringComparison.Ordinal);
     }
@@ -173,7 +174,7 @@ public sealed class ReviewProfileAuditTests
         AddRelationship(store, source, declaredProject);
         Set(store, "TASKPRED", 0, "proj_id", declaredProject);
 
-        IReadOnlyDictionary<string, byte[]> files = await Export(store, tender);
+        var (files, _) = await Export(store, tender);
 
         Dictionary<string, string> relationship = Assert.Single(Rows(files["06_XER_PREDECESSOR.csv"]));
         string localPredecessorKey = Rows(files["01_XER_TASK.csv"])
@@ -198,9 +199,9 @@ public sealed class ReviewProfileAuditTests
         Set(store, "TASK", 0, "total_float_hr_cnt", "");
         Set(store, "TASK", 1, "total_float_hr_cnt", "");
 
-        var files = await Export(store, tender);
+        var (files, qualityBytes) = await Export(store, tender);
         Assert.Equal("", Assert.Single(Rows(files["06_XER_PREDECESSOR.csv"]))["free_float"]);
-        string warning = Encoding.UTF8.GetString(files[XerDataQuality.FileName]);
+        string warning = Encoding.UTF8.GetString(qualityBytes);
         Assert.Contains(taskField, warning, StringComparison.Ordinal);
         Assert.Contains("MISSING", warning, StringComparison.Ordinal);
     }
@@ -213,7 +214,7 @@ public sealed class ReviewProfileAuditTests
         AddRelationship(store, source, "P1");
         Set(store, "CALENDAR", 0, "day_hr_cnt", "");
 
-        IReadOnlyDictionary<string, byte[]> files = await Export(store, false);
+        var (files, _) = await Export(store, false);
 
         Dictionary<string, string> successor = Rows(files["01_XER_TASK.csv"])
             .Single(row => row["task_code"] == "A200");
@@ -238,7 +239,7 @@ public sealed class ReviewProfileAuditTests
         Set(store, "TASK", 1, "early_end_date", "2026-01-06 17:00");
         Set(store, "TASK", 1, "reend_date", "2026-01-07 17:00");
 
-        IReadOnlyDictionary<string, byte[]> files = await Export(store, tender);
+        var (files, _) = await Export(store, tender);
 
         Dictionary<string, string> predecessor = Rows(files["01_XER_TASK.csv"])
             .Single(row => row["task_code"] == "A100");
@@ -263,7 +264,7 @@ public sealed class ReviewProfileAuditTests
             Set(store, "TASK", 0, "free_float_hr_cnt", "");
             Set(store, "TASK", 0, "remain_drtn_hr_cnt", "");
 
-            IReadOnlyDictionary<string, byte[]> files = await Export(store, tender);
+            var (files, _) = await Export(store, tender);
 
             Dictionary<string, string> task = Rows(files["01_XER_TASK.csv"])
                 .Single(row => row["task_code"] == "A100");
@@ -286,24 +287,24 @@ public sealed class ReviewProfileAuditTests
 
         if (empty)
         {
-            IReadOnlyDictionary<string, byte[]> files = await Export(store, tender);
+            var (files, qualityBytes) = await Export(store, tender);
             IEnumerable<string> expectedFiles = tender
                 ? TenderReviewContract.Tables.Select(table => table.FileName).Append(TenderReviewContract.ManifestFileName)
                 : ProgrammeReviewContract.Tables.Select(table => table.FileName).Append(ProgrammeReviewContract.ManifestFileName);
-            Assert.Equal(expectedFiles.Append(XerDataQuality.FileName).OrderBy(name => name, StringComparer.Ordinal),
+            Assert.Equal(expectedFiles.OrderBy(name => name, StringComparer.Ordinal),
                 files.Keys.OrderBy(name => name, StringComparer.Ordinal));
-            Assert.Empty(Rows(files[XerDataQuality.FileName]));
+            Assert.Empty(Rows(qualityBytes));
             Assert.Equal(string.Join(',', XerDataQuality.Columns.Append("FileName")),
-                Encoding.UTF8.GetString(files[XerDataQuality.FileName]).TrimStart('\uFEFF').Trim());
+                Encoding.UTF8.GetString(qualityBytes).TrimStart('\uFEFF').Trim());
             Assert.Empty(Rows(files["12_XER_RSRC.csv"]));
             Assert.Equal("rsrc_id_key,def_qty_per_hr", Encoding.UTF8.GetString(files["12_XER_RSRC.csv"])
                 .TrimStart('\uFEFF').Trim());
         }
         else
         {
-            var files = await Export(store, tender);
+            var (files, qualityBytes) = await Export(store, tender);
             Assert.Equal("", Assert.Single(Rows(files["12_XER_RSRC.csv"]))["def_qty_per_hr"]);
-            Assert.Contains("def_qty_per_hr", Encoding.UTF8.GetString(files[XerDataQuality.FileName]), StringComparison.Ordinal);
+            Assert.Contains("def_qty_per_hr", Encoding.UTF8.GetString(qualityBytes), StringComparison.Ordinal);
         }
     }
 
@@ -316,10 +317,10 @@ public sealed class ReviewProfileAuditTests
         XerDataStore store = Store(source, tender ? "J5001" : "J123");
         Add(store, source, "PROJWBS", new[] { "wbs_id", "parent_wbs_id", "proj_id", "wbs_name" });
 
-        var files = await Export(store, tender);
+        var (files, qualityBytes) = await Export(store, tender);
         Assert.Empty(Rows(files["03_XER_PROJWBS.csv"]));
         Assert.Equal(2, Rows(files["01_XER_TASK.csv"]).Length);
-        Assert.Contains("03_XER_PROJWBS", Encoding.UTF8.GetString(files[XerDataQuality.FileName]), StringComparison.Ordinal);
+        Assert.Contains("03_XER_PROJWBS", Encoding.UTF8.GetString(qualityBytes), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -495,12 +496,13 @@ public sealed class ReviewProfileAuditTests
                 [discardedSource] = discardedBytes
             });
         Assert.Equal(ProgrammeReviewContract.Tables.Select(table => table.FileName)
-                .Append(ProgrammeReviewContract.ManifestFileName).Append(XerDataQuality.FileName)
+                .Append(ProgrammeReviewContract.ManifestFileName)
                 .OrderBy(name => name, StringComparer.Ordinal),
             parsed.Files.Keys.OrderBy(name => name, StringComparer.Ordinal));
-        Assert.Empty(Rows(parsed.Files[XerDataQuality.FileName]));
+        byte[] qualityBytes = XerDataQuality.WriteToBytes(parsed.DataQualityTable!, CancellationToken.None);
+        Assert.Empty(Rows(qualityBytes));
         Assert.Equal(string.Join(',', XerDataQuality.Columns.Append("FileName")),
-            Encoding.UTF8.GetString(parsed.Files[XerDataQuality.FileName]).TrimStart('\uFEFF').Trim());
+            Encoding.UTF8.GetString(qualityBytes).TrimStart('\uFEFF').Trim());
         Dictionary<string, string> allocation = Assert.Single(Rows(parsed.Files["15_XER_RESOURCE_DISTRIBUTION.csv"]));
         Assert.Equal("8", allocation["monthly_quantity"]);
         Assert.Equal("Retained resource", allocation["rsrc_name"]);
@@ -557,20 +559,20 @@ public sealed class ReviewProfileAuditTests
         return Encoding.UTF8.GetBytes(builder.ToString());
     }
 
-    private static async Task<IReadOnlyDictionary<string, byte[]>> Export(XerDataStore store, bool tender)
+    private static async Task<(IReadOnlyDictionary<string, byte[]> Files, byte[] QualityBytes)> Export(XerDataStore store, bool tender)
     {
         if (tender)
         {
             TenderReviewSource source = TenderReviewNamingTests.Source(0, "audit.xer", "2026-09-05");
             TenderReviewInMemoryBundleResult result = await new TenderReviewBundleService()
                 .BuildFromParsedDataToMemoryAsync(store, TenderReviewNamingTests.Request(new[] { source }));
-            return result.Files;
+            return (result.Files, XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None));
         }
         ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
             "audit.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-01");
         ProgrammeReviewInMemoryBundleResult programme = await new ProgrammeReviewBundleService()
             .BuildFromParsedDataToMemoryAsync(store, ProgrammeReviewNamingTests.Request(new[] { baseline }));
-        return programme.Files;
+        return (programme.Files, XerDataQuality.WriteToBytes(programme.DataQualityTable!, CancellationToken.None));
     }
 
     private static string Source(bool tender) => tender ? TenderReviewNaming.CreateSourceToken(0) : "audit.xer";

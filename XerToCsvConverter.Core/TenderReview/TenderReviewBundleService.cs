@@ -238,13 +238,10 @@ public sealed class TenderReviewBundleService
                 hashes.Add(table.Contract.FileName,
                     TenderReviewCsv.WriteTable(csvPath, table, cancellationToken));
             }
-            byte[] dataQualityBytes = XerDataQuality.WriteToBytes(transformed.DataQualityTable, cancellationToken);
-            File.WriteAllBytes(Path.Combine(stagingPath, XerDataQuality.FileName), dataQualityBytes);
-            hashes.Add(XerDataQuality.FileName, TenderReviewCsv.ComputeSha256(dataQualityBytes));
 
             IReadOnlyList<TenderReviewManifestRow> manifestRows =
-                CreateManifestRows(transformed.Request, transformed.Tables, transformed.DataQualityTable, hashes);
-            ValidateManifestConsistency(transformed.Request, transformed.Tables, transformed.DataQualityTable, hashes, manifestRows);
+                CreateManifestRows(transformed.Request, transformed.Tables, hashes);
+            ValidateManifestConsistency(transformed.Request, transformed.Tables, hashes, manifestRows);
 
             string manifestPath = Path.Combine(stagingPath, TenderReviewContract.ManifestFileName);
             TenderReviewCsv.WriteManifest(manifestPath, manifestRows, cancellationToken);
@@ -266,7 +263,8 @@ public sealed class TenderReviewBundleService
                 new ReadOnlyCollection<TenderReviewManifestRow>(manifestRows.ToList()),
                 new ReadOnlyDictionary<string, string>(hashes))
             {
-                WarningCount = transformed.DataQualityTable.RowCount
+                WarningCount = transformed.DataQualityTable.RowCount,
+                DataQualityTable = transformed.DataQualityTable
             };
         }
         catch (Exception originalError)
@@ -306,13 +304,10 @@ public sealed class TenderReviewBundleService
             hashes.Add(table.Contract.FileName, TenderReviewCsv.ComputeSha256(content));
             await Task.Delay(1, cancellationToken).ConfigureAwait(false);
         }
-        byte[] dataQualityBytes = XerDataQuality.WriteToBytes(transformed.DataQualityTable, cancellationToken);
-        files.Add(XerDataQuality.FileName, dataQualityBytes);
-        hashes.Add(XerDataQuality.FileName, TenderReviewCsv.ComputeSha256(dataQualityBytes));
 
         IReadOnlyList<TenderReviewManifestRow> manifestRows =
-            CreateManifestRows(transformed.Request, transformed.Tables, transformed.DataQualityTable, hashes);
-        ValidateManifestConsistency(transformed.Request, transformed.Tables, transformed.DataQualityTable, hashes, manifestRows);
+            CreateManifestRows(transformed.Request, transformed.Tables, hashes);
+        ValidateManifestConsistency(transformed.Request, transformed.Tables, hashes, manifestRows);
         files.Add(
             TenderReviewContract.ManifestFileName,
             TenderReviewCsv.WriteManifestToBytes(manifestRows, cancellationToken));
@@ -331,17 +326,17 @@ public sealed class TenderReviewBundleService
             new ReadOnlyCollection<TenderReviewManifestRow>(manifestRows.ToList()),
             new ReadOnlyDictionary<string, string>(hashes))
         {
-            WarningCount = transformed.DataQualityTable.RowCount
+            WarningCount = transformed.DataQualityTable.RowCount,
+            DataQualityTable = transformed.DataQualityTable
         };
     }
 
     private static IReadOnlyList<TenderReviewManifestRow> CreateManifestRows(
         ResolvedTenderReviewRequest request,
         IReadOnlyList<TenderReviewOutputTable> tables,
-        XerTable dataQuality,
         IReadOnlyDictionary<string, string> hashes)
     {
-        var rows = new List<TenderReviewManifestRow>(request.Sources.Count * (tables.Count + 1));
+        var rows = new List<TenderReviewManifestRow>(request.Sources.Count * tables.Count);
         foreach (ResolvedTenderReviewSource source in request.Sources.OrderBy(item => item.InputIndex))
         {
             DateOnly dataDate = source.DataDate ?? throw new TenderReviewValidationException(
@@ -349,10 +344,7 @@ public sealed class TenderReviewBundleService
             var artifacts = tables.Select(table => (
                 table.Contract.TableName,
                 table.Contract.FileName,
-                RowCount: table.Rows.LongCount(row => ReferenceEquals(row.Source, source))))
-                .Append((TableName: XerDataQuality.TableName, FileName: XerDataQuality.FileName,
-                    RowCount: dataQuality.Rows.LongCount(row => string.Equals(
-                        row.SourceToken, source.SourceToken, StringComparison.Ordinal))));
+                RowCount: table.Rows.LongCount(row => ReferenceEquals(row.Source, source))));
             foreach (var artifact in artifacts)
             {
                 rows.Add(new TenderReviewManifestRow(
@@ -381,11 +373,10 @@ public sealed class TenderReviewBundleService
     private static void ValidateManifestConsistency(
         ResolvedTenderReviewRequest request,
         IReadOnlyList<TenderReviewOutputTable> tables,
-        XerTable dataQuality,
         IReadOnlyDictionary<string, string> hashes,
         IReadOnlyList<TenderReviewManifestRow> manifestRows)
     {
-        if (manifestRows.Count != request.Sources.Count * (tables.Count + 1))
+        if (manifestRows.Count != request.Sources.Count * tables.Count)
             throw new TenderReviewValidationException("Tender manifest row envelope is invalid.");
 
         foreach (TenderReviewOutputTable table in tables)
@@ -402,19 +393,11 @@ public sealed class TenderReviewBundleService
                     $"Tender manifest CSV hashes are inconsistent for '{table.Contract.TableName}'.");
         }
 
-        TenderReviewManifestRow[] warningRows = manifestRows.Where(row =>
-            string.Equals(row.TableName, XerDataQuality.TableName, StringComparison.Ordinal)).ToArray();
-        if (warningRows.Length != request.Sources.Count
-            || warningRows.Sum(row => row.RowCount) != dataQuality.RowCount
-            || warningRows.Any(row => !string.Equals(
-                row.CsvSha256, hashes[XerDataQuality.FileName], StringComparison.Ordinal)))
-            throw new TenderReviewValidationException("Tender data-quality manifest counts/hashes do not reconcile.");
-
         foreach (ResolvedTenderReviewSource source in request.Sources)
         {
             TenderReviewManifestRow[] sourceRows = manifestRows.Where(row =>
                 string.Equals(row.CanonicalXerFilename, source.CanonicalXerFilename, StringComparison.Ordinal)).ToArray();
-            if (sourceRows.Length != tables.Count + 1
+            if (sourceRows.Length != tables.Count
                 || sourceRows.Any(row => !string.Equals(
                     row.SourceSha256, source.SourceSha256, StringComparison.Ordinal)))
                 throw new TenderReviewValidationException(
@@ -429,7 +412,6 @@ public sealed class TenderReviewBundleService
     private static void ValidateFileEnvelope(IEnumerable<string> actualFileNames)
     {
         string[] expected = TenderReviewContract.Tables.Select(table => table.FileName)
-            .Append(XerDataQuality.FileName)
             .Append(TenderReviewContract.ManifestFileName)
             .Order(StringComparer.Ordinal).ToArray();
         string[] actual = actualFileNames.Order(StringComparer.Ordinal).ToArray();

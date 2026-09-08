@@ -27,7 +27,7 @@ public sealed partial class ResourceCurveProfileTests
         XerDataStore store = ForecastExportStore(source, profile == "programme" ? "J123" : "J5001");
         IReadOnlyDictionary<string, byte[]> files;
         int warningCount;
-        long? manifestWarningCount = null;
+        byte[] qualityBytes;
         if (profile == "standard")
         {
             var service = new ProcessingService();
@@ -35,6 +35,7 @@ public sealed partial class ResourceCurveProfileTests
             var memory = await service.ExportTablesToMemoryWithDiagnosticsAsync(store, names, null, CancellationToken.None);
             warningCount = memory.WarningCount;
             files = memory.Files.ToDictionary(pair => pair.Key + ".csv", pair => pair.Value);
+            qualityBytes = files[XerDataQuality.FileName];
             if (disk)
             {
                 var result = await service.ExportTablesWithDiagnosticsAsync(store, names, output.Path, null, CancellationToken.None);
@@ -49,15 +50,15 @@ public sealed partial class ResourceCurveProfileTests
             var request = ProgrammeReviewNamingTests.Request([baseline]);
             var memory = await service.BuildFromParsedDataToMemoryAsync(store, request);
             warningCount = memory.WarningCount;
-            manifestWarningCount = memory.ManifestRows.Single(row => row.TableName == XerDataQuality.TableName).RowCount;
+            qualityBytes = XerDataQuality.WriteToBytes(memory.DataQualityTable!, CancellationToken.None);
             Assert.All(memory.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
+            Assert.DoesNotContain(memory.ManifestRows, row => row.TableName == XerDataQuality.TableName);
             files = memory.Files;
             if (disk)
             {
                 var result = await service.BuildFromParsedDataAsync(store, request, output.Path);
                 Assert.Equal(warningCount, result.WarningCount);
-                foreach (string name in new[] { DistributionFile, XerDataQuality.FileName })
-                    Assert.Equal(files[name], await File.ReadAllBytesAsync(Path.Combine(result.BundlePath, name)));
+                Assert.Equal(files[DistributionFile], await File.ReadAllBytesAsync(Path.Combine(result.BundlePath, DistributionFile)));
             }
         }
         else
@@ -66,21 +67,20 @@ public sealed partial class ResourceCurveProfileTests
             var request = TenderReviewNamingTests.Request([tenderSource]);
             var memory = await service.BuildFromParsedDataToMemoryAsync(store, request);
             warningCount = memory.WarningCount;
-            manifestWarningCount = memory.ManifestRows.Single(row => row.TableName == XerDataQuality.TableName).RowCount;
+            qualityBytes = XerDataQuality.WriteToBytes(memory.DataQualityTable!, CancellationToken.None);
             Assert.All(memory.ManifestRows, row => Assert.Equal("2.0", row.SchemaVersion));
+            Assert.DoesNotContain(memory.ManifestRows, row => row.TableName == XerDataQuality.TableName);
             files = memory.Files;
             if (disk)
             {
                 var result = await service.BuildFromParsedDataAsync(store, request, output.Path);
                 Assert.Equal(warningCount, result.WarningCount);
-                foreach (string name in new[] { DistributionFile, XerDataQuality.FileName })
-                    Assert.Equal(files[name], await File.ReadAllBytesAsync(Path.Combine(result.BundlePath, name)));
+                Assert.Equal(files[DistributionFile], await File.ReadAllBytesAsync(Path.Combine(result.BundlePath, DistributionFile)));
             }
         }
 
-        Assert.Equal(profile == "standard" ? 3 : 12, files.Count);
+        Assert.Equal(profile == "standard" ? 3 : 11, files.Count);
         Assert.Equal(2, warningCount);
-        if (manifestWarningCount.HasValue) Assert.Equal(2, manifestWarningCount);
         IReadOnlyList<string[]> csv = ReadCsv(files[DistributionFile]);
         Assert.Equal(profile == "standard" ? StandardHeaders : ProfileHeaders, string.Join(',', csv[0]));
         Dictionary<string, string>[] rows = Records(csv);
@@ -94,7 +94,7 @@ public sealed partial class ResourceCurveProfileTests
             Assert.Equal(new[] { 100m, 100m }, Quantities(rows.Where(row => row["distribution_type"] == "Working Hours Fallback")));
         }
 
-        Dictionary<string, string>[] notes = MethodRecords(files[XerDataQuality.FileName]);
+        Dictionary<string, string>[] notes = MethodRecords(qualityBytes);
         Assert.Equal(new[] { "REMAINING_CURVE_ESTIMATED", "REMAINING_CURVE_UNIFORM_FALLBACK" },
             notes.Select(row => row["issue_code"]).Order());
         string prefix = profile switch

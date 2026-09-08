@@ -24,13 +24,12 @@ public sealed class TenderReviewBundleServiceTests
         TenderReviewInMemoryBundleResult result = await new TenderReviewBundleService()
             .BuildFromParsedDataToMemoryAsync(store, request);
 
-        Assert.Equal(12, result.Files.Count);
+        Assert.Equal(11, result.Files.Count);
         Assert.Equal(
             TenderReviewContract.Tables.Select(table => table.FileName)
-                .Append(XerDataQuality.FileName)
                 .Append(TenderReviewContract.ManifestFileName).Order(StringComparer.Ordinal),
             result.Files.Keys.Order(StringComparer.Ordinal));
-        Assert.Equal(22, result.ManifestRows.Count);
+        Assert.Equal(20, result.ManifestRows.Count);
         Assert.All(result.ManifestRows, row =>
         {
             Assert.Equal("2.0", row.SchemaVersion);
@@ -133,7 +132,7 @@ public sealed class TenderReviewBundleServiceTests
             Assert.Equal(2, disk.ManifestRows.Select(row => row.CanonicalXerFilename).Distinct().Count());
             Assert.Single(disk.ManifestRows.Select(row => row.OriginalXerFilename).Distinct());
             Assert.Single(disk.ManifestRows.Select(row => row.SourceSha256).Distinct());
-            Assert.Equal(22, disk.ManifestRows.Count);
+            Assert.Equal(20, disk.ManifestRows.Count);
             foreach (string fileName in memory.Files.Keys)
                 Assert.Equal(memory.Files[fileName], File.ReadAllBytes(Path.Combine(disk.BundlePath, fileName)));
 
@@ -567,7 +566,8 @@ public sealed class TenderReviewBundleServiceTests
         });
         Assert.Equal("clndr_id_key,clndr_name", string.Join(',', ReadCsv(result.Files["10_XER_CALENDAR.csv"])[0]));
         Assert.DoesNotContain("11_XER_CALENDAR_DETAILED.csv", result.Files.Keys);
-        Assert.Equal(12, result.Files.Count);
+        Assert.Equal(11, result.Files.Count);
+        Assert.DoesNotContain(XerDataQuality.FileName, result.Files.Keys);
         Assert.All(result.ManifestRows, row => Assert.Equal("2.0", row.SchemaVersion));
         Assert.Equal(3, result.ManifestRows.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
     }
@@ -581,12 +581,14 @@ public sealed class TenderReviewBundleServiceTests
         AddResourceAssignments(store, source.SourceToken, quantity, quantity);
         var result = await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
             store, TenderReviewNamingTests.Request(new[] { source }));
-        Assert.Equal(12, result.Files.Count);
+        Assert.Equal(11, result.Files.Count);
+        Assert.DoesNotContain(XerDataQuality.FileName, result.Files.Keys);
         var csv = ReadCsv(result.Files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
         Assert.Equal(3, csv.Count);
         Assert.All(csv.Skip(1), row => Assert.Equal(decimal.Parse(quantity, CultureInfo.InvariantCulture),
             decimal.Parse(Row(csv[0], row)["monthly_quantity"], CultureInfo.InvariantCulture)));
-        var diagnostics = ReadCsv(result.Files[XerDataQuality.FileName]);
+        byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+        var diagnostics = ReadCsv(qualityBytes);
         var aggregation = diagnostics.Skip(1).Select(row => Row(diagnostics[0], row))
             .Where(row => row["issue_code"] == "REVIEW_AGGREGATION_UNAVAILABLE").ToArray();
         Assert.Equal(2, aggregation.Length);
@@ -598,7 +600,7 @@ public sealed class TenderReviewBundleServiceTests
             Assert.Equal("", row["allocation_portion"]);
             Assert.Equal("", row["unallocated_remaining_quantity"]);
         });
-        Assert.DoesNotContain(source.SourceToken, Encoding.UTF8.GetString(result.Files[XerDataQuality.FileName]), StringComparison.Ordinal);
+        Assert.DoesNotContain(source.SourceToken, Encoding.UTF8.GetString(qualityBytes), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -618,23 +620,27 @@ public sealed class TenderReviewBundleServiceTests
             var service = new TenderReviewBundleService();
 
             IReadOnlyDictionary<string, byte[]> files;
+            XerTable? qualityTable;
             if (toDisk)
             {
                 var result = await service.BuildFromParsedDataAsync(store, request, root);
                 Assert.Equal(1, result.WarningCount);
+                qualityTable = result.DataQualityTable;
                 files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
             }
             else
             {
                 var result = await service.BuildFromParsedDataToMemoryAsync(store, request);
                 Assert.Equal(1, result.WarningCount);
+                qualityTable = result.DataQualityTable;
                 files = result.Files;
             }
-            Assert.Equal(12, files.Count);
+            Assert.Equal(11, files.Count);
+            Assert.DoesNotContain(XerDataQuality.FileName, files.Keys);
             var csv = ReadCsv(files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
             Assert.Equal(1m, csv.Skip(1).Select(values => Row(csv[0], values))
                 .Sum(row => decimal.Parse(row["monthly_quantity"], CultureInfo.InvariantCulture)));
-            var diagnosticCsv = ReadCsv(files[XerDataQuality.FileName]);
+            var diagnosticCsv = ReadCsv(XerDataQuality.WriteToBytes(qualityTable!, CancellationToken.None));
             var warning = Row(diagnosticCsv[0], Assert.Single(diagnosticCsv.Skip(1)));
             Assert.Equal("REMAINING_PERIOD_INVALID", warning["issue_code"]);
             Assert.Equal("A2", warning["taskrsrc_id"]);
@@ -739,8 +745,10 @@ public sealed class TenderReviewBundleServiceTests
             var result = await new TenderReviewBundleService().BuildFromParsedDataAsync(
                 store, TenderReviewNamingTests.Request(new[] { source }), root);
             Assert.True(result.WarningCount > 0);
-            Assert.Equal(12, Directory.EnumerateFiles(result.BundlePath).Count());
-            Assert.Contains("C1", File.ReadAllText(Path.Combine(result.BundlePath, XerDataQuality.FileName)), StringComparison.Ordinal);
+            Assert.Equal(11, Directory.EnumerateFiles(result.BundlePath).Count());
+            Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(result.BundlePath).Select(Path.GetFileName));
+            byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+            Assert.Contains("C1", Encoding.UTF8.GetString(qualityBytes), StringComparison.Ordinal);
         }
         finally
         {
@@ -877,9 +885,11 @@ public sealed class TenderReviewBundleServiceTests
     {
         var result = await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(
             store, TenderReviewNamingTests.Request(new[] { source }));
-        Assert.Equal(12, result.Files.Count);
+        Assert.Equal(11, result.Files.Count);
+        Assert.DoesNotContain(XerDataQuality.FileName, result.Files.Keys);
         Assert.True(result.WarningCount > 0);
-        return (Encoding.UTF8.GetString(result.Files[XerDataQuality.FileName]), result);
+        byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+        return (Encoding.UTF8.GetString(qualityBytes), result);
     }
 
     private static XerDataStore BuildDataStore(

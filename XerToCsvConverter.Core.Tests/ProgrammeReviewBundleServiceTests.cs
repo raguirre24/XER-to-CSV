@@ -36,8 +36,8 @@ public sealed class ProgrammeReviewBundleServiceTests
                 .BuildFromParsedDataAsync(store, request, root);
 
             Assert.True(Directory.Exists(result.BundlePath));
-            Assert.Equal(12, Directory.EnumerateFiles(result.BundlePath).Count());
-            Assert.Equal(33, result.ManifestRows.Count);
+            Assert.Equal(11, Directory.EnumerateFiles(result.BundlePath).Count());
+            Assert.Equal(30, result.ManifestRows.Count);
             Assert.All(result.ManifestRows, row => Assert.Equal("complete", row.BundleStatus));
             Assert.All(result.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
             Assert.Equal(1, result.ManifestRows.Single(r => r.TableName == "01_XER_TASK" && r.OriginalXerFilename == baseline.OriginalXerFilename).RowCount);
@@ -78,10 +78,9 @@ public sealed class ProgrammeReviewBundleServiceTests
         ProgrammeReviewInMemoryBundleResult result = await new ProgrammeReviewBundleService()
             .BuildFromParsedDataToMemoryAsync(store, request);
 
-        Assert.Equal(12, result.Files.Count);
+        Assert.Equal(11, result.Files.Count);
         Assert.Equal(
             ProgrammeReviewContract.Tables.Select(table => table.FileName)
-                .Append(XerDataQuality.FileName)
                 .Append(ProgrammeReviewContract.ManifestFileName)
                 .Order(StringComparer.Ordinal),
             result.Files.Keys.Order(StringComparer.Ordinal));
@@ -168,8 +167,8 @@ public sealed class ProgrammeReviewBundleServiceTests
         ProgrammeReviewInMemoryBundleResult result = await new ProgrammeReviewBundleService()
             .BuildFromXerBytesAsync(request, uploads);
 
-        Assert.Equal(12, result.Files.Count);
-        Assert.Equal(11, result.ManifestRows.Count);
+        Assert.Equal(11, result.Files.Count);
+        Assert.Equal(10, result.ManifestRows.Count);
         string expectedSourceHash = Convert.ToHexString(SHA256.HashData(xer)).ToLowerInvariant();
         Assert.All(result.ManifestRows, row => Assert.Equal(expectedSourceHash, row.SourceSha256));
         Assert.Single(Encoding.UTF8.GetString(result.Files["01_XER_TASK.csv"])
@@ -351,7 +350,10 @@ public sealed class ProgrammeReviewBundleServiceTests
             var result = await new ProgrammeReviewBundleService().BuildFromParsedDataAsync(store, request, root);
             Assert.True(result.WarningCount > 0);
             Assert.Single(File.ReadLines(Path.Combine(result.BundlePath, "06_XER_PREDECESSOR.csv")).Skip(1));
-            Assert.Contains("06_XER_PREDECESSOR", File.ReadAllText(Path.Combine(result.BundlePath, XerDataQuality.FileName)), StringComparison.Ordinal);
+            Assert.Equal(11, Directory.EnumerateFiles(result.BundlePath).Count());
+            Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(result.BundlePath).Select(Path.GetFileName));
+            byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+            Assert.Contains("06_XER_PREDECESSOR", Encoding.UTF8.GetString(qualityBytes), StringComparison.Ordinal);
         }
         finally
         {
@@ -396,7 +398,10 @@ public sealed class ProgrammeReviewBundleServiceTests
                 store, ProgrammeReviewNamingTests.Request(new[] { baseline }), root);
             Assert.True(result.WarningCount > 0);
             Assert.Single(File.ReadLines(Path.Combine(result.BundlePath, "01_XER_TASK.csv")).Skip(1));
-            Assert.Contains("calendar_id_key", File.ReadAllText(Path.Combine(result.BundlePath, XerDataQuality.FileName)), StringComparison.Ordinal);
+            Assert.Equal(11, Directory.EnumerateFiles(result.BundlePath).Count());
+            Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(result.BundlePath).Select(Path.GetFileName));
+            byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+            Assert.Contains("calendar_id_key", Encoding.UTF8.GetString(qualityBytes), StringComparison.Ordinal);
         }
         finally
         {
@@ -467,7 +472,7 @@ public sealed class ProgrammeReviewBundleServiceTests
             await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
                 new ProgrammeReviewBundleService().BuildFromParsedDataAsync(store, request, root));
 
-            Assert.Equal(12, Directory.EnumerateFiles(first.BundlePath).Count());
+            Assert.Equal(11, Directory.EnumerateFiles(first.BundlePath).Count());
             Assert.Equal(manifestBefore, File.ReadAllText(Path.Combine(first.BundlePath, ProgrammeReviewContract.ManifestFileName)));
             Assert.Single(Directory.EnumerateDirectories(root));
         }
@@ -540,7 +545,7 @@ public sealed class ProgrammeReviewBundleServiceTests
         });
         Assert.Equal("clndr_id_key,clndr_name", string.Join(',', ReadCsv(result.Files["10_XER_CALENDAR.csv"])[0]));
         Assert.DoesNotContain("11_XER_CALENDAR_DETAILED.csv", result.Files.Keys);
-        Assert.Equal(12, result.Files.Count);
+        Assert.Equal(11, result.Files.Count);
         Assert.All(result.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
         Assert.Equal(3, result.ManifestRows.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
     }
@@ -603,10 +608,12 @@ public sealed class ProgrammeReviewBundleServiceTests
 
             IReadOnlyDictionary<string, byte[]> files;
             IReadOnlyList<ProgrammeReviewManifestRow> manifest;
+            XerTable? qualityTable;
             if (toDisk)
             {
                 ProgrammeReviewBundleResult result = await service.BuildFromParsedDataAsync(store, request, root);
                 Assert.Equal(1, result.WarningCount);
+                qualityTable = result.DataQualityTable;
                 files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path)!, File.ReadAllBytes);
                 manifest = result.ManifestRows;
             }
@@ -614,16 +621,18 @@ public sealed class ProgrammeReviewBundleServiceTests
             {
                 ProgrammeReviewInMemoryBundleResult result = await service.BuildFromParsedDataToMemoryAsync(store, request);
                 Assert.Equal(1, result.WarningCount);
+                qualityTable = result.DataQualityTable;
                 files = result.Files;
                 manifest = result.ManifestRows;
                 Assert.Empty(Directory.EnumerateFileSystemEntries(root));
             }
-            Assert.Equal(12, files.Count);
+            Assert.Equal(11, files.Count);
+            Assert.DoesNotContain(XerDataQuality.FileName, files.Keys);
             IReadOnlyList<string[]> allocations = ReadCsv(files["15_XER_RESOURCE_DISTRIBUTION.csv"]);
             int quantityIndex = Array.IndexOf(allocations[0], "monthly_quantity");
             Assert.Equal(3, allocations.Count - 1);
             Assert.Equal(1m, allocations.Skip(1).Sum(row => decimal.Parse(row[quantityIndex], CultureInfo.InvariantCulture)));
-            IReadOnlyList<string[]> quality = ReadCsv(files[XerDataQuality.FileName]);
+            IReadOnlyList<string[]> quality = ReadCsv(XerDataQuality.WriteToBytes(qualityTable!, CancellationToken.None));
             Dictionary<string, string> warning = quality[0].Zip(Assert.Single(quality.Skip(1)))
                 .ToDictionary(pair => pair.First, pair => pair.Second);
             Assert.Equal("REMAINING_PERIOD_INVALID", warning["issue_code"]);
@@ -634,7 +643,7 @@ public sealed class ProgrammeReviewBundleServiceTests
             Assert.Equal("", warning["unallocated_actual_quantity"]);
             Assert.Equal(2m, decimal.Parse(warning["unallocated_remaining_quantity"], CultureInfo.InvariantCulture));
             Assert.Equal("not-a-date", assignments.Rows[1].Fields[assignments.FieldIndexes["restart_date"]]);
-            Assert.Equal(1, manifest.Single(row => row.TableName == XerDataQuality.TableName).RowCount);
+            Assert.DoesNotContain(manifest, row => row.TableName == XerDataQuality.TableName);
             Assert.Equal(3, manifest.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
             Assert.All(manifest, row => Assert.Equal("complete", row.BundleStatus));
         }

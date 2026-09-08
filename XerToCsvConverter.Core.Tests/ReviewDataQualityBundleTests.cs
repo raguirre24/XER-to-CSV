@@ -36,18 +36,16 @@ public sealed class ReviewDataQualityBundleTests
             .BuildFromParsedDataToMemoryAsync(store, ProgrammeReviewNamingTests.Request(new[] { snapshot }));
 
         Assert.Equal(1, result.WarningCount);
-        Assert.Equal(12, result.Files.Count);
+        Assert.Equal(11, result.Files.Count);
+        Assert.DoesNotContain(XerDataQuality.FileName, result.Files.Keys);
         Assert.Equal(10, ProgrammeReviewContract.Tables.Count);
-        Assert.Equal(11, result.ManifestRows.Count);
-        Dictionary<string, string> warning = Assert.Single(ReadRows(result.Files[XerDataQuality.FileName]));
+        Assert.Equal(10, result.ManifestRows.Count);
+        byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+        Dictionary<string, string> warning = Assert.Single(ReadRows(qualityBytes));
         AssertWarning(warning, "CSV::J123::C::BL01", snapshot.OriginalXerFilename);
-        Assert.DoesNotContain("private-parser-occurrence", Encoding.UTF8.GetString(result.Files[XerDataQuality.FileName]));
+        Assert.DoesNotContain("private-parser-occurrence", Encoding.UTF8.GetString(qualityBytes));
         AssertAllocations(result.Files["15_XER_RESOURCE_DISTRIBUTION.csv"], 1);
-        ProgrammeReviewManifestRow manifest = Assert.Single(result.ManifestRows, row => row.TableName == XerDataQuality.TableName);
-        Assert.Equal(1, manifest.RowCount);
-        Assert.Equal("complete", manifest.BundleStatus);
-        Assert.Equal(Hash(result.Files[XerDataQuality.FileName]), manifest.CsvSha256);
-        Assert.Equal(manifest.CsvSha256, result.CsvSha256ByFile[XerDataQuality.FileName]);
+        Assert.DoesNotContain(result.ManifestRows, row => row.TableName == XerDataQuality.TableName);
 
         // Every supplied bad value remains unchanged in the caller's raw data.
         XerTable assignments = store.GetTable("TASKRSRC")!;
@@ -67,17 +65,20 @@ public sealed class ReviewDataQualityBundleTests
         var service = new ProgrammeReviewBundleService();
         ProgrammeReviewInMemoryBundleResult memory = await service.BuildFromParsedDataToMemoryAsync(store, request);
         Assert.Equal(1, memory.WarningCount);
+        byte[] qualityBytes = XerDataQuality.WriteToBytes(memory.DataQualityTable!, CancellationToken.None);
         if (completedRemaining)
-            AssertCompletedRemaining(memory.Files, "CSV::J123::C::BL01", snapshot.OriginalXerFilename, 1);
+            AssertCompletedRemaining(memory.Files, qualityBytes, "CSV::J123::C::BL01", snapshot.OriginalXerFilename, 1);
         string root = NewTempDirectory();
         try
         {
             ProgrammeReviewBundleResult disk = await service.BuildFromParsedDataAsync(store, request, root);
             Assert.Equal(memory.WarningCount, disk.WarningCount);
-            Assert.Equal(12, Directory.EnumerateFiles(disk.BundlePath).Count());
+            Assert.Equal(11, Directory.EnumerateFiles(disk.BundlePath).Count());
+            Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(disk.BundlePath).Select(Path.GetFileName));
             foreach ((string name, byte[] bytes) in memory.Files)
                 Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(disk.BundlePath, name)));
-            Assert.Equal(memory.CsvSha256ByFile[XerDataQuality.FileName], disk.CsvSha256ByFile[XerDataQuality.FileName]);
+            byte[] diskQuality = XerDataQuality.WriteToBytes(disk.DataQualityTable!, CancellationToken.None);
+            Assert.Equal(qualityBytes, diskQuality);
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -94,10 +95,11 @@ public sealed class ReviewDataQualityBundleTests
             .BuildFromParsedDataToMemoryAsync(store, ProgrammeReviewNamingTests.Request(new[] { discarded, retained }));
 
         Assert.Equal(0, result.WarningCount);
-        Assert.Empty(ReadRows(result.Files[XerDataQuality.FileName]));
-        Assert.Equal(11, result.ManifestRows.Count);
+        byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+        Assert.Empty(ReadRows(qualityBytes));
+        Assert.Equal(10, result.ManifestRows.Count);
         Assert.All(result.ManifestRows, row => Assert.Equal(retained.OriginalXerFilename, row.OriginalXerFilename));
-        Assert.Equal(0, result.ManifestRows.Single(row => row.TableName == XerDataQuality.TableName).RowCount);
+        Assert.DoesNotContain(result.ManifestRows, row => row.TableName == XerDataQuality.TableName);
     }
 
     [Theory]
@@ -117,10 +119,12 @@ public sealed class ReviewDataQualityBundleTests
             .BuildFromParsedDataToMemoryAsync(store, request);
 
         Assert.Equal(2, result.WarningCount);
-        Assert.Equal(12, result.Files.Count);
+        Assert.Equal(11, result.Files.Count);
+        Assert.DoesNotContain(XerDataQuality.FileName, result.Files.Keys);
         Assert.Equal(10, TenderReviewContract.Tables.Count);
-        Assert.Equal(22, result.ManifestRows.Count);
-        IReadOnlyList<Dictionary<string, string>> warnings = ReadRows(result.Files[XerDataQuality.FileName]);
+        Assert.Equal(20, result.ManifestRows.Count);
+        byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+        IReadOnlyList<Dictionary<string, string>> warnings = ReadRows(qualityBytes);
         Assert.Equal(2, warnings.Count);
         string[] prefixes = ["CSV::J5001::TENDER::20260210", "CSV::J5001::TENDER::20260211"];
         Assert.Equal(prefixes, warnings.Select(row => row["source_namespace"]).Order(StringComparer.Ordinal));
@@ -130,18 +134,11 @@ public sealed class ReviewDataQualityBundleTests
             else AssertWarning(warning, warning["source_namespace"], "repeated.xer");
         }
         Assert.All(warnings, row => Assert.Equal("1", row["source_row_number"]));
-        Assert.DoesNotContain(first.SourceToken, Encoding.UTF8.GetString(result.Files[XerDataQuality.FileName]));
-        Assert.DoesNotContain(second.SourceToken, Encoding.UTF8.GetString(result.Files[XerDataQuality.FileName]));
+        Assert.DoesNotContain(first.SourceToken, Encoding.UTF8.GetString(qualityBytes));
+        Assert.DoesNotContain(second.SourceToken, Encoding.UTF8.GetString(qualityBytes));
         if (completedRemaining) AssertCompletedAllocations(result.Files["15_XER_RESOURCE_DISTRIBUTION.csv"], 2);
         else AssertAllocations(result.Files["15_XER_RESOURCE_DISTRIBUTION.csv"], 2);
-        TenderReviewManifestRow[] manifest = result.ManifestRows.Where(row => row.TableName == XerDataQuality.TableName).ToArray();
-        Assert.Equal(2, manifest.Length);
-        Assert.All(manifest, row =>
-        {
-            Assert.Equal(1, row.RowCount);
-            Assert.Equal("COMPLETE", row.BundleStatus);
-            Assert.Equal(Hash(result.Files[XerDataQuality.FileName]), row.CsvSha256);
-        });
+        Assert.DoesNotContain(result.ManifestRows, row => row.TableName == XerDataQuality.TableName);
     }
 
     [Theory]
@@ -156,17 +153,20 @@ public sealed class ReviewDataQualityBundleTests
         var service = new TenderReviewBundleService();
         TenderReviewInMemoryBundleResult memory = await service.BuildFromParsedDataToMemoryAsync(store, request);
         Assert.Equal(1, memory.WarningCount);
+        byte[] qualityBytes = XerDataQuality.WriteToBytes(memory.DataQualityTable!, CancellationToken.None);
         if (completedRemaining)
-            AssertCompletedRemaining(memory.Files, "CSV::J5001::TENDER::20260210", source.OriginalXerFilename, 1);
+            AssertCompletedRemaining(memory.Files, qualityBytes, "CSV::J5001::TENDER::20260210", source.OriginalXerFilename, 1);
         string root = NewTempDirectory();
         try
         {
             TenderReviewBundleResult disk = await service.BuildFromParsedDataAsync(store, request, root);
             Assert.Equal(memory.WarningCount, disk.WarningCount);
-            Assert.Equal(12, Directory.EnumerateFiles(disk.BundlePath).Count());
+            Assert.Equal(11, Directory.EnumerateFiles(disk.BundlePath).Count());
+            Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(disk.BundlePath).Select(Path.GetFileName));
             foreach ((string name, byte[] bytes) in memory.Files)
                 Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(disk.BundlePath, name)));
-            Assert.Equal(memory.CsvSha256ByFile[XerDataQuality.FileName], disk.CsvSha256ByFile[XerDataQuality.FileName]);
+            byte[] diskQuality = XerDataQuality.WriteToBytes(disk.DataQualityTable!, CancellationToken.None);
+            Assert.Equal(qualityBytes, diskQuality);
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -182,8 +182,9 @@ public sealed class ReviewDataQualityBundleTests
         ProgrammeReviewInMemoryBundleResult programme = await new ProgrammeReviewBundleService().BuildFromXerBytesAsync(
             ProgrammeReviewNamingTests.Request(new[] { snapshot }), new Dictionary<string, byte[]> { [snapshot.OriginalXerFilename] = bytes });
         Assert.Equal(1, programme.WarningCount);
-        if (completedRemaining) AssertCompletedRemaining(programme.Files, "CSV::J123::C::BL01", "original.xer", 1);
-        else AssertWarning(Assert.Single(ReadRows(programme.Files[XerDataQuality.FileName])), "CSV::J123::C::BL01", "original.xer");
+        byte[] progQuality = XerDataQuality.WriteToBytes(programme.DataQualityTable!, CancellationToken.None);
+        if (completedRemaining) AssertCompletedRemaining(programme.Files, progQuality, "CSV::J123::C::BL01", "original.xer", 1);
+        else AssertWarning(Assert.Single(ReadRows(progQuality)), "CSV::J123::C::BL01", "original.xer");
 
         TenderReviewSource first = TenderReviewNamingTests.Source(0, "original.xer", "2026-02-10") with { SourceSha256 = null };
         TenderReviewSource second = TenderReviewNamingTests.Source(1, "original.xer", "2026-02-11") with { SourceSha256 = null };
@@ -194,12 +195,13 @@ public sealed class ReviewDataQualityBundleTests
                 new TenderReviewSourceBytes { SourceToken = second.SourceToken, Content = bytes }
             });
         Assert.Equal(2, tender.WarningCount);
-        Assert.Equal(2, ReadRows(tender.Files[XerDataQuality.FileName]).Select(row => row["source_namespace"]).Distinct().Count());
-        Assert.All(tender.ManifestRows.Where(row => row.TableName == XerDataQuality.TableName), row => Assert.Equal(Hash(bytes), row.SourceSha256));
+        byte[] tenderQuality = XerDataQuality.WriteToBytes(tender.DataQualityTable!, CancellationToken.None);
+        Assert.Equal(2, ReadRows(tenderQuality).Select(row => row["source_namespace"]).Distinct().Count());
+        Assert.DoesNotContain(tender.ManifestRows, row => row.TableName == XerDataQuality.TableName);
         if (completedRemaining)
         {
             AssertCompletedAllocations(tender.Files["15_XER_RESOURCE_DISTRIBUTION.csv"], 2);
-            Assert.All(ReadRows(tender.Files[XerDataQuality.FileName]), row =>
+            Assert.All(ReadRows(tenderQuality), row =>
                 AssertRemainingWarning(row, row["source_namespace"], "original.xer"));
         }
     }
@@ -218,6 +220,7 @@ public sealed class ReviewDataQualityBundleTests
             File.WriteAllBytes(inputPath, bytes);
             string outputRoot = Path.Combine(root, "output");
             IReadOnlyDictionary<string, byte[]> browserFiles;
+            byte[] browserQuality;
             string bundlePath;
             if (tender)
             {
@@ -236,11 +239,12 @@ public sealed class ReviewDataQualityBundleTests
                 TenderReviewBundleResult disk = await service.BuildFromXerFilesAsync(request, outputRoot);
                 Assert.Equal(2, browser.WarningCount);
                 Assert.Equal(browser.WarningCount, disk.WarningCount);
-                Assert.All(disk.ManifestRows.Where(row => row.TableName == XerDataQuality.TableName), row => Assert.Equal(1, row.RowCount));
+                Assert.DoesNotContain(disk.ManifestRows, row => row.TableName == XerDataQuality.TableName);
                 browserFiles = browser.Files;
+                browserQuality = XerDataQuality.WriteToBytes(browser.DataQualityTable!, CancellationToken.None);
                 bundlePath = disk.BundlePath;
                 AssertCompletedAllocations(browserFiles["15_XER_RESOURCE_DISTRIBUTION.csv"], 2);
-                Assert.Equal(2, ReadRows(browserFiles[XerDataQuality.FileName]).Select(row => row["source_namespace"]).Distinct().Count());
+                Assert.Equal(2, ReadRows(browserQuality).Select(row => row["source_namespace"]).Distinct().Count());
             }
             else
             {
@@ -254,10 +258,12 @@ public sealed class ReviewDataQualityBundleTests
                 Assert.Equal(1, browser.WarningCount);
                 Assert.Equal(browser.WarningCount, disk.WarningCount);
                 browserFiles = browser.Files;
+                browserQuality = XerDataQuality.WriteToBytes(browser.DataQualityTable!, CancellationToken.None);
                 bundlePath = disk.BundlePath;
-                AssertCompletedRemaining(browserFiles, "CSV::J123::C::BL01", original, 1);
+                AssertCompletedRemaining(browserFiles, browserQuality, "CSV::J123::C::BL01", original, 1);
             }
-            Assert.Equal(12, Directory.EnumerateFiles(bundlePath).Count());
+            Assert.Equal(11, Directory.EnumerateFiles(bundlePath).Count());
+            Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(bundlePath).Select(Path.GetFileName));
             foreach ((string name, byte[] expected) in browserFiles)
                 Assert.Equal(expected, File.ReadAllBytes(Path.Combine(bundlePath, name)));
             Assert.Equal(bytes, File.ReadAllBytes(inputPath));
@@ -279,10 +285,13 @@ public sealed class ReviewDataQualityBundleTests
 
         Assert.Equal(0, programme.WarningCount);
         Assert.Equal(0, tender.WarningCount);
-        Assert.Equal(programme.Files[XerDataQuality.FileName], tender.Files[XerDataQuality.FileName]);
-        Assert.Empty(ReadRows(programme.Files[XerDataQuality.FileName]));
-        Assert.Equal(XerDataQuality.Columns.Append("FileName"), ReadHeader(programme.Files[XerDataQuality.FileName]));
-        Assert.Equal(0, tender.ManifestRows.Single(row => row.TableName == XerDataQuality.TableName).RowCount);
+        byte[] progQuality = XerDataQuality.WriteToBytes(programme.DataQualityTable!, CancellationToken.None);
+        byte[] tenderQuality = XerDataQuality.WriteToBytes(tender.DataQualityTable!, CancellationToken.None);
+        Assert.Equal(progQuality, tenderQuality);
+        Assert.Empty(ReadRows(progQuality));
+        Assert.Equal(XerDataQuality.Columns.Append("FileName"), ReadHeader(progQuality));
+        Assert.DoesNotContain(tender.ManifestRows, row => row.TableName == XerDataQuality.TableName);
+        Assert.DoesNotContain(programme.ManifestRows, row => row.TableName == XerDataQuality.TableName);
     }
 
     [Theory]
@@ -301,12 +310,14 @@ public sealed class ReviewDataQualityBundleTests
         try
         {
             string path;
+            byte[] qualityBytes;
             if (tender)
             {
                 TenderReviewBundleResult result = await new TenderReviewBundleService().BuildFromParsedDataAsync(
                     store, TenderReviewNamingTests.Request(new[] { source }), root);
                 Assert.Equal(2, result.WarningCount);
                 path = result.BundlePath;
+                qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
             }
             else
             {
@@ -314,9 +325,11 @@ public sealed class ReviewDataQualityBundleTests
                     store, ProgrammeReviewNamingTests.Request(new[] { snapshot }), root);
                 Assert.Equal(2, result.WarningCount);
                 path = result.BundlePath;
+                qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
             }
-            Assert.Equal(12, Directory.EnumerateFiles(path).Count());
-            IReadOnlyList<Dictionary<string, string>> warnings = ReadRows(File.ReadAllBytes(Path.Combine(path, XerDataQuality.FileName)));
+            Assert.Equal(11, Directory.EnumerateFiles(path).Count());
+            Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(path).Select(Path.GetFileName));
+            IReadOnlyList<Dictionary<string, string>> warnings = ReadRows(qualityBytes);
             Assert.Equal(new[] { "Actual", "Remaining" }, warnings.Select(row => row["allocation_portion"]));
             Assert.All(warnings, row => Assert.Equal("1", row["source_row_number"]));
             Assert.Equal("", warnings[0]["unallocated_remaining_quantity"]);
@@ -347,13 +360,25 @@ public sealed class ReviewDataQualityBundleTests
             : new Input(snapshot.OriginalXerFilename, "private-quantity", snapshot.OriginalXerFilename, CompletedRemaining: true));
         XerTable assignments = store.GetTable("TASKRSRC")!;
         assignments.Rows[0].Fields[assignments.FieldIndexes["remain_qty"]] = rawQuantity;
-        IReadOnlyDictionary<string, byte[]> files = tender
-            ? (await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(store,
-                TenderReviewNamingTests.Request(new[] { source }))).Files
-            : (await new ProgrammeReviewBundleService().BuildFromParsedDataToMemoryAsync(store,
-                ProgrammeReviewNamingTests.Request(new[] { snapshot }))).Files;
 
-        Dictionary<string, string> warning = Assert.Single(ReadRows(files[XerDataQuality.FileName]));
+        IReadOnlyDictionary<string, byte[]> files;
+        byte[] qualityBytes;
+        if (tender)
+        {
+            var result = await new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(store,
+                TenderReviewNamingTests.Request(new[] { source }));
+            files = result.Files;
+            qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+        }
+        else
+        {
+            var result = await new ProgrammeReviewBundleService().BuildFromParsedDataToMemoryAsync(store,
+                ProgrammeReviewNamingTests.Request(new[] { snapshot }));
+            files = result.Files;
+            qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
+        }
+
+        Dictionary<string, string> warning = Assert.Single(ReadRows(qualityBytes));
         Assert.Equal("Remaining", warning["allocation_portion"]);
         Assert.Equal("REMAINING_QUANTITY_INVALID", warning["issue_code"]);
         Assert.Equal(rawQuantity, warning["remain_qty"]);
@@ -384,11 +409,12 @@ public sealed class ReviewDataQualityBundleTests
         Assert.Equal(5.2506m, decimal.Parse(row["unallocated_actual_quantity"], CultureInfo.InvariantCulture));
     }
 
-    private static void AssertCompletedRemaining(IReadOnlyDictionary<string, byte[]> files, string prefix, string original, int sources)
+    private static void AssertCompletedRemaining(IReadOnlyDictionary<string, byte[]> files, byte[] qualityBytes, string prefix, string original, int sources)
     {
-        Assert.Equal(12, files.Count);
-        Assert.Equal(XerDataQuality.Columns.Append("FileName"), ReadHeader(files[XerDataQuality.FileName]));
-        AssertRemainingWarning(Assert.Single(ReadRows(files[XerDataQuality.FileName])), prefix, original);
+        Assert.Equal(11, files.Count);
+        Assert.DoesNotContain(XerDataQuality.FileName, files.Keys);
+        Assert.Equal(XerDataQuality.Columns.Append("FileName"), ReadHeader(qualityBytes));
+        AssertRemainingWarning(Assert.Single(ReadRows(qualityBytes)), prefix, original);
         AssertCompletedAllocations(files["15_XER_RESOURCE_DISTRIBUTION.csv"], sources);
     }
 

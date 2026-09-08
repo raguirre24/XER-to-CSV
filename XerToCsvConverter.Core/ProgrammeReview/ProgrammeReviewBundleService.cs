@@ -254,18 +254,14 @@ public sealed class ProgrammeReviewBundleService
                 string csvPath = Path.Combine(stagingPath, table.Contract.FileName);
                 hashes[table.Contract.FileName] = ProgrammeReviewCsv.WriteTable(csvPath, table, cancellationToken);
             }
-            byte[] dataQualityBytes = XerDataQuality.WriteToBytes(transformer.DataQualityTable, cancellationToken);
-            File.WriteAllBytes(Path.Combine(stagingPath, XerDataQuality.FileName), dataQualityBytes);
-            hashes.Add(XerDataQuality.FileName, ProgrammeReviewCsv.ComputeSha256(dataQualityBytes));
 
             IReadOnlyList<ProgrammeReviewManifestRow> manifestRows =
-                CreateManifestRows(request, tables, transformer.DataQualityTable, hashes);
+                CreateManifestRows(request, tables, hashes);
 
             string manifestPath = Path.Combine(stagingPath, ProgrammeReviewContract.ManifestFileName);
             ProgrammeReviewCsv.WriteManifest(manifestPath, manifestRows, cancellationToken);
 
             string[] expectedFiles = ProgrammeReviewContract.Tables.Select(t => t.FileName)
-                .Append(XerDataQuality.FileName)
                 .Append(ProgrammeReviewContract.ManifestFileName)
                 .Order(StringComparer.Ordinal)
                 .ToArray();
@@ -283,7 +279,8 @@ public sealed class ProgrammeReviewBundleService
                 new ReadOnlyCollection<ProgrammeReviewManifestRow>(manifestRows.ToList()),
                 new ReadOnlyDictionary<string, string>(hashes))
             {
-                WarningCount = transformer.DataQualityTable.RowCount
+                WarningCount = transformer.DataQualityTable.RowCount,
+                DataQualityTable = transformer.DataQualityTable
             };
         }
         catch (Exception originalError)
@@ -324,19 +321,15 @@ public sealed class ProgrammeReviewBundleService
             hashes.Add(table.Contract.FileName, ProgrammeReviewCsv.ComputeSha256(content));
             await Task.Delay(1, cancellationToken).ConfigureAwait(false);
         }
-        byte[] dataQualityBytes = XerDataQuality.WriteToBytes(transformer.DataQualityTable, cancellationToken);
-        files.Add(XerDataQuality.FileName, dataQualityBytes);
-        hashes.Add(XerDataQuality.FileName, ProgrammeReviewCsv.ComputeSha256(dataQualityBytes));
 
         IReadOnlyList<ProgrammeReviewManifestRow> manifestRows =
-            CreateManifestRows(request, tables, transformer.DataQualityTable, hashes);
+            CreateManifestRows(request, tables, hashes);
         files.Add(
             ProgrammeReviewContract.ManifestFileName,
             ProgrammeReviewCsv.WriteManifestToBytes(manifestRows, cancellationToken));
         await Task.Delay(1, cancellationToken).ConfigureAwait(false);
 
         string[] expectedFiles = ProgrammeReviewContract.Tables.Select(t => t.FileName)
-            .Append(XerDataQuality.FileName)
             .Append(ProgrammeReviewContract.ManifestFileName)
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -351,27 +344,24 @@ public sealed class ProgrammeReviewBundleService
             new ReadOnlyCollection<ProgrammeReviewManifestRow>(manifestRows.ToList()),
             new ReadOnlyDictionary<string, string>(hashes))
         {
-            WarningCount = transformer.DataQualityTable.RowCount
+            WarningCount = transformer.DataQualityTable.RowCount,
+            DataQualityTable = transformer.DataQualityTable
         };
     }
 
     private static IReadOnlyList<ProgrammeReviewManifestRow> CreateManifestRows(
         ResolvedProgrammeReviewRequest request,
         IReadOnlyList<ProgrammeReviewOutputTable> tables,
-        XerTable dataQuality,
         IReadOnlyDictionary<string, string> hashes)
     {
-        var manifestRows = new List<ProgrammeReviewManifestRow>(request.Snapshots.Count * (tables.Count + 1));
+        var manifestRows = new List<ProgrammeReviewManifestRow>(request.Snapshots.Count * tables.Count);
         foreach (ResolvedProgrammeReviewSnapshot snapshot in request.Snapshots
             .OrderBy(s => s.CanonicalXerFilename, StringComparer.Ordinal))
         {
             var artifacts = tables.Select(table => (
                 table.Contract.TableName,
                 table.Contract.FileName,
-                RowCount: table.Rows.LongCount(row => ReferenceEquals(row.Snapshot, snapshot))))
-                .Append((TableName: XerDataQuality.TableName, FileName: XerDataQuality.FileName,
-                    RowCount: dataQuality.Rows.LongCount(row => string.Equals(
-                        row.SourceFilename, snapshot.OriginalXerFilename, StringComparison.OrdinalIgnoreCase))));
+                RowCount: table.Rows.LongCount(row => ReferenceEquals(row.Snapshot, snapshot))));
             foreach (var artifact in artifacts)
             {
                 manifestRows.Add(new ProgrammeReviewManifestRow(

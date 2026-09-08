@@ -58,6 +58,7 @@ public sealed record TenderReviewBundleResult(
     IReadOnlyDictionary<string, string> CsvSha256ByFile)
 {
     public int WarningCount { get; init; }
+    public XerTable? DataQualityTable { get; init; }
 }
 
 public sealed record TenderReviewInMemoryBundleResult(
@@ -67,6 +68,7 @@ public sealed record TenderReviewInMemoryBundleResult(
     IReadOnlyDictionary<string, string> CsvSha256ByFile)
 {
     public int WarningCount { get; init; }
+    public XerTable? DataQualityTable { get; init; }
 }
 
 public sealed class TenderReviewValidationException : InvalidOperationException

@@ -357,6 +357,7 @@ public sealed partial class ResourceCurveProfileTests
         }
 
         IReadOnlyDictionary<string, byte[]> files;
+        byte[] qualityBytes;
         switch (profile)
         {
             case "programme":
@@ -366,12 +367,14 @@ public sealed partial class ResourceCurveProfileTests
                 {
                     var result = await programme.BuildFromParsedDataAsync(store, programmeRequest, output.Path);
                     Assert.Equal(1, result.WarningCount);
+                    qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
                     files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
                 }
                 else
                 {
                     var result = await programme.BuildFromParsedDataToMemoryAsync(store, programmeRequest);
                     Assert.Equal(1, result.WarningCount);
+                    qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
                     files = result.Files;
                 }
                 break;
@@ -382,12 +385,14 @@ public sealed partial class ResourceCurveProfileTests
                 {
                     var result = await tender.BuildFromParsedDataAsync(store, tenderRequest, output.Path);
                     Assert.Equal(1, result.WarningCount);
+                    qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
                     files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
                 }
                 else
                 {
                     var result = await tender.BuildFromParsedDataToMemoryAsync(store, tenderRequest);
                     Assert.Equal(1, result.WarningCount);
+                    qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
                     files = result.Files;
                 }
                 break;
@@ -399,20 +404,22 @@ public sealed partial class ResourceCurveProfileTests
                     var result = await standard.ExportTablesWithDiagnosticsAsync(store, tables, output.Path, null, CancellationToken.None);
                     Assert.Equal(1, result.WarningCount);
                     files = result.Files.ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
+                    qualityBytes = files[XerDataQuality.FileName];
                 }
                 else
                 {
                     var result = await standard.ExportTablesToMemoryWithDiagnosticsAsync(store, tables, null, CancellationToken.None);
                     Assert.Equal(1, result.WarningCount);
                     files = result.Files.ToDictionary(pair => pair.Key + ".csv", pair => pair.Value);
+                    qualityBytes = files[XerDataQuality.FileName];
                 }
                 break;
         }
 
-        Assert.Equal(profile == "standard" ? 3 : 12, files.Count);
+        Assert.Equal(profile == "standard" ? 3 : 11, files.Count);
         Dictionary<string, string>[] allocations = Records(ReadCsv(files[DistributionFile]));
         Assert.Equal(new[] { 80m, 20m }, Quantities(allocations));
-        IReadOnlyList<string[]> diagnosticCsv = ReadCsv(files[XerDataQuality.FileName]);
+        IReadOnlyList<string[]> diagnosticCsv = ReadCsv(qualityBytes);
         string[] diagnosticValues = Assert.Single(diagnosticCsv.Skip(1));
         var warning = diagnosticCsv[0].Zip(diagnosticValues).ToDictionary(pair => pair.First, pair => pair.Second);
         Assert.Equal("REMAINING_PROFILE_INVALID", warning["issue_code"]);

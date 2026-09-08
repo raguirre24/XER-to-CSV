@@ -61,6 +61,7 @@ public sealed record ProgrammeReviewBundleResult(
     IReadOnlyDictionary<string, string> CsvSha256ByFile)
 {
     public int WarningCount { get; init; }
+    public XerTable? DataQualityTable { get; init; }
 }
 
 public sealed record ProgrammeReviewInMemoryBundleResult(
@@ -70,6 +71,7 @@ public sealed record ProgrammeReviewInMemoryBundleResult(
     IReadOnlyDictionary<string, string> CsvSha256ByFile)
 {
     public int WarningCount { get; init; }
+    public XerTable? DataQualityTable { get; init; }
 }
 
 public sealed class ProgrammeReviewValidationException : InvalidOperationException
