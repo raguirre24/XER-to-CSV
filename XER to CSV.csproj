@@ -25,6 +25,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="OLD_ENHANCED_TABLES_CODE_METHODS.cs" />
+    <Compile Remove="artifacts\**" />
     <Compile Remove="XerToCsvConverter.Core\**" />
     <Compile Remove="XerToCsvConverter.Web\**" />
     <Compile Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />

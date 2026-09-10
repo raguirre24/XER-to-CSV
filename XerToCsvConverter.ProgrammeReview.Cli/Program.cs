@@ -67,7 +67,9 @@ static async Task<int> RunAsync(string[] args)
                 request, Path.GetFullPath(outputRoot), progress, cancellation.Token);
             if (result.WarningCount > 0)
                 Console.Error.WriteLine($"Programme Review bundle completed with warnings: {result.WarningCount} data-quality issue(s). " +
-                                        "See XER_DATA_QUALITY.csv in the bundle for affected tables and fields, original source values, and any unallocated actual or remaining quantities.");
+                                        "Source diagnostics follow on stderr; the bundle contains ten report CSV files and the manifest only.");
+            foreach (string message in XerToCsvConverter.XerDataQuality.GetMessages(result.DataQualityTable))
+                Console.Error.WriteLine(message);
             Console.WriteLine(result.BundlePath);
             return 0;
         }

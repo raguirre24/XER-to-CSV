@@ -28,7 +28,7 @@ public sealed class TenderReviewContractTests
             ["15_XER_RESOURCE_DISTRIBUTION"] = "task_id_key,rsrc_id_key,is_actual,distribution_month,monthly_quantity,rsrc_name,rsrc_type,unit,ProjectCode"
         };
 
-        Assert.Equal("2.0", TenderReviewContract.SchemaVersion);
+        Assert.Equal("3.0", TenderReviewContract.SchemaVersion);
         Assert.Equal("tender_review", TenderReviewContract.BundleProfile);
         Assert.Equal("COMPLETE", TenderReviewContract.CompleteStatus);
         Assert.Equal(expectedFiles, TenderReviewContract.Tables.Select(table => table.FileName));
@@ -45,7 +45,7 @@ public sealed class TenderReviewContractTests
     public void Manifest_header_is_exact_and_ordered()
     {
         Assert.Equal(
-            "schema_version,bundle_profile,bundle_id,bundle_status,parser_version,project_code,project_name,original_xer_filename,canonical_xer_filename,status_date,update_date,data_date,source_sha256,table_name,row_count,csv_sha256,exported_at_utc",
+            "schema_version,bundle_profile,bundle_id,bundle_status,parser_version,project_code,project_name,project_state,original_xer_filename,canonical_xer_filename,status_date,update_date,data_date,source_sha256,table_name,row_count,csv_sha256,exported_at_utc",
             string.Join(',', TenderReviewContract.ManifestColumns));
     }
 

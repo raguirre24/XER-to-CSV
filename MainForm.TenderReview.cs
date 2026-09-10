@@ -27,7 +27,7 @@ public partial class MainForm
         btnExportTenderReview.Click += BtnExportTenderReview_Click;
         toolTip.SetToolTip(
             btnExportTenderReview,
-            "Create the versioned ten-table Tender Review bundle with a data-quality companion and audit manifest");
+            "Create the versioned ten-table Tender Review bundle and audit manifest; source diagnostics appear in the activity log");
         ApplyButtonStyle(
             btnExportTenderReview,
             UiTheme.Accent,
@@ -83,7 +83,8 @@ public partial class MainForm
         Directory.CreateDirectory(tempDirectory);
         try
         {
-            File.WriteAllText(xerPath, "%T\tPROJECT\r\n%F\tproj_id\r\n%R\t1\r\n%E\r\n");
+            File.WriteAllText(xerPath,
+                "%T\tPROJECT\r\n%F\tproj_id\tproj_short_name\tstate\r\n%R\t1\tQAC000623-01-02\tNSW\r\n%E\r\n");
             var frozenLocalDate = new DateOnly(2026, 9, 5);
             using var dialog = new TenderReviewExportDialog(
                 [xerPath, xerPath],
@@ -104,6 +105,8 @@ public partial class MainForm
             dialog.SetIdentityForTesting(" qac000623-01-02 Étape/港湾 ", "Tender smoke project");
             if (!dialog.TryBuildRequestForTesting(out TenderReviewBundleRequest? request) || request is null)
                 throw new InvalidOperationException("The Windows Tender dialog could not create its Core request.");
+            if (request.State != string.Empty)
+                throw new InvalidOperationException("The Windows Tender dialog inferred State from the XER instead of leaving it unknown.");
             if (!string.Equals(request.ProjectCode, "QAC000623-01-02 ÉTAPE/港湾", StringComparison.Ordinal)
                 || request.Sources.Count != 2
                 || !string.Equals(request.Sources[0].SourceToken, secondToken, StringComparison.Ordinal)
@@ -111,6 +114,21 @@ public partial class MainForm
                 || !string.Equals(request.Sources[0].XerFilePath, request.Sources[1].XerFilePath, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
                     "The Windows Tender request did not preserve edited dates, stable tokens, order, or repeated paths.");
+            dialog.SetIdentityForTesting("QAC000623", "NE Part B");
+            dialog.SetStateForTesting(" Queensland ");
+            if (!dialog.TryBuildRequestForTesting(out TenderReviewBundleRequest? mappedRequest)
+                || mappedRequest?.ProjectCode != "QAC000623" || mappedRequest.State != "QLD")
+                throw new InvalidOperationException(
+                    "The Windows Tender dialog did not preserve the reporting code and canonical manual State.");
+            foreach (string? state in new string?[] { null, string.Empty, " \t ", " Custom / Region " })
+            {
+                dialog.SetStateForTesting(state);
+                if (!dialog.TryBuildRequestForTesting(out TenderReviewBundleRequest? stateRequest)
+                    || stateRequest?.State != TenderReviewNaming.NormalizeState(state))
+                    throw new InvalidOperationException("The Windows Tender dialog rejected an optional or custom State.");
+            }
+            if (mappedRequest.State != "QLD")
+                throw new InvalidOperationException("Editing State changed an already frozen Tender request.");
         }
         finally
         {
@@ -165,10 +183,12 @@ public partial class MainForm
             string summary = $"Tender Review bundle {completion}: {result.BundleId}. " +
                              $"{result.ManifestRows.Count} manifest rows; {stopwatch.Elapsed.TotalSeconds:F2}s." +
                              (result.WarningCount > 0
-                                 ? $" {result.WarningCount} data-quality issue(s); see XER_DATA_QUALITY.csv for affected tables and fields, original source values, and any unallocated actual or remaining quantities."
+                                 ? $" {result.WarningCount} data-quality issue(s); see the activity log for source diagnostics."
                                  : string.Empty);
             UpdateStatus(summary);
             LogActivity(summary);
+            foreach (string message in XerDataQuality.GetMessages(result.DataQualityTable))
+                LogActivity(message);
             LogActivity("Bundle path: " + result.BundlePath);
             ShowTenderReviewComplete(result);
         }
@@ -249,7 +269,7 @@ public partial class MainForm
         bool hasWarnings = result.WarningCount > 0;
         string completion = hasWarnings
             ? $"Tender Review bundle completed with warnings.\n\n" +
-              $"{result.WarningCount} data-quality issue(s). See XER_DATA_QUALITY.csv for affected tables and fields, original source values, and any unallocated actual or remaining quantities.\n\n"
+              $"{result.WarningCount} data-quality issue(s). Source diagnostics are shown in the activity log; the bundle contains ten report CSV files and the manifest only.\n\n"
             : "Tender Review bundle created successfully.\n\n";
         DialogResult open = MessageBox.Show(
             this,

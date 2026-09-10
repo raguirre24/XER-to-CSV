@@ -54,12 +54,12 @@ foreach ($helper in @('fnXerCsvProjectList','fnXerCsvProjectToken','fnXerCsvProj
 Assert-Check ($programmeText -notmatch 'SupportedSchemaVersions|RecommendedSchemaVersion|bundle\[SchemaVersion\]\s*=\s*"[123]\.0"') 'Programme retains a legacy schema path.'
 Assert-Check ($programmeText -match 'RequiredSchemaVersion = "4\.0"') 'Programme current-only gate is not 4.0.'
 Assert-Check ($programmeText -match 'RawVersions\{0\} = RequiredSchemaVersion') 'Programme does not force raw manifest version validation.'
-Assert-Check ($tenderText -match 'SchemaVersions\{0\} <> "2\.0"') 'Tender current-only gate is not 2.0.'
+Assert-Check ($tenderText -match 'SchemaVersions\{0\} <> "3\.0"') 'Tender current-only gate is not 3.0.'
 Assert-Check ($tenderText -match 'BundleProfiles\{0\} <> "tender_review"') 'Tender profile discriminator is not required.'
-Assert-Check ($tenderText -notmatch 'SchemaVersions\{0\} <> "1\.0"') 'Tender retains a legacy version gate.'
+Assert-Check ($tenderText -notmatch 'SchemaVersions\{0\} <> "[12]\.0"') 'Tender retains a legacy version gate.'
 
 $fixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/J5001_C_BL01_2026-01-31.xer') -Raw
-$names = @('J5001', 'QAC000623-01-02', 'NE Part B', 'Māori 工程 Étage 2', '../North\South:Part|B%25', 'North, "Section B"', ('A' * 260 + ' Māori/Part B'))
+$names = @('J5001', 'C5001', '5001', 'CIVIL', 'JIVIL', 'QAC11111', 'QAC000623-01-02', 'NE Part B', 'NE  Part B', 'Māori 工程 Étage 2', '../North\South:Part|B%25', 'North, "Section B"', ('A' * 260 + ' Māori/Part B'))
 $summaries = @()
 foreach ($profile in @('Programme','Tender')) {
     $tender = $profile -eq 'Tender'
@@ -87,6 +87,7 @@ foreach ($profile in @('Programme','Tender')) {
         $xer = [Text.Encoding]::UTF8.GetBytes($fixture.Replace("`tJ5001`t", "`t$normalised`t"))
         $common = @{ project_code = $normalised; project_name = 'Synthetic loader contract fixture'; parser_version = 'loader-contract-check'; exported_at_utc = '2026-09-10T00:00:00Z' }
         if ($tender) {
+            $common.state = ' Queensland '
             # Repeated filenames and identical bytes must retain two independent stages.
             $common.sources = @(
                 @{ source_token = 'first'; original_xer_filename = 'same.xer'; status_date = '2026-01-31' },
@@ -132,6 +133,9 @@ foreach ($profile in @('Programme','Tender')) {
             }
         }
         if ($tender) {
+            Assert-Check (@($manifest.Rows | Where-Object { $_.project_state -cne 'QLD' }).Count -eq 0) 'Tender manifest omitted or changed manual State.'
+            $projectCsv = Get-Csv $result.Files['02_XER_PROJECT.csv']
+            Assert-Check (@($projectCsv.Rows | Where-Object { $_.state -cne 'QLD' }).Count -eq 0) 'Tender table 02 does not mirror manual State.'
             Assert-Check ($manifest.Rows.Count -eq 20) 'Tender collapsed repeated input stages.'
             Assert-Check (@($manifest.Rows.original_xer_filename | Sort-Object -Unique).Count -eq 1) 'Tender renamed original provenance.'
             Assert-Check (@($manifest.Rows.canonical_xer_filename | Sort-Object -Unique).Count -eq 2) 'Tender stages do not have separate canonical identities.'

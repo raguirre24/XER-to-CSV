@@ -20,6 +20,14 @@ $profiles = @(
     @{ Name = 'Tender Review'; Pattern = '(?s)## Exact Tender Review headers(.*?)## Eight shared review table headers'; Tables = [XerToCsvConverter.TenderReview.TenderReviewContract]::Tables }
 )
 $checkedContracts = 0
+$tenderManifestHeader = [regex]::Match($contractText, '(?m)^schema_version,bundle_profile,[^\r\n]+').Value
+if ($tenderManifestHeader -cne ([XerToCsvConverter.TenderReview.TenderReviewContract]::ManifestColumns -join ',')) {
+    throw 'Documented Tender manifest header/order differs from Core.'
+}
+if ([XerToCsvConverter.TenderReview.TenderReviewContract]::SchemaVersion -cne '3.0' -or
+    $contractText -notmatch '\| Versioned report contract \| None \| 4\.0 \| 3\.0 \|') {
+    throw 'Documented current profile versions disagree with Core.'
+}
 foreach ($profile in $profiles) {
     $section = [regex]::Match($contractText, $profile.Pattern).Groups[1].Value
     $task = [regex]::Match($section, '(?m)^status_code,[^\r\n]+').Value
@@ -64,4 +72,4 @@ foreach ($file in $files) {
         $linkCount++
     }
 }
-Write-Output "Passed: $checkedContracts exact numbered review table contracts, additive 35-column diagnostic 1.2 companion header, $linkCount relative reference links, and skill whitespace."
+Write-Output "Passed: $checkedContracts exact numbered review table contracts, Tender 3.0 18-column manifest, additive 35-column diagnostic 1.2 companion header, $linkCount relative reference links, and skill whitespace."

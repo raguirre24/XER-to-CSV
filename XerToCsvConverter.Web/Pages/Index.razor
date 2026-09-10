@@ -85,11 +85,11 @@
                     </label>
                     <label class="profile-option @(_exportProfile == ExportProfile.ProgrammeReview ? "selected" : "")">
                         <InputRadio TValue="ExportProfile" Value="@ExportProfile.ProgrammeReview" disabled="@_isProcessing" />
-                        <span><strong>Programme Review</strong><small>Validated full-history, ten-table report bundle with data-quality companion and manifest.</small></span>
+                        <span><strong>Programme Review</strong><small>Validated full-history, ten-table report bundle and manifest, with source diagnostics in the activity log.</small></span>
                     </label>
                     <label class="profile-option @(_exportProfile == ExportProfile.TenderReview ? "selected" : "")">
                         <InputRadio TValue="ExportProfile" Value="@ExportProfile.TenderReview" disabled="@_isProcessing" />
-                        <span><strong>Tender Review</strong><small>Validated tender-stage, ten-table report bundle with editable status dates, data-quality companion and manifest.</small></span>
+                        <span><strong>Tender Review</strong><small>Validated tender-stage, ten-table report bundle and manifest with editable status dates and source diagnostics in the activity log.</small></span>
                     </label>
                 </div>
             </InputRadioGroup>
@@ -192,21 +192,28 @@
                 <div class="programme-review-editor">
                     <div class="form-grid tender-project-grid">
                         <label>
-                            <span>Project code</span>
+                            <span>Reporting project code</span>
                             <input class="form-control" @bind="_projectCode" disabled="@_isProcessing"
-                                   placeholder="Example: QAC000623-01-02" autocomplete="off" />
-                            <small>Project short name; spaces, punctuation, and international characters are supported.</small>
+                                   placeholder="Example: QAC000623" autocomplete="off" />
+                            <small>Assign every selected stage to this report identity. It is used in report keys and the manifest and may differ from the P6 project short name. Spaces, punctuation, and international characters are supported.</small>
                         </label>
                         <label>
                             <span>Project name</span>
                             <input class="form-control" @bind="_projectName" disabled="@_isProcessing"
                                    placeholder="Governed project name" autocomplete="off" />
                         </label>
+                        <label>
+                            <span>State (optional)</span>
+                            <input class="form-control" @bind="_tenderState" disabled="@_isProcessing"
+                                   placeholder="Example: QLD, Queensland, or a custom label" autocomplete="off"
+                                   aria-describedby="tender-state-guidance" />
+                            <small id="tender-state-guidance">Manual State applies to all stages and is never inferred from XER data. Blank State cannot match state-based access; all-project or exact-project grants may still apply. State changes the audience of existing state grants. Only an authorised bundle publisher should classify project visibility.</small>
+                        </label>
                     </div>
 
                     @if (_uploadedFiles.Count == 0)
                     {
-                        <p class="empty-hint">Add one or more XER files. Each ordered input is a separate Tender stage.</p>
+                        <p class="empty-hint">Add one or more XER files. Each ordered input must contain exactly one PROJECT row and is a separate Tender stage.</p>
                     }
                     else
                     {
@@ -392,6 +399,7 @@
     private string _exportWarningMessage = string.Empty;
     private string _projectCode = string.Empty;
     private string _projectName = string.Empty;
+    private string _tenderState = string.Empty;
     private string _programmeType = string.Empty;
     private readonly BrowserUploadSession _uploads = new();
     private bool _disposed;
@@ -658,7 +666,7 @@
             StateHasChanged();
             await _downloadService!.DownloadFileAsync(
                 $"{bundle.BundleId}.zip", zipStream, "application/zip", _cts.Token);
-            SetExportCompletion("Programme Review bundle", bundle.WarningCount);
+            SetReviewExportCompletion("Programme Review bundle", bundle.WarningCount, bundle.DataQualityTable);
             _progressPercent = 100;
             HashSet<string> retainedNames = bundle.ManifestRows
                 .Select(row => row.OriginalXerFilename)
@@ -670,7 +678,7 @@
             LogActivity($"Bundle: {bundle.BundleId}");
             LogActivity($"Retained {retainedNames.Count} of {_uploadedFiles.Count} supplied history snapshots; " +
                         $"{_uploadedFiles.Count - retainedNames.Count} superseded/pre-anchor snapshot(s) were skipped.");
-            LogActivity("Sent 10 report CSV files plus XER_DATA_QUALITY.csv and XER_CSV_MANIFEST.csv to the browser download manager. Check browser downloads for saved-file delivery.");
+            LogActivity("Sent 10 report CSV files plus XER_CSV_MANIFEST.csv (11 files) to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Programme Review bundle generation was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Programme Review bundle failed: {ex.Message}"); }
@@ -739,13 +747,13 @@
             StateHasChanged();
             await _downloadService!.DownloadFileAsync(
                 $"{bundle.BundleId}.zip", zipStream, "application/zip", _cts.Token);
-            SetExportCompletion("Tender Review bundle", bundle.WarningCount);
+            SetReviewExportCompletion("Tender Review bundle", bundle.WarningCount, bundle.DataQualityTable);
             _progressPercent = 100;
             foreach (UploadedFile file in stagedFiles)
                 file.Status = bundle.WarningCount > 0 ? "Warnings" : "Success";
             LogActivity($"Bundle: {bundle.BundleId}");
             LogActivity($"Exported {stagedFiles.Length} ordered Tender stage(s). Repeated source names and hashes remain distinct by stage identity.");
-            LogActivity("Sent 10 report CSV files plus XER_DATA_QUALITY.csv and XER_CSV_MANIFEST.csv to the browser download manager. Check browser downloads for saved-file delivery.");
+            LogActivity("Sent 10 report CSV files plus XER_CSV_MANIFEST.csv (11 files) to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Tender Review bundle generation was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Tender Review bundle failed: {ex.Message}"); }
@@ -759,7 +767,7 @@
     {
         request = null;
         error = string.Empty;
-        if (string.IsNullOrWhiteSpace(_projectCode)) { error = "Project code is required."; return false; }
+        if (string.IsNullOrWhiteSpace(_projectCode)) { error = "Reporting project code is required."; return false; }
         string projectCode = TenderReviewNaming.NormalizeProjectCode(_projectCode);
         if (_projectName.Trim().Length == 0) { error = "Project name is required."; return false; }
         if (stagedFiles.Count == 0) { error = "Add at least one XER file."; return false; }
@@ -783,6 +791,7 @@
             {
                 ProjectCode = projectCode,
                 ProjectName = _projectName.Trim(),
+                State = TenderReviewNaming.NormalizeState(_tenderState),
                 ExportedAtUtc = DateTimeOffset.UtcNow,
                 Sources = sources
             };
@@ -958,6 +967,20 @@
               "for affected tables and fields, original source values, and any unallocated actual or remaining quantities. Check browser downloads for saved-file delivery."
             : string.Empty;
         LogActivity(warningCount > 0 ? _exportWarningMessage : _progressMessage);
+    }
+
+    private void SetReviewExportCompletion(string subject, int warningCount, XerTable? dataQualityTable)
+    {
+        _progressMessage = warningCount > 0
+            ? $"{subject} completed with warnings."
+            : $"{subject} complete.";
+        _exportWarningMessage = warningCount > 0
+            ? $"{_progressMessage} {warningCount} data-quality issue(s). See the activity log for source diagnostics. " +
+              "The bundle contains ten report CSV files and the manifest only. Check browser downloads for saved-file delivery."
+            : string.Empty;
+        LogActivity(warningCount > 0 ? _exportWarningMessage : _progressMessage);
+        foreach (string message in XerDataQuality.GetMessages(dataQualityTable))
+            LogActivity(message);
     }
 
     private void AddEnhancedTableNames()

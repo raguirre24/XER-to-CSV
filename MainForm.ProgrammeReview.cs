@@ -25,7 +25,7 @@ public partial class MainForm
         };
         btnExportProgrammeReview.Click += BtnExportProgrammeReview_Click;
         toolTip.SetToolTip(btnExportProgrammeReview,
-            "Create the versioned ten-table Programme Review bundle with a data-quality companion and audit manifest");
+            "Create the versioned ten-table Programme Review bundle and audit manifest; source diagnostics appear in the activity log");
         ApplyButtonStyle(btnExportProgrammeReview, UiTheme.Success, UiTheme.Success, Color.White,
             Color.FromArgb(26, 157, 98), Color.FromArgb(21, 112, 70));
         btnExportProgrammeReview.Font = _uiFontBold;
@@ -311,10 +311,12 @@ public partial class MainForm
             string summary = $"Programme Review bundle {completion}: {result.BundleId}. " +
                              $"{result.ManifestRows.Count} manifest rows; {stopwatch.Elapsed.TotalSeconds:F2}s." +
                              (result.WarningCount > 0
-                                 ? $" {result.WarningCount} data-quality issue(s); see XER_DATA_QUALITY.csv for affected tables and fields, original source values, and any unallocated actual or remaining quantities."
+                                 ? $" {result.WarningCount} data-quality issue(s); see the activity log for source diagnostics."
                                  : string.Empty);
             UpdateStatus(summary);
             LogActivity(summary);
+            foreach (string message in XerDataQuality.GetMessages(result.DataQualityTable))
+                LogActivity(message);
             LogActivity("Bundle path: " + result.BundlePath);
             ShowProgrammeReviewComplete(result);
         }
@@ -439,7 +441,7 @@ public partial class MainForm
         bool hasWarnings = result.WarningCount > 0;
         string completion = hasWarnings
             ? $"Programme Review bundle completed with warnings.\n\n" +
-              $"{result.WarningCount} data-quality issue(s). See XER_DATA_QUALITY.csv for affected tables and fields, original source values, and any unallocated actual or remaining quantities.\n\n"
+              $"{result.WarningCount} data-quality issue(s). Source diagnostics are shown in the activity log; the bundle contains ten report CSV files and the manifest only.\n\n"
             : "Programme Review bundle created successfully.\n\n";
         DialogResult open = MessageBox.Show(
             this,

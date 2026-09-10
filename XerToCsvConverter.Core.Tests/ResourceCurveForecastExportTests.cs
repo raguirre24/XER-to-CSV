@@ -68,7 +68,7 @@ public sealed partial class ResourceCurveProfileTests
             var memory = await service.BuildFromParsedDataToMemoryAsync(store, request);
             warningCount = memory.WarningCount;
             qualityBytes = XerDataQuality.WriteToBytes(memory.DataQualityTable!, CancellationToken.None);
-            Assert.All(memory.ManifestRows, row => Assert.Equal("2.0", row.SchemaVersion));
+            Assert.All(memory.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
             Assert.DoesNotContain(memory.ManifestRows, row => row.TableName == XerDataQuality.TableName);
             files = memory.Files;
             if (disk)

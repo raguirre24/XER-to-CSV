@@ -113,6 +113,7 @@ internal static class TenderReviewCsv
                 row.ParserVersion,
                 row.ProjectCode,
                 row.ProjectName,
+                row.ProjectState,
                 row.OriginalXerFilename,
                 row.CanonicalXerFilename,
                 Iso(row.StatusDate),

@@ -110,6 +110,145 @@ public sealed class TenderReviewSurfaceContractTests
     }
 
     [Fact]
+    public void ReviewSurfacesDescribeExplicitTenderReportingIdentityWithoutOverwritingIt()
+    {
+        string webRoot = FindWebProjectRoot();
+        string page = File.ReadAllText(Path.Combine(webRoot, "Pages", "Index.razor"));
+        string dialog = File.ReadAllText(Path.Combine(Path.GetDirectoryName(webRoot)!, "TenderReviewExportDialog.cs"));
+
+        Assert.Contains("<span>Reporting project code</span>", page, StringComparison.Ordinal);
+        Assert.Contains("may differ from the P6 project short name", page, StringComparison.Ordinal);
+        Assert.Contains("TenderReviewNaming.NormalizeProjectCode(_projectCode)", page, StringComparison.Ordinal);
+        Assert.Contains("ProjectCode = projectCode,", page, StringComparison.Ordinal);
+        Assert.Contains("\"Reporting project code:\"", dialog, StringComparison.Ordinal);
+        Assert.Contains("Tender reporting project code", dialog, StringComparison.Ordinal);
+        Assert.Contains("may differ from the P6 project short name", dialog, StringComparison.Ordinal);
+        Assert.Contains("TenderReviewNaming.NormalizeProjectCode(_projectCode.Text)", dialog, StringComparison.Ordinal);
+        Assert.Contains("ProjectCode = projectCode,", dialog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CliMappingKeepsExplicitReportingCodeIndependentOfNativeRevisionFilename()
+    {
+        var configuration = new TenderReviewCliConfiguration
+        {
+            ProjectCode = "QAC000623",
+            ProjectName = "NE Part B",
+            Sources = new[]
+            {
+                new TenderReviewCliSource
+                {
+                    XerFilePath = "QAC000623-01-02.xer",
+                    StatusDate = new DateOnly(2026, 9, 5)
+                },
+                new TenderReviewCliSource
+                {
+                    XerFilePath = "QAC000623-01-03.xer",
+                    StatusDate = new DateOnly(2026, 9, 6)
+                }
+            }
+        };
+
+        TenderReviewBundleRequest request = TenderReviewCliRequestMapper.CreateRequest(
+            configuration, Path.Combine(Path.GetTempPath(), "tender-reporting-identity"));
+
+        Assert.Equal("QAC000623", request.ProjectCode);
+        Assert.Equal(new[] { "QAC000623-01-02.xer", "QAC000623-01-03.xer" },
+            request.Sources.Select(source => source.OriginalXerFilename));
+        Assert.NotEqual(request.Sources[0].SourceToken, request.Sources[1].SourceToken);
+    }
+
+    [Fact]
+    public void WebAndWindowsExposeOptionalManualStateOnlyForTenderAndFreezeItIntoTheRequest()
+    {
+        string webRoot = FindWebProjectRoot();
+        string page = File.ReadAllText(Path.Combine(webRoot, "Pages", "Index.razor"));
+        string dialog = File.ReadAllText(Path.Combine(Path.GetDirectoryName(webRoot)!, "TenderReviewExportDialog.cs"));
+        int tenderEditor = page.IndexOf("class=\"form-grid tender-project-grid\"", StringComparison.Ordinal);
+        int stateField = page.IndexOf("@bind=\"_tenderState\"", StringComparison.Ordinal);
+        int stateGuidance = page.IndexOf("id=\"tender-state-guidance\"", StringComparison.Ordinal);
+
+        Assert.True(tenderEditor >= 0 && stateField > tenderEditor && stateGuidance > stateField);
+        Assert.Contains("<span>State (optional)</span>", page, StringComparison.Ordinal);
+        Assert.Contains("@bind=\"_tenderState\" disabled=\"@_isProcessing\"", page, StringComparison.Ordinal);
+        Assert.Contains("State = TenderReviewNaming.NormalizeState(_tenderState),", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("Use XER State", page, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("State (optional):", dialog, StringComparison.Ordinal);
+        Assert.Contains("State = state,", dialog, StringComparison.Ordinal);
+        Assert.Contains("TenderReviewNaming.NormalizeState(_state.Text)", dialog, StringComparison.Ordinal);
+        foreach (string source in new[] { page, dialog })
+        {
+            Assert.Contains("Blank State cannot match state-based access", source, StringComparison.Ordinal);
+            Assert.Contains("Only an authorised bundle publisher should classify project visibility", source, StringComparison.Ordinal);
+        }
+
+        int programmeRequest = page.IndexOf("private bool TryCreateProgrammeReviewRequest(", StringComparison.Ordinal);
+        int nextMethod = page.IndexOf("\n    private ", programmeRequest + 1, StringComparison.Ordinal);
+        string programmeMethod = page[programmeRequest..nextMethod];
+        Assert.DoesNotContain("_tenderState", programmeMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("State =", programmeMethod, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData(" \t ", "")]
+    [InlineData("Queensland", "QLD")]
+    [InlineData(" qld ", "QLD")]
+    [InlineData(" New South Wales ", "NSW")]
+    [InlineData(" Custom / Region ", "CUSTOM / REGION")]
+    public void CliMapsOptionalManualStateWithoutInferringOrMutatingSourceMetadata(string? state, string expected)
+    {
+        var configuration = new TenderReviewCliConfiguration
+        {
+            ProjectCode = "QAC11111",
+            ProjectName = "Manual project",
+            State = state,
+            Sources = new[]
+            {
+                new TenderReviewCliSource
+                {
+                    XerFilePath = "NSW-stage.xer", StatusDate = new DateOnly(2026, 9, 1)
+                },
+                new TenderReviewCliSource
+                {
+                    XerFilePath = "NSW-stage.xer", StatusDate = new DateOnly(2026, 9, 2)
+                }
+            }
+        };
+
+        TenderReviewBundleRequest request = TenderReviewCliRequestMapper.CreateRequest(
+            configuration, Path.Combine(Path.GetTempPath(), "tender-state"));
+
+        Assert.Equal(state, request.State);
+        Assert.Equal(expected, TenderReviewNaming.NormalizeState(request.State));
+        Assert.Equal(2, request.Sources.Count);
+        Assert.All(request.Sources, source => Assert.Equal("NSW-stage.xer", source.OriginalXerFilename));
+        Assert.NotEqual(request.Sources[0].SourceToken, request.Sources[1].SourceToken);
+    }
+
+    [Theory]
+    [InlineData("", null)]
+    [InlineData(",\"state\":null", null)]
+    [InlineData(",\"state\":\"\"", "")]
+    [InlineData(",\"state\":\"Queensland\"", "Queensland")]
+    public void CliJsonAllowsMissingAndBlankState(string property, string? expected)
+    {
+        string json = "{\"project_code\":\"MANUAL\",\"project_name\":\"Example\",\"sources\":[]" + property + "}";
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower
+        };
+
+        TenderReviewCliConfiguration? configuration =
+            System.Text.Json.JsonSerializer.Deserialize<TenderReviewCliConfiguration>(json, options);
+
+        Assert.NotNull(configuration);
+        Assert.Equal(expected, configuration.State);
+    }
+
+    [Fact]
     public void WebMappingRejectsDuplicateStatusDatesWithoutRejectingRepeatedNames()
     {
         var inputs = new[]

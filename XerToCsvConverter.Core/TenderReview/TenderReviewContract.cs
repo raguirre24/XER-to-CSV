@@ -29,7 +29,7 @@ public sealed record TenderReviewTableContract(
 /// <summary>Versioned, ordered schema for the independent Tender Review export profile.</summary>
 public static class TenderReviewContract
 {
-    public const string SchemaVersion = "2.0";
+    public const string SchemaVersion = "3.0";
     public const string BundleProfile = "tender_review";
     public const string ManifestFileName = "XER_CSV_MANIFEST.csv";
     public const string CompleteStatus = "COMPLETE";
@@ -37,7 +37,7 @@ public static class TenderReviewContract
     public static IReadOnlyList<string> ManifestColumns { get; } = new ReadOnlyCollection<string>(new[]
     {
         "schema_version", "bundle_profile", "bundle_id", "bundle_status", "parser_version",
-        "project_code", "project_name", "original_xer_filename", "canonical_xer_filename",
+        "project_code", "project_name", "project_state", "original_xer_filename", "canonical_xer_filename",
         "status_date", "update_date", "data_date", "source_sha256", "table_name", "row_count",
         "csv_sha256", "exported_at_utc"
     });

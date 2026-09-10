@@ -32,7 +32,7 @@ public sealed class TenderReviewBundleServiceTests
         Assert.Equal(20, result.ManifestRows.Count);
         Assert.All(result.ManifestRows, row =>
         {
-            Assert.Equal("2.0", row.SchemaVersion);
+            Assert.Equal("3.0", row.SchemaVersion);
             Assert.Equal("tender_review", row.BundleProfile);
             Assert.Equal("COMPLETE", row.BundleStatus);
             Assert.Equal(result.BundleId, row.BundleId);
@@ -57,7 +57,7 @@ public sealed class TenderReviewBundleServiceTests
         Assert.Equal("2026-08-31", firstProject["monthupdate"]);
         Assert.Equal("2026-07-01", firstProject["add_date"]);
         Assert.Equal("2026-09-05", firstProject["udf_datalake_status_date"]);
-        Assert.Equal(string.Empty, firstProject["state"]);
+        Assert.Equal("NSW", firstProject["state"]);
         Assert.Equal(string.Empty, firstProject["region"]);
         Assert.Equal(string.Empty, firstProject["tender_status"]);
 
@@ -247,7 +247,7 @@ public sealed class TenderReviewBundleServiceTests
     }
 
     [Fact]
-    public async Task C_and_J_numeric_project_codes_are_aliases_but_digits_only_is_exact()
+    public async Task C_J_and_digits_only_native_codes_require_explicit_reporting_mapping()
     {
         TenderReviewSource source = TenderReviewNamingTests.Source(0, "stage.xer", "2026-09-05");
         TenderReviewBundleRequest request = TenderReviewNamingTests.Request(new[] { source });
@@ -260,9 +260,14 @@ public sealed class TenderReviewBundleServiceTests
             .BuildFromParsedDataToMemoryAsync(alias, request);
         Assert.All(result.ManifestRows, row => Assert.Equal("J5001", row.ProjectCode));
 
-        TenderReviewValidationException error = await Assert.ThrowsAsync<TenderReviewValidationException>(() =>
-            new TenderReviewBundleService().BuildFromParsedDataToMemoryAsync(digitsOnly, request));
-        Assert.Contains("does not match", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(result.DataQualityTable!.Rows, row =>
+            row.Fields[result.DataQualityTable.FieldIndexes["issue_code"]] == "TENDER_PROJECT_CODE_MAPPED");
+        TenderReviewInMemoryBundleResult mapped = await new TenderReviewBundleService()
+            .BuildFromParsedDataToMemoryAsync(digitsOnly, request);
+        Assert.All(mapped.ManifestRows, row => Assert.Equal("J5001", row.ProjectCode));
+        Assert.Single(mapped.DataQualityTable!.Rows, row =>
+            row.Fields[mapped.DataQualityTable.FieldIndexes["issue_code"]] == "TENDER_PROJECT_CODE_MAPPED");
+        Assert.False(TenderReviewNaming.IsSameProjectIdentity("5001", "J5001"));
     }
 
     [Fact]
@@ -568,7 +573,7 @@ public sealed class TenderReviewBundleServiceTests
         Assert.DoesNotContain("11_XER_CALENDAR_DETAILED.csv", result.Files.Keys);
         Assert.Equal(11, result.Files.Count);
         Assert.DoesNotContain(XerDataQuality.FileName, result.Files.Keys);
-        Assert.All(result.ManifestRows, row => Assert.Equal("2.0", row.SchemaVersion));
+        Assert.All(result.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
         Assert.Equal(3, result.ManifestRows.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
     }
 
@@ -851,7 +856,7 @@ public sealed class TenderReviewBundleServiceTests
         Assert.Equal("PR_FS", relationship["pred_type"]);
         Assert.Equal("CSV::J5001::TENDER::20260905::T1", relationship["pred_task_id_key"]);
         Assert.Equal("CSV::J5001::TENDER::20260905::T2", relationship["task_id_key"]);
-        Assert.All(result.ManifestRows, row => Assert.Equal("2.0", row.SchemaVersion));
+        Assert.All(result.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
 
         void SetDates(string taskId, string start, string finish)
         {

@@ -64,6 +64,49 @@ public static class XerDataQuality
         cancellationToken.ThrowIfCancellationRequested();
         return stream.ToArray();
     }
+
+    /// <summary>
+    /// Plain-text review diagnostics in source order, including repeated occurrences. Bounds ordinary
+    /// warnings but always includes Tender project mappings and unknown State warnings, even beyond the display limit.
+    /// Only original filename, issue code and message are rendered; internal correlation tokens are not.
+    /// </summary>
+    public static IReadOnlyList<string> GetMessages(XerTable? table, int maximumMessages = 100)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumMessages);
+        if (table is null
+            || !table.FieldIndexes.TryGetValue("issue_code", out int codeIndex)
+            || !table.FieldIndexes.TryGetValue("message", out int messageIndex))
+            return Array.Empty<string>();
+
+        var result = new List<string>();
+        int omitted = 0;
+        int ordinaryMessages = 0;
+        foreach (DataRow row in table.Rows)
+        {
+            string code = codeIndex < row.Fields.Length ? row.Fields[codeIndex] : string.Empty;
+            string message = messageIndex < row.Fields.Length ? row.Fields[messageIndex] : string.Empty;
+            if (string.IsNullOrWhiteSpace(message)) continue;
+            if (code is not ("TENDER_PROJECT_CODE_MAPPED" or "TENDER_PROJECT_STATE_UNKNOWN")
+                && ordinaryMessages++ >= maximumMessages)
+            {
+                omitted++;
+                continue;
+            }
+
+            string source = row.OriginalSourceFilename;
+            // Diagnostics may originate in callers; never leak the internal occurrence identity.
+            if (!string.IsNullOrEmpty(row.SourceToken))
+            {
+                source = source.Replace(row.SourceToken, "[source]", StringComparison.Ordinal);
+                code = code.Replace(row.SourceToken, "[source]", StringComparison.Ordinal);
+                message = message.Replace(row.SourceToken, "[source]", StringComparison.Ordinal);
+            }
+            result.Add($"{source}: [{code}] {message}");
+        }
+        if (omitted > 0)
+            result.Add($"{omitted.ToString(CultureInfo.InvariantCulture)} additional source diagnostic(s) omitted from this display; all remain available on the Core result's DataQualityTable.");
+        return result;
+    }
 }
 
 public sealed record StandardMemoryExportResult(Dictionary<string, byte[]> Files, int WarningCount);

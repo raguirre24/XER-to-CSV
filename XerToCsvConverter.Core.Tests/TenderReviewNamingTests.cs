@@ -62,10 +62,12 @@ public sealed class TenderReviewNamingTests
     }
 
     [Fact]
-    public void Project_identity_only_aliases_C_and_J_numeric_prefixes()
+    public void Tender_project_identity_is_exact_without_C_and_J_aliases()
     {
-        Assert.True(TenderReviewNaming.IsSameProjectIdentity("C5001", "j5001"));
-        Assert.True(TenderReviewNaming.IsSameProjectIdentity("J5001", "C5001"));
+        Assert.False(TenderReviewNaming.IsSameProjectIdentity("C5001", "j5001"));
+        Assert.False(TenderReviewNaming.IsSameProjectIdentity("J5001", "C5001"));
+        Assert.False(TenderReviewNaming.IsSameProjectIdentity("CIVIL", "JIVIL"));
+        Assert.False(TenderReviewNaming.IsSameProjectIdentity("A B", "A  B"));
         Assert.False(TenderReviewNaming.IsSameProjectIdentity("NE Part B", "NE_PART_B"));
         Assert.False(TenderReviewNaming.IsSameProjectIdentity("NE_PART_B", "NE Part B"));
         Assert.True(TenderReviewNaming.IsSameProjectIdentity("qac000623-01-02", "QAC000623-01-02"));
@@ -135,6 +137,9 @@ public sealed class TenderReviewNamingTests
     {
         ProjectCode = "J5001",
         ProjectName = "Tender Test Project",
+        // General schedule fixtures have known manual metadata. Blank-State behaviour
+        // is tested explicitly, without adding unrelated warnings to calculation assertions.
+        State = "NSW",
         ParserVersion = "test",
         ExportedAtUtc = new DateTimeOffset(2026, 9, 5, 1, 2, 3, TimeSpan.Zero),
         Sources = sources

@@ -52,7 +52,7 @@ internal sealed class ReviewDataQualityCollector
         _invalidColumns.TryGetValue((evidence.Row.SourceToken, evidence.Row.RawEvidenceIdentity), out var columns) && names.Any(columns.Contains);
 
     internal void Warn(ReviewRowEvidence evidence, string code, string message,
-        string column = "", string raw = "")
+        string column = "", string raw = "", string? outputTableName = null)
     {
         string rawTableName = evidence.Table.Name switch
         {
@@ -87,7 +87,7 @@ internal sealed class ReviewDataQualityCollector
         string publicSource = evidence.Row.OriginalSourceFilename;
         string Safe(string value) => value.Replace(evidence.Row.SourceToken, publicSource, StringComparison.Ordinal)
             .Replace(evidence.Row.SourceFilename + ".", publicSource + ".", StringComparison.Ordinal);
-        Rows.Add(XerDataQuality.CreateWarning(evidence.Table.Name, code, Safe(message), evidence.Row,
+        Rows.Add(XerDataQuality.CreateWarning(outputTableName ?? evidence.Table.Name, code, Safe(message), evidence.Row,
             sourceOrdinal,
             rawTableName, column, Safe(raw), XerDataQuality.RawRowJson(rawTable, rawRow)));
     }

@@ -7,8 +7,11 @@ namespace XerToCsvConverter.TenderReview.Cli;
 /// </summary>
 public sealed record TenderReviewCliConfiguration
 {
+    /// <summary>Explicit reporting identity for all selected stages; need not equal P6 PROJECT.proj_short_name.</summary>
     public required string ProjectCode { get; init; }
     public required string ProjectName { get; init; }
+    /// <summary>Optional manual State for the whole reporting project; never read from the XER.</summary>
+    public string? State { get; init; }
     public required IReadOnlyList<TenderReviewCliSource> Sources { get; init; }
     public string? ParserVersion { get; init; }
     public DateTimeOffset? ExportedAtUtc { get; init; }
@@ -63,6 +66,7 @@ public static class TenderReviewCliRequestMapper
         {
             ProjectCode = configuration.ProjectCode,
             ProjectName = configuration.ProjectName,
+            State = configuration.State,
             ParserVersion = configuration.ParserVersion,
             ExportedAtUtc = configuration.ExportedAtUtc,
             Sources = sources

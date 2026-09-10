@@ -12,6 +12,7 @@ internal sealed class TenderReviewExportDialog : Form
     private readonly Func<DateOnly> _localStatusDateProvider;
     private readonly TextBox _projectCode = new();
     private readonly TextBox _projectName = new();
+    private readonly TextBox _state = new();
     private readonly TextBox _parserVersion = new();
     private readonly DataGridView _sources = new();
     private readonly Button _addButton = new();
@@ -38,7 +39,7 @@ internal sealed class TenderReviewExportDialog : Form
         Text = "Tender Review bundle";
         AccessibleName = "Tender Review bundle metadata";
         AccessibleDescription =
-            "Configure one Tender project and the editable status date for each ordered XER source.";
+            "Assign each ordered XER source to one reporting project and edit its Tender stage status date.";
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(780, 500);
@@ -85,6 +86,8 @@ internal sealed class TenderReviewExportDialog : Form
         _projectName.Text = projectName;
     }
 
+    internal void SetStateForTesting(string? state) => _state.Text = state ?? string.Empty;
+
     internal void SetStatusDateForTesting(int rowIndex, DateOnly statusDate)
     {
         _sources.Rows[rowIndex].Cells["StatusDate"].Value =
@@ -122,7 +125,8 @@ internal sealed class TenderReviewExportDialog : Form
             Dock = DockStyle.Fill,
             MaximumSize = new Size(1060, 0),
             Margin = new Padding(0, 0, 0, 12),
-            Text = "Create one Tender Review bundle for one project. Each XER is a distinct Tender stage, " +
+            Text = "Assign the selected XER stages to one reporting project. Its code is used in report keys and the manifest " +
+                   "and may differ from the P6 project short name. Each XER must contain exactly one PROJECT row and is a distinct Tender stage, " +
                    "identified by its editable status_date. The default is captured from this computer's " +
                    "local calendar when a row is added. Repeated filenames, paths, and source content are allowed."
         };
@@ -132,16 +136,29 @@ internal sealed class TenderReviewExportDialog : Form
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 4,
-            RowCount = 2,
+            RowCount = 3,
             Margin = new Padding(0, 0, 0, 12)
         };
         metadata.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         metadata.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40f));
         metadata.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         metadata.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60f));
-        AddField(metadata, "Project code:", _projectCode, 0, 0);
+        AddField(metadata, "Reporting project code:", _projectCode, 0, 0);
         AddField(metadata, "Project name:", _projectName, 2, 0);
+        AddField(metadata, "State (optional):", _state, 0, 1);
         AddField(metadata, "Parser version:", _parserVersion, 2, 1);
+        var stateGuidance = new Label
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            MaximumSize = new Size(1060, 0),
+            Margin = new Padding(0, 6, 0, 0),
+            Text = "Manual State applies to all stages; it is never inferred from XER data. Blank State cannot match state-based access; " +
+                   "all-project or exact-project grants may still apply. State changes the audience of existing state grants. " +
+                   "Only an authorised bundle publisher should classify project visibility."
+        };
+        metadata.Controls.Add(stateGuidance, 0, 2);
+        metadata.SetColumnSpan(stateGuidance, 4);
 
         ConfigureGrid();
 
@@ -239,10 +256,16 @@ internal sealed class TenderReviewExportDialog : Form
 
     private void ConfigureInputs()
     {
-        _projectCode.AccessibleName = "Tender project code";
-        _projectCode.PlaceholderText = "For example QAC000623-01-02 or NE Part B";
+        _projectCode.AccessibleName = "Tender reporting project code";
+        _projectCode.AccessibleDescription =
+            "Explicit project identity used in report keys and the manifest. It may differ from the P6 project short name.";
+        _projectCode.PlaceholderText = "For example QAC000623 or NE Part B";
         _projectName.PlaceholderText = "Project name recorded in Tender output";
         _projectName.AccessibleName = "Tender project name";
+        _state.AccessibleName = "Optional manual Tender project State";
+        _state.AccessibleDescription =
+            "Applies to every stage. Blank State cannot match state-based access. Only an authorised publisher should classify project visibility.";
+        _state.PlaceholderText = "For example QLD, Queensland, or a custom label";
         _parserVersion.Text =
             typeof(TenderReviewBundleRequest).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
         _parserVersion.ReadOnly = true;
@@ -397,9 +420,10 @@ internal sealed class TenderReviewExportDialog : Form
         ClearGridErrors();
 
         if (string.IsNullOrWhiteSpace(_projectCode.Text))
-            return Fail("Project code is required.", _projectCode);
+            return Fail("Reporting project code is required.", _projectCode);
         string projectCode = TenderReviewNaming.NormalizeProjectCode(_projectCode.Text);
         string projectName = _projectName.Text.Trim();
+        string state = TenderReviewNaming.NormalizeState(_state.Text);
         if (projectName.Length == 0)
             return Fail("Project name is required.", _projectName);
         if (_sources.Rows.Count == 0)
@@ -445,10 +469,12 @@ internal sealed class TenderReviewExportDialog : Form
         }
 
         _projectCode.Text = projectCode;
+        _state.Text = state;
         request = new TenderReviewBundleRequest
         {
             ProjectCode = projectCode,
             ProjectName = projectName,
+            State = state,
             ParserVersion = string.IsNullOrWhiteSpace(_parserVersion.Text) ? null : _parserVersion.Text.Trim(),
             Sources = sources
         };

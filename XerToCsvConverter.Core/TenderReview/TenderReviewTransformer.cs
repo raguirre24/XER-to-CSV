@@ -168,9 +168,23 @@ internal sealed class TenderReviewTransformer
                 throw new TenderReviewValidationException(
                     $"{source.OriginalXerFilename}: PROJECT.proj_short_name is invalid. {ex.Message}", ex);
             }
+            // ProjectCode is the caller's explicit reporting identity, not the native
+            // P6 Project ID. Revision short names can differ from that business code
+            // and from other stages. Never infer identity by stripping their suffixes.
+            // The row-count check independently enforces one PROJECT per occurrence.
+            // Native references stay source-local and retain their existing diagnostics;
+            // preserve the actual project name as evidence of the output mapping.
             if (!TenderReviewNaming.IsSameProjectIdentity(sourceProjectCode, _request.ProjectCode))
-                throw new TenderReviewValidationException(
-                    $"{source.OriginalXerFilename}: PROJECT.proj_short_name '{sourceProjectCode}' does not match Tender project code '{_request.ProjectCode}'. A bundle must contain exactly one project.");
+                _quality.Warn(_quality.ForRow(projects, row), "TENDER_PROJECT_CODE_MAPPED",
+                    $"Tender stage {source.StatusDate:yyyy-MM-dd}: P6 PROJECT.proj_short_name '{sourceProjectCode}' is exported under the explicitly selected reporting project code '{_request.ProjectCode}'. " +
+                    "The XER project identity is unchanged. Confirm that this stage belongs to the selected reporting project.",
+                    "proj_short_name", row.GetRawField("proj_short_name").RawValue,
+                    outputTableName: "02_XER_PROJECT");
+            if (_request.State.Length == 0)
+                _quality.Warn(_quality.ForRow(projects, row), "TENDER_PROJECT_STATE_UNKNOWN",
+                    $"Tender stage {source.StatusDate:yyyy-MM-dd}: manual bundle State is blank. State-based access will not match; all-project or exact-project access remains possible. " +
+                    "No State is inferred from the XER or project code.",
+                    "project_state", outputTableName: "02_XER_PROJECT");
 
             string rawDataDate = XerTable.GetFieldValueSafe(row, dataDateIndex).Trim();
             if (rawDataDate.Length == 0)
@@ -402,6 +416,7 @@ internal sealed class TenderReviewTransformer
                     string raw = column.Name switch
                     {
                         "ProjectCode" => _request.ProjectCode,
+                        "state" when contract.TableName == "02_XER_PROJECT" => _request.State,
                         "monthupdate" or "last_recalc_date" => Iso(RequiredDataDate(tenderSource)),
                         "udf_datalake_status_date" => Iso(tenderSource.StatusDate),
                         "distribution_month" when contract.TableName == "15_XER_RESOURCE_DISTRIBUTION" =>

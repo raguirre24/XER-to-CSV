@@ -364,7 +364,10 @@ public sealed class TenderReviewBundleService
                     artifact.TableName,
                     artifact.RowCount,
                     hashes[artifact.FileName],
-                    request.ExportedAtUtc));
+                    request.ExportedAtUtc)
+                {
+                    ProjectState = request.State
+                });
             }
         }
         return rows;
@@ -378,6 +381,11 @@ public sealed class TenderReviewBundleService
     {
         if (manifestRows.Count != request.Sources.Count * tables.Count)
             throw new TenderReviewValidationException("Tender manifest row envelope is invalid.");
+        if (manifestRows.Any(row => !string.Equals(row.ProjectState, request.State, StringComparison.Ordinal)))
+            throw new TenderReviewValidationException("Tender manifest manual State is inconsistent.");
+        TenderReviewOutputTable projects = tables.Single(table => table.Contract.TableName == "02_XER_PROJECT");
+        if (projects.Rows.Any(row => !string.Equals(row.Values["state"], request.State, StringComparison.Ordinal)))
+            throw new TenderReviewValidationException("Tender project State does not match the authoritative manifest State.");
 
         foreach (TenderReviewOutputTable table in tables)
         {

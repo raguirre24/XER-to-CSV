@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace XerToCsvConverter.TenderReview;
@@ -25,8 +26,19 @@ public sealed record TenderReviewSourceBytes
 
 public sealed record TenderReviewBundleRequest
 {
+    /// <summary>
+    /// Explicit reporting identity for all selected stages, used in output metadata,
+    /// filenames and keys. It need not equal any source PROJECT.proj_short_name.
+    /// Selecting sources assigns them to this reporting project; no prefix matching
+    /// or inference of cross-stage native identity is performed.
+    /// </summary>
     public required string ProjectCode { get; init; }
     public required string ProjectName { get; init; }
+    /// <summary>
+    /// Optional manual reporting State for the whole bundle. Unknown/blank is allowed;
+    /// no State is inferred from XER data. State controls matching state-based report access.
+    /// </summary>
+    public string? State { get; init; }
     public string? ParserVersion { get; init; }
     public DateTimeOffset? ExportedAtUtc { get; init; }
     public required IReadOnlyList<TenderReviewSource> Sources { get; init; }
@@ -49,7 +61,11 @@ public sealed record TenderReviewManifestRow(
     string TableName,
     long RowCount,
     string CsvSha256,
-    DateTimeOffset ExportedAtUtc);
+    DateTimeOffset ExportedAtUtc)
+{
+    /// <summary>Canonical manual bundle State; blank means unknown. Kept additive for constructor compatibility.</summary>
+    public string ProjectState { get; init; } = string.Empty;
+}
 
 public sealed record TenderReviewBundleResult(
     string BundleId,
@@ -101,6 +117,7 @@ internal sealed record ResolvedTenderReviewSource(
 internal sealed record ResolvedTenderReviewRequest(
     string ProjectCode,
     string ProjectName,
+    string State,
     string ParserVersion,
     DateTimeOffset ExportedAtUtc,
     string BundleId,
@@ -178,6 +195,7 @@ public static partial class TenderReviewNaming
         string projectName = request.ProjectName?.Trim() ?? string.Empty;
         if (projectName.Length == 0)
             throw new TenderReviewValidationException("Project name is required.");
+        string state = NormalizeState(request.State);
 
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var statusDates = new HashSet<DateOnly>();
@@ -225,13 +243,22 @@ public static partial class TenderReviewNaming
             ? typeof(TenderReviewContract).Assembly.GetName().Version?.ToString(3) ?? "unknown"
             : request.ParserVersion.Trim();
 
-        string identity = string.Join("\n", resolved.Select(source => string.Join('|',
-            source.InputIndex.ToString(CultureInfo.InvariantCulture),
-            ReviewProjectIdentity.EncodeComponent(projectCode),
-            source.OriginalXerFilename,
-            source.CanonicalXerFilename,
-            source.StatusDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            source.SourceSha256)));
+        // Structured encoding prevents punctuation/newlines in manual metadata from
+        // aliasing field boundaries. Source tokens are correlation-only, never identity inputs.
+        string identity = JsonSerializer.Serialize(new
+        {
+            SchemaVersion = TenderReviewContract.SchemaVersion,
+            ProjectCode = projectCode,
+            ProjectState = state,
+            Sources = resolved.Select(source => new
+            {
+                source.InputIndex,
+                source.OriginalXerFilename,
+                source.CanonicalXerFilename,
+                StatusDate = source.StatusDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                source.SourceSha256
+            })
+        });
         string bundleHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
             .ToLowerInvariant()[..8];
         string exportedAtId = exportedAt.ToString(
@@ -241,6 +268,7 @@ public static partial class TenderReviewNaming
         return new ResolvedTenderReviewRequest(
             projectCode,
             projectName,
+            state,
             parserVersion,
             exportedAt,
             bundleId,
@@ -253,18 +281,26 @@ public static partial class TenderReviewNaming
         catch (ArgumentException ex) { throw new TenderReviewValidationException("Project code is required.", ex); }
     }
 
-    /// <summary>
-    /// Tender governance treats C&lt;digits&gt; and J&lt;digits&gt; as aliases. A digits-only code is an
-    /// independent exact identity, and all other valid codes compare exactly.
-    /// </summary>
+    /// <summary>Canonical manual State. Blank is unknown; custom labels remain valid.</summary>
+    public static string NormalizeState(string? value) => (value?.Trim().ToUpperInvariant() ?? string.Empty) switch
+    {
+        "NEW SOUTH WALES" => "NSW",
+        "QUEENSLAND" => "QLD",
+        "SOUTH AUSTRALIA" => "SA",
+        "TASMANIA" => "TAS",
+        "VICTORIA" => "VIC",
+        "WESTERN AUSTRALIA" => "WA",
+        "AUSTRALIAN CAPITAL TERRITORY" => "ACT",
+        "NORTHERN TERRITORY" => "NT",
+        var canonical => canonical
+    };
+
+    /// <summary>Tender reporting identities compare exactly; there are no C/J or other aliases.</summary>
     public static bool IsSameProjectIdentity(string first, string second)
     {
         string left = NormalizeProjectCode(first);
         string right = NormalizeProjectCode(second);
-        if (string.Equals(left, right, StringComparison.Ordinal)) return true;
-        return IsPrefixedNumericCode(left, out string leftDigits)
-            && IsPrefixedNumericCode(right, out string rightDigits)
-            && string.Equals(leftDigits, rightDigits, StringComparison.Ordinal);
+        return string.Equals(left, right, StringComparison.Ordinal);
     }
 
     internal static string ValidateSourceToken(string? value)
@@ -285,16 +321,4 @@ public static partial class TenderReviewNaming
                 $"{filename ?? "Tender source"}: {field} '{value:yyyy-MM-dd}' is outside the supported 1901-2199 range.");
     }
 
-    private static bool IsPrefixedNumericCode(string value, out string digits)
-    {
-        digits = string.Empty;
-        if (value.Length < 2 || value[0] is not ('C' or 'J')) return false;
-        ReadOnlySpan<char> suffix = value.AsSpan(1);
-        if (!suffix.ContainsAnyExceptInRange('0', '9'))
-        {
-            digits = suffix.ToString();
-            return true;
-        }
-        return false;
-    }
 }

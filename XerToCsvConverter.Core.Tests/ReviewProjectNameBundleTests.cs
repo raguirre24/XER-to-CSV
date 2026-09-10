@@ -7,6 +7,134 @@ namespace XerToCsvConverter.Core.Tests;
 
 public sealed class ReviewProjectNameBundleTests
 {
+    [Theory]
+    [InlineData("QAC000623-01-02", "QAC000623")]
+    [InlineData("QAC000623", "QAC000623-01-02")]
+    [InlineData("Native/工程:Revision 2", "Reporting, Project|A")]
+    [InlineData("5001", "J5001")]
+    public async Task Tender_reporting_code_is_an_explicit_mapping_not_a_native_project_equality_test(
+        string nativeCode, string reportingCode)
+    {
+        string temp = NewTempDirectory();
+        try
+        {
+            byte[] xer = MinimalXerBytes(nativeCode);
+            byte[] original = xer.ToArray();
+            string path = Path.Combine(temp, "NE Part B Backup74 LIVE.xer");
+            await File.WriteAllBytesAsync(path, xer);
+            TenderReviewSource source = TenderReviewNamingTests.Source(0, Path.GetFileName(path), "2026-09-05")
+                with { XerFilePath = path, SourceSha256 = null };
+            TenderReviewBundleRequest request = TenderReviewNamingTests.Request([source])
+                with { ProjectCode = reportingCode };
+            var service = new TenderReviewBundleService();
+            var upload = new[] { new TenderReviewSourceBytes { SourceToken = source.SourceToken, Content = xer } };
+            TenderReviewInMemoryBundleResult memory = await service.BuildFromXerBytesAsync(request, upload);
+            TenderReviewBundleResult disk = await service.BuildFromXerFilesAsync(request, Path.Combine(temp, "output"));
+            string normalized = reportingCode.ToUpperInvariant();
+            string canonical = TenderReviewNaming.CreateCanonicalFilename(normalized, source.StatusDate);
+
+            Assert.Equal(11, memory.Files.Count);
+            Assert.Equal(disk.BundleId, memory.BundleId);
+            Assert.All(memory.ManifestRows, row => Assert.Equal(normalized, row.ProjectCode));
+            AssertMetadataAndJoins(memory.Files, normalized, canonical);
+            foreach ((string name, byte[] content) in memory.Files)
+                Assert.Equal(content, await File.ReadAllBytesAsync(Path.Combine(disk.BundlePath, name)));
+            Assert.Equal(original, xer);
+            Assert.Equal(original, await File.ReadAllBytesAsync(path));
+
+            XerTable quality = Assert.IsType<XerTable>(memory.DataQualityTable);
+            DataRow mapping = Assert.Single(quality.Rows, row =>
+                row.Fields[quality.FieldIndexes["issue_code"]] == "TENDER_PROJECT_CODE_MAPPED");
+            Assert.Equal("02_XER_PROJECT", mapping.Fields[quality.FieldIndexes["table_name"]]);
+            Assert.Equal("PROJECT", mapping.Fields[quality.FieldIndexes["source_table"]]);
+            Assert.Equal("proj_short_name", mapping.Fields[quality.FieldIndexes["column_name"]]);
+            Assert.Equal(nativeCode, mapping.Fields[quality.FieldIndexes["raw_value"]]);
+            Assert.Contains(normalized, mapping.Fields[quality.FieldIndexes["message"]]);
+            Assert.DoesNotContain(source.SourceToken, string.Join("|", mapping.Fields));
+            Assert.Equal(memory.WarningCount, disk.WarningCount);
+
+            // The output identity changes, not any dates, quantities or float calculation.
+            var native = await service.BuildFromXerBytesAsync(request with { ProjectCode = nativeCode }, upload);
+            foreach (string name in memory.Files.Keys.Where(name => name != TenderReviewContract.ManifestFileName))
+            {
+                var mappedRows = ReadCsv(memory.Files[name]);
+                var nativeRows = ReadCsv(native.Files[name]);
+                Assert.Equal(nativeRows.Length, mappedRows.Length);
+                for (int i = 0; i < mappedRows.Length; i++)
+                    foreach (string field in mappedRows[i].Keys.Where(field =>
+                        !field.EndsWith("_key", StringComparison.Ordinal) && field is not ("filename" or "ProjectCode")))
+                        Assert.Equal(nativeRows[i][field], mappedRows[i][field]);
+            }
+        }
+        finally { Directory.Delete(temp, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Tender_native_revision_names_remain_separate_ordered_stages_under_explicit_reporting_code(bool reverse, bool repeatedContent)
+    {
+        const string reportCode = "QAC000623";
+        TenderReviewSource[] sources =
+        [
+            TenderReviewNamingTests.Source(0, "same.xer", "2026-09-05") with { SourceSha256 = null },
+            TenderReviewNamingTests.Source(1, "same.xer", "2026-09-06") with { SourceSha256 = null }
+        ];
+        TenderReviewSourceBytes[] uploads =
+        [
+            new() { SourceToken = sources[0].SourceToken, Content = MinimalXerBytes("QAC000623-01-02") },
+            new() { SourceToken = sources[1].SourceToken, Content = MinimalXerBytes(repeatedContent ? "QAC000623-01-02" : "QAC000623-01-03") }
+        ];
+        if (reverse) { Array.Reverse(sources); Array.Reverse(uploads); }
+        var progress = new RecordingProgress();
+        var result = await new TenderReviewBundleService().BuildFromXerBytesAsync(
+            TenderReviewNamingTests.Request(sources) with { ProjectCode = reportCode }, uploads, progress);
+        Assert.Equal(sources.Select(source => source.SourceToken), progress.Sources);
+        Assert.Equal(20, result.ManifestRows.Count);
+        Assert.Equal(repeatedContent ? 1 : 2, result.ManifestRows.Select(row => row.SourceSha256).Distinct().Count());
+        Assert.All(result.ManifestRows, row => Assert.Equal(reportCode, row.ProjectCode));
+        Assert.Equal(4, ReadCsv(result.Files["01_XER_TASK.csv"]).Select(row => row["task_id_key"]).Distinct().Count());
+        XerTable quality = Assert.IsType<XerTable>(result.DataQualityTable);
+        DataRow[] mappings = quality.Rows.Where(row => row.Fields[quality.FieldIndexes["issue_code"]] == "TENDER_PROJECT_CODE_MAPPED").ToArray();
+        Assert.Equal(2, mappings.Length);
+        Assert.Equal(new[] { "QAC000623-01-02", repeatedContent ? "QAC000623-01-02" : "QAC000623-01-03" }, mappings.Select(row => row.Fields[quality.FieldIndexes["raw_value"]]).Order());
+    }
+
+    [Theory]
+    [InlineData("P2", "Another project")]
+    [InlineData("P1", "QAC000623-01-02")]
+    public async Task Tender_reporting_mapping_never_accepts_multiple_project_rows_in_one_xer(string secondId, string secondCode)
+    {
+        string xer = Encoding.UTF8.GetString(MinimalXerBytes("QAC000623-01-02"));
+        xer = xer.Replace("%R\tP1\t2026-08-31\tQAC000623-01-02\t2026-06-02\r\n",
+            $"%R\tP1\t2026-08-31\tQAC000623-01-02\t2026-06-02\r\n%R\t{secondId}\t2026-08-31\t{secondCode}\t2026-06-02\r\n", StringComparison.Ordinal);
+        TenderReviewSource source = TenderReviewNamingTests.Source(0, "multi.xer", "2026-09-05") with { SourceSha256 = null };
+        var error = await Assert.ThrowsAsync<TenderReviewValidationException>(() => new TenderReviewBundleService().BuildFromXerBytesAsync(
+            TenderReviewNamingTests.Request([source]) with { ProjectCode = "QAC000623" },
+            [new() { SourceToken = source.SourceToken, Content = Encoding.UTF8.GetBytes(xer) }]));
+        Assert.Contains("must contain exactly one PROJECT row; found 2", error.Message);
+    }
+
+    [Theory]
+    [InlineData("", "QAC000623-01-02", "2026-08-31", "PROJECT.proj_id is blank")]
+    [InlineData("P1", "", "2026-08-31", "PROJECT.proj_short_name is invalid")]
+    [InlineData("P1", "QAC000623-01-02", "", "PROJECT.last_recalc_date")]
+    [InlineData("P1", "QAC000623-01-02", "not-a-date", "last_recalc_date")]
+    public async Task Tender_reporting_mapping_does_not_replace_required_native_metadata(
+        string id, string code, string date, string errorText)
+    {
+        string xer = Encoding.UTF8.GetString(MinimalXerBytes("QAC000623-01-02"));
+        xer = xer.Replace("%R\tP1\t2026-08-31\tQAC000623-01-02\t2026-06-02\r\n",
+            $"%R\t{id}\t{date}\t{code}\t2026-06-02\r\n", StringComparison.Ordinal);
+        TenderReviewSource source = TenderReviewNamingTests.Source(0, "invalid.xer", "2026-09-05") with { SourceSha256 = null };
+        var error = await Assert.ThrowsAsync<TenderReviewValidationException>(() => new TenderReviewBundleService().BuildFromXerBytesAsync(
+            TenderReviewNamingTests.Request([source]) with { ProjectCode = "QAC000623" },
+            [new() { SourceToken = source.SourceToken, Content = Encoding.UTF8.GetBytes(xer) }]));
+        Assert.Contains(errorText, error.Message);
+    }
+
     public static IEnumerable<object[]> FlexibleProjectNames()
     {
         string[] names =
@@ -208,7 +336,7 @@ public sealed class ReviewProjectNameBundleTests
         Assert.DoesNotContain(filename, character => "<>:\"/\\|?*".Contains(character) || char.IsControl(character));
     }
 
-    private static Dictionary<string, string>[] ReadCsv(byte[] content)
+    internal static Dictionary<string, string>[] ReadCsv(byte[] content)
     {
         using var stream = new MemoryStream(content, writable: false);
         using var parser = new TextFieldParser(stream, Encoding.UTF8, detectEncoding: false)
@@ -229,7 +357,7 @@ public sealed class ReviewProjectNameBundleTests
         return rows.ToArray();
     }
 
-    private static byte[] MinimalXerBytes(string projectCode)
+    internal static byte[] MinimalXerBytes(string projectCode)
     {
         var builder = new StringBuilder();
         string[] taskHeaders =
