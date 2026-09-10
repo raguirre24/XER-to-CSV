@@ -108,8 +108,8 @@
                         <label>
                             <span>Project code</span>
                             <input class="form-control" @bind="_projectCode" disabled="@_isProcessing"
-                                   placeholder="Example: J123" autocomplete="off" />
-                            <small>Uppercase letters, numbers, and underscores.</small>
+                                   placeholder="Example: QAC000623-01-02" autocomplete="off" />
+                            <small>Project short name; spaces, punctuation, and international characters are supported.</small>
                         </label>
                         <label>
                             <span>Project name</span>
@@ -194,8 +194,8 @@
                         <label>
                             <span>Project code</span>
                             <input class="form-control" @bind="_projectCode" disabled="@_isProcessing"
-                                   placeholder="Example: C5001" autocomplete="off" />
-                            <small>Letters, numbers, and underscores only.</small>
+                                   placeholder="Example: QAC000623-01-02" autocomplete="off" />
+                            <small>Project short name; spaces, punctuation, and international characters are supported.</small>
                         </label>
                         <label>
                             <span>Project name</span>
@@ -759,17 +759,8 @@
     {
         request = null;
         error = string.Empty;
-        string rawCode = _projectCode.Trim();
-        string projectCode = System.Text.RegularExpressions.Regex.Replace(rawCode, @"\s+", "_").ToUpperInvariant();
-        if (projectCode.Length == 0) { error = "Project code is required."; return false; }
-        if (!System.Text.RegularExpressions.Regex.IsMatch(
-                projectCode,
-                "^[A-Z0-9_]+$",
-                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
-        {
-            error = "Tender project code must contain only ASCII letters, digits, and underscores.";
-            return false;
-        }
+        if (string.IsNullOrWhiteSpace(_projectCode)) { error = "Project code is required."; return false; }
+        string projectCode = TenderReviewNaming.NormalizeProjectCode(_projectCode);
         if (_projectName.Trim().Length == 0) { error = "Project name is required."; return false; }
         if (stagedFiles.Count == 0) { error = "Add at least one XER file."; return false; }
         if (stagedFiles.Count > MaxBrowserFiles)
@@ -808,8 +799,8 @@
     {
         request = null;
         error = string.Empty;
-        string projectCode = _projectCode.Trim().ToUpperInvariant();
-        if (projectCode.Length == 0) { error = "Project code is required."; return false; }
+        if (string.IsNullOrWhiteSpace(_projectCode)) { error = "Project code is required."; return false; }
+        string projectCode = ProgrammeReviewNaming.NormalizeProjectCode(_projectCode);
         if (_projectName.Trim().Length == 0) { error = "Project name is required."; return false; }
         if (_programmeType is not ("C" or "T")) { error = "Select programme type C or T."; return false; }
         if (_uploadedFiles.Count == 0) { error = "Add at least one XER file."; return false; }

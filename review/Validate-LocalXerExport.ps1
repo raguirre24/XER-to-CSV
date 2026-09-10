@@ -170,7 +170,7 @@ if ($ExcludeResourceDistribution) { $tableSources.Remove('15_XER_RESOURCE_DISTRI
 $added = @{
     '02_XER_PROJECT' = @('proj_id_key','MonthUpdate')
     '03_XER_PROJWBS' = @('wbs_id_key','parent_wbs_id_key','MonthUpdate')
-    '06_XER_PREDECESSOR' = @('task_id_key','pred_task_id_key','calendar_id_key','predecessor_clndr_id_key','status_code','predecessor_status_code','task_type','predecessor_task_type','lag','time_period_hours_per_day','Start','Finish','predecessor_start','predecessor_finish','free_float','total_float','MonthUpdate')
+    '06_XER_PREDECESSOR' = @('task_id_key','pred_task_id_key','calendar_id_key','predecessor_clndr_id_key','status_code','predecessor_status_code','task_type','predecessor_task_type','lag','time_period_hours_per_day','Start','Finish','predecessor_start','predecessor_finish','free_float','free_float_status','free_float_basis','free_float_reason','total_float','MonthUpdate')
     '07_XER_ACTVTYPE' = @('actv_code_type_id_key','MonthUpdate')
     '08_XER_ACTVCODE' = @('actv_code_id_key','actv_code_type_id_key','MonthUpdate')
     '09_XER_TASKACTV' = @('actv_code_id_key','task_id_key','MonthUpdate')

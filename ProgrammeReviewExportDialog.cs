@@ -7,12 +7,13 @@ namespace XerToCsvConverter;
 /// <summary>Collects the governed identity and history metadata required by the Programme Review profile.</summary>
 internal sealed class ProgrammeReviewExportDialog : Form
 {
-    private static readonly Regex ProjectCodePattern = new(
-        "^[A-Z0-9_]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex BaselineTagPattern = new(
         "^BL[0-9]{2}(?:-[A-Z])?$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex UpdateTagPattern = new(
         "^[0-9]{4}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GovernedFilenamePattern = new(
+        @"^.+[-_][CT][-_](?<tag>BL[0-9]{2}(?:-[A-Z])?|[0-9]{4})_(?<date>[0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2})\.xer$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex FilenameBaselinePattern = new(
         "(?:^|[-_ ])(BL[0-9]{2}(?:-[A-Z])?)(?=[-_. ]|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -53,6 +54,18 @@ internal sealed class ProgrammeReviewExportDialog : Form
     }
 
     internal ProgrammeReviewBundleRequest? BundleRequest { get; private set; }
+
+    internal void SetIdentityForTesting(string projectCode, string projectName, string programmeType)
+    {
+        _projectCode.Text = projectCode;
+        _projectName.Text = projectName;
+        _programmeType.SelectedIndex = programmeType == "C" ? 0 : 1;
+    }
+
+    internal void SetMonthUpdateForTesting(int rowIndex, DateOnly monthUpdate) =>
+        _snapshots.Rows[rowIndex].Cells["MonthUpdate"].Value = monthUpdate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    internal bool TryBuildRequestForTesting(out ProgrammeReviewBundleRequest? request) => TryBuildRequest(out request);
 
     internal bool HasSuggestedDataDate(string originalFilename, DateOnly dataDate)
     {
@@ -186,9 +199,8 @@ internal sealed class ProgrammeReviewExportDialog : Form
 
     private void ConfigureInputs()
     {
-        _projectCode.CharacterCasing = CharacterCasing.Upper;
         _projectCode.AccessibleName = "Governed project code";
-        _projectCode.PlaceholderText = "For example J1234";
+        _projectCode.PlaceholderText = "For example QAC000623-01-02 or NE Part B";
         _projectName.Text = string.Empty;
         _projectName.PlaceholderText = "Governed report project name (not the P6 short name)";
         _projectName.AccessibleName = "Project name";
@@ -224,6 +236,19 @@ internal sealed class ProgrammeReviewExportDialog : Form
 
     private static (string? Kind, string Tag, DateOnly? MonthUpdate) InferSnapshotMetadata(string filename)
     {
+        // Match the governed suffix before legacy hints: digits/BL tags inside a flexible
+        // project code must not override the actual snapshot tag at the end of the name.
+        Match governed = GovernedFilenamePattern.Match(filename);
+        if (governed.Success && DateOnly.TryParseExact(
+                governed.Groups["date"].Value, new[] { "yyyyMMdd", "yyyy-MM-dd" },
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+        {
+            string tag = governed.Groups["tag"].Value.ToUpperInvariant();
+            if (tag.StartsWith("BL", StringComparison.Ordinal)) return ("baseline", tag, null);
+            return TryGetUpdateMonth(tag, out DateOnly governedMonth)
+                ? ("update", tag, governedMonth)
+                : (null, string.Empty, null);
+        }
         Match baseline = FilenameBaselinePattern.Match(filename);
         if (baseline.Success)
         {
@@ -261,9 +286,9 @@ internal sealed class ProgrammeReviewExportDialog : Form
     {
         request = null;
         ClearGridErrors();
-        string projectCode = _projectCode.Text.Trim().ToUpperInvariant();
-        if (!ProjectCodePattern.IsMatch(projectCode))
-            return Fail("Project code is required and may contain only A-Z, 0-9, and underscore.", _projectCode);
+        if (string.IsNullOrWhiteSpace(_projectCode.Text))
+            return Fail("Project code is required.", _projectCode);
+        string projectCode = ProgrammeReviewNaming.NormalizeProjectCode(_projectCode.Text);
         string projectName = _projectName.Text.Trim();
         if (projectName.Length == 0) return Fail("Project name is required.", _projectName);
         string programmeSelection = Convert.ToString(_programmeType.SelectedItem, CultureInfo.InvariantCulture) ?? string.Empty;

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using XerToCsvConverter.TenderReview;
 
 namespace XerToCsvConverter;
@@ -10,9 +9,6 @@ namespace XerToCsvConverter;
 /// </summary>
 internal sealed class TenderReviewExportDialog : Form
 {
-    private static readonly Regex ProjectCodePattern = new(
-        "^[A-Z0-9_]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private readonly Func<DateOnly> _localStatusDateProvider;
     private readonly TextBox _projectCode = new();
     private readonly TextBox _projectName = new();
@@ -243,9 +239,8 @@ internal sealed class TenderReviewExportDialog : Form
 
     private void ConfigureInputs()
     {
-        _projectCode.CharacterCasing = CharacterCasing.Upper;
         _projectCode.AccessibleName = "Tender project code";
-        _projectCode.PlaceholderText = "For example J1234 or NE_PART_B";
+        _projectCode.PlaceholderText = "For example QAC000623-01-02 or NE Part B";
         _projectName.PlaceholderText = "Project name recorded in Tender output";
         _projectName.AccessibleName = "Tender project name";
         _parserVersion.Text =
@@ -401,12 +396,9 @@ internal sealed class TenderReviewExportDialog : Form
         _sources.EndEdit();
         ClearGridErrors();
 
-        string rawCode = _projectCode.Text.Trim();
-        string projectCode = Regex.Replace(rawCode, @"\s+", "_").ToUpperInvariant();
-        if (projectCode.Length == 0 || !ProjectCodePattern.IsMatch(projectCode))
-            return Fail(
-                "Project code is required and may contain only ASCII letters, digits, and underscores.",
-                _projectCode);
+        if (string.IsNullOrWhiteSpace(_projectCode.Text))
+            return Fail("Project code is required.", _projectCode);
+        string projectCode = TenderReviewNaming.NormalizeProjectCode(_projectCode.Text);
         string projectName = _projectName.Text.Trim();
         if (projectName.Length == 0)
             return Fail("Project name is required.", _projectName);

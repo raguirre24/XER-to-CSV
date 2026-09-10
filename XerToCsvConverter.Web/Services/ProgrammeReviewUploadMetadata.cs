@@ -8,7 +8,7 @@ public static partial class ProgrammeReviewUploadMetadata
 {
     // Canonical PROJECT-C/T-TAG_yyyyMMdd, plus the existing underscore/ISO-date editor convention.
     // Anchoring every field prevents project digits, dates, and arbitrary prose becoming YYMM tags.
-    [GeneratedRegex(@"^[A-Z0-9_]+[-_][CT][-_](?<tag>BL[0-9]{2}(?:-[A-Z])?|[0-9]{4})_(?<date>[0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2})\.xer$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^.+[-_][CT][-_](?<tag>BL[0-9]{2}(?:-[A-Z])?|[0-9]{4})_(?<date>[0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2})\.xer$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex GovernedFilename();
 
     public static ProgrammeReviewUploadSuggestion Infer(string filename, DateOnly? detectedDataDate)

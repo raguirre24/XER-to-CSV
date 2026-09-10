@@ -281,9 +281,9 @@ public sealed class TenderReviewBundleServiceTests
         TenderReviewInMemoryBundleResult result = await new TenderReviewBundleService()
             .BuildFromParsedDataToMemoryAsync(store, request);
 
-        Assert.All(result.ManifestRows, row => Assert.Equal("NE_PART_B", row.ProjectCode));
-        Assert.StartsWith("NE_PART_B_TENDER_", result.BundleId);
-        Assert.All(result.ManifestRows, row => Assert.Equal("NE_PART_B-TENDER-20260905.xer", row.CanonicalXerFilename));
+        Assert.All(result.ManifestRows, row => Assert.Equal("NE PART B", row.ProjectCode));
+        Assert.StartsWith("NE PART B_TENDER_", result.BundleId);
+        Assert.All(result.ManifestRows, row => Assert.Equal("NE PART B-TENDER-20260905.xer", row.CanonicalXerFilename));
     }
 
     [Fact]

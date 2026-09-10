@@ -138,7 +138,7 @@ public partial class MainForm
     private void VerifyProgrammeReviewIsAvailableWithoutLegacyParse()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), $"xer-ui-smoke-{Guid.NewGuid():N}");
-        string xerPath = Path.Combine(tempDirectory, "2608-SMOKE-C-2608.xer");
+        string xerPath = Path.Combine(tempDirectory, "QAC000623-01-02 BL02 2608-C-BL01_20260825.xer");
         Directory.CreateDirectory(tempDirectory);
         try
         {
@@ -175,6 +175,13 @@ public partial class MainForm
                 });
             if (!dialog.HasSuggestedDataDate(Path.GetFileName(xerPath), detected.Value))
                 throw new InvalidOperationException("The Windows Programme Review dialog did not prefill the detected date.");
+            dialog.SetIdentityForTesting(" qac000623-01-02 Étape/港湾 ", "Programme smoke project", "C");
+            dialog.SetMonthUpdateForTesting(0, detected.Value);
+            if (!dialog.TryBuildRequestForTesting(out ProgrammeReviewBundleRequest? request) || request is null
+                || !string.Equals(request.ProjectCode, "QAC000623-01-02 ÉTAPE/港湾", StringComparison.Ordinal)
+                || request.Snapshots[0].SnapshotTag != "BL01")
+                throw new InvalidOperationException(
+                    "The Windows Programme Review dialog did not preserve flexible project identity or the canonical snapshot suffix.");
         }
         finally
         {

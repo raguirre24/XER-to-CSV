@@ -110,12 +110,6 @@ public static partial class TenderReviewNaming
 {
     internal const string NamespaceDelimiter = "::";
 
-    [GeneratedRegex("^[A-Z0-9_]+$", RegexOptions.CultureInvariant)]
-    private static partial Regex ProjectCodeRegex();
-
-    [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
-    private static partial Regex WhitespaceRegex();
-
     [GeneratedRegex("^[A-Za-z0-9-]+$", RegexOptions.CultureInvariant)]
     private static partial Regex SourceTokenRegex();
 
@@ -130,7 +124,7 @@ public static partial class TenderReviewNaming
     }
 
     public static string CreateCanonicalFilename(string projectCode, DateOnly statusDate) =>
-        $"{NormalizeProjectCode(projectCode)}-TENDER-{statusDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}.xer";
+        $"{ReviewProjectIdentity.FileComponent(NormalizeProjectCode(projectCode))}-TENDER-{statusDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}.xer";
 
     public static string NamespaceKey(
         string nativeOrLegacyKey,
@@ -169,7 +163,7 @@ public static partial class TenderReviewNaming
     }
 
     internal static string NamespacePrefix(string projectCode, DateOnly statusDate) =>
-        $"CSV{NamespaceDelimiter}{NormalizeProjectCode(projectCode)}{NamespaceDelimiter}TENDER{NamespaceDelimiter}{statusDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}{NamespaceDelimiter}";
+        $"CSV{NamespaceDelimiter}{ReviewProjectIdentity.EncodeComponent(NormalizeProjectCode(projectCode))}{NamespaceDelimiter}TENDER{NamespaceDelimiter}{statusDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}{NamespaceDelimiter}";
 
     internal static ResolvedTenderReviewRequest Resolve(
         TenderReviewBundleRequest request,
@@ -233,7 +227,7 @@ public static partial class TenderReviewNaming
 
         string identity = string.Join("\n", resolved.Select(source => string.Join('|',
             source.InputIndex.ToString(CultureInfo.InvariantCulture),
-            projectCode,
+            ReviewProjectIdentity.EncodeComponent(projectCode),
             source.OriginalXerFilename,
             source.CanonicalXerFilename,
             source.StatusDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
@@ -242,7 +236,7 @@ public static partial class TenderReviewNaming
             .ToLowerInvariant()[..8];
         string exportedAtId = exportedAt.ToString(
             "yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
-        string bundleId = $"{projectCode}_TENDER_{exportedAtId}_{bundleHash}";
+        string bundleId = $"{ReviewProjectIdentity.FileComponent(projectCode)}_TENDER_{exportedAtId}_{bundleHash}";
 
         return new ResolvedTenderReviewRequest(
             projectCode,
@@ -255,16 +249,8 @@ public static partial class TenderReviewNaming
 
     public static string NormalizeProjectCode(string? value)
     {
-        string trimmed = value?.Trim() ?? string.Empty;
-        if (trimmed.Length == 0)
-            throw new TenderReviewValidationException(
-                "Project code must contain only A-Z, 0-9, and underscore.");
-
-        string result = WhitespaceRegex().Replace(trimmed, "_").ToUpperInvariant();
-        if (!ProjectCodeRegex().IsMatch(result))
-            throw new TenderReviewValidationException(
-                "Project code must contain only A-Z, 0-9, and underscore.");
-        return result;
+        try { return ReviewProjectIdentity.NormalizeCode(value); }
+        catch (ArgumentException ex) { throw new TenderReviewValidationException("Project code is required.", ex); }
     }
 
     /// <summary>

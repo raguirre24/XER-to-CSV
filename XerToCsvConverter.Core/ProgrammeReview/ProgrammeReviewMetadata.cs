@@ -104,9 +104,6 @@ public static partial class ProgrammeReviewNaming
 {
     internal const string NamespaceDelimiter = "::";
 
-    [GeneratedRegex("^[A-Z0-9_]+$", RegexOptions.CultureInvariant)]
-    private static partial Regex ProjectCodeRegex();
-
     [GeneratedRegex("^[0-9]{4}$", RegexOptions.CultureInvariant)]
     private static partial Regex UpdateTagRegex();
 
@@ -127,7 +124,7 @@ public static partial class ProgrammeReviewNaming
         string tag = snapshotTag?.Trim().ToUpperInvariant()
             ?? throw new ProgrammeReviewValidationException("Snapshot tag is required.");
 
-        return $"{project}-{programme}-{tag}_{dataDate:yyyyMMdd}.xer";
+        return $"{ReviewProjectIdentity.FileComponent(project)}-{programme}-{tag}_{dataDate:yyyyMMdd}.xer";
     }
 
     public static string NamespaceKey(
@@ -180,7 +177,7 @@ public static partial class ProgrammeReviewNaming
             throw new ProgrammeReviewValidationException(
                 "Snapshot tag used in a relationship key must use YYMM, BLnn, or BLnn-A.");
 
-        return $"CSV{NamespaceDelimiter}{project}{NamespaceDelimiter}{programme}{NamespaceDelimiter}{snapshot}{NamespaceDelimiter}";
+        return $"CSV{NamespaceDelimiter}{ReviewProjectIdentity.EncodeComponent(project)}{NamespaceDelimiter}{programme}{NamespaceDelimiter}{snapshot}{NamespaceDelimiter}";
     }
 
     internal static ResolvedProgrammeReviewRequest Resolve(
@@ -305,20 +302,18 @@ public static partial class ProgrammeReviewNaming
             : request.ParserVersion.Trim();
 
         string identity = string.Join("\n", resolved.OrderBy(s => s.CanonicalXerFilename, StringComparer.Ordinal)
-            .Select(s => $"{projectCode}|{programmeType}|{s.CanonicalXerFilename}|{s.SourceSha256}"));
+            .Select(s => $"{ReviewProjectIdentity.EncodeComponent(projectCode)}|{programmeType}|{s.CanonicalXerFilename}|{s.SourceSha256}"));
         string bundleHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant()[..8];
-        string bundleId = $"{projectCode}_{programmeType}_{exportedAt:yyyyMMdd'T'HHmmss'Z'}_{bundleHash}";
+        string bundleId = $"{ReviewProjectIdentity.FileComponent(projectCode)}_{programmeType}_{exportedAt:yyyyMMdd'T'HHmmss'Z'}_{bundleHash}";
 
         return new ResolvedProgrammeReviewRequest(projectCode, projectName, programmeType, parserVersion,
             exportedAt, bundleId, resolved.OrderBy(s => s.EffectiveUpdateDate).ThenBy(s => s.CanonicalXerFilename, StringComparer.Ordinal).ToArray());
     }
 
-    internal static string NormalizeProjectCode(string? value)
+    public static string NormalizeProjectCode(string? value)
     {
-        string result = value?.Trim().ToUpperInvariant() ?? string.Empty;
-        if (!ProjectCodeRegex().IsMatch(result))
-            throw new ProgrammeReviewValidationException("Project code must contain only A-Z, 0-9, and underscore.");
-        return result;
+        try { return ReviewProjectIdentity.NormalizeCode(value); }
+        catch (ArgumentException ex) { throw new ProgrammeReviewValidationException("Project code is required.", ex); }
     }
 
     internal static string NormalizeProgrammeType(string? value)

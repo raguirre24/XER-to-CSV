@@ -147,13 +147,18 @@ public sealed class TenderReviewSurfaceContractTests
         Assert.Throws<ArgumentException>(() => TenderReviewWebContract.ParseBrowserLocalIsoDate(value));
     }
 
-    [Fact]
-    public void CliMappingUsesOrderedInternalTokensAndAllowsRepeatedPathsAndNames()
+    [Theory]
+    [InlineData(" c5001 ", "C5001")]
+    [InlineData("QAC000623-01-02", "QAC000623-01-02")]
+    [InlineData(" NE Part B ", "NE PART B")]
+    [InlineData(" Étape/港湾::#2% ", "ÉTAPE/港湾::#2%")]
+    public void CliMappingUsesOrderedInternalTokensAndAllowsRepeatedPathsAndNames(
+        string projectCode, string normalizedProjectCode)
     {
         string configDirectory = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "tender-cli-config"));
         var configuration = new TenderReviewCliConfiguration
         {
-            ProjectCode = " c5001 ",
+            ProjectCode = projectCode,
             ProjectName = "Example Tender",
             ExportedAtUtc = new DateTimeOffset(2026, 9, 5, 1, 2, 3, TimeSpan.Zero),
             Sources = new[]
@@ -177,6 +182,8 @@ public sealed class TenderReviewSurfaceContractTests
             configuration,
             configDirectory);
 
+        Assert.Equal(projectCode, request.ProjectCode);
+        Assert.Equal(normalizedProjectCode, TenderReviewNaming.NormalizeProjectCode(request.ProjectCode));
         Assert.Equal(2, request.Sources.Count);
         Assert.Equal(TenderReviewNaming.CreateSourceToken(0), request.Sources[0].SourceToken);
         Assert.Equal(TenderReviewNaming.CreateSourceToken(1), request.Sources[1].SourceToken);

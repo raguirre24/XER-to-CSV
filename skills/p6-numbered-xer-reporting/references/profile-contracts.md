@@ -1,6 +1,6 @@
 # Export profiles and fixed contracts
 
-Corrected implementation snapshot: 2026-09-07. Read actual headers rather than inferring profile from a table number or assuming an older build has these fixes. Field names/case below are intentional.
+Corrected implementation snapshot: 2026-09-07, with flexible project naming added 2026-09-10. Read actual headers rather than inferring profile from a table number or assuming an older build has these fixes. Field names/case below are intentional.
 
 ## Profile identity
 
@@ -24,7 +24,11 @@ Loaders locked to Programme 3.0/Tender 1.0 or the old exact table 06 header must
 
 Source-data problems are isolated to the affected rows, fields, calendar definitions or allocation portions across all Enhanced numbered tables. Available imported values and unaffected calculations remain exported; unresolved derived values stay blank with diagnostic evidence, not fabricated zeroes, calendars, dates or quantities. Malformed calendars and WBS identities must not suppress other valid rows or tables. Missing TASK/PROJWBS/CALENDAR sources produce their fixed header-only tables and warnings. Duplicate dimension keys and orphan references are preserved with warnings and may require source correction before a report can assert uniqueness. Programme leaves ambiguous task history blank; Tender retains individual contributions when an aggregate overflows or grouped labels conflict. Governed review PROJECT/request identity, snapshot/status metadata and safe publication remain separate: the exporter cannot guess these choices or claim success after unreadable input, cancellation or failed file writes. See the table dictionary for companion evidence and calculation rules for allocation reconciliation. A successful export with warnings is not a data-quality certification.
 
-Programme project codes accept uppercase ASCII letters, digits and underscores; programme type is C or T. Programme also rejects duplicate source content. Tender codes accept uppercase ASCII letters and digits only and permits repeated content across distinct stages. Do not infer cross-profile identity by stripping punctuation.
+Both review profiles accept any nonblank project code, including hyphens, spaces, punctuation and Unicode. Normalize with trim and invariant uppercase only; preserve internal whitespace and punctuation in numbered `ProjectCode` and manifest `project_code`. Programme type remains C or T and Programme rejects duplicate source content; Tender permits repeated content across distinct stages and retains its C/J numeric aliases.
+
+For the `<PROJECT>` portion of canonical filenames, bundle IDs and compact keys, percent-encode UTF-8 bytes except ASCII letters/digits, underscore, hyphen and space. Encode literal percent signs as well, preventing collisions between `A/B` and `A%2FB`; dots, colons and pipes are encoded to protect filename/key boundaries and DAX PATH. `QAC000623-01-02` stays unchanged. Keys retain the full encoded name; generated file/folder project components exceeding 100 characters use `~` plus the full uppercase SHA-256 of the normalized name. The complete business code remains in metadata. Treat exported namespaces as opaque text and use metadata to identify a project; do not split project codes on hyphens/underscores or infer identity from the hashed filename token.
+
+Original ASCII letter/digit/underscore identities remain stable. Tender's former whitespace-to-underscore rewrite is removed: `NE Part B` now becomes `NE PART B`, distinct from `NE_PART_B`. Regenerate all affected stages consistently; do not mix old and new key spellings. Naming flexibility keeps the existing numbered header/schema versions, but consumers enforcing the older project-character whitelist or reconstructing filenames/namespaces need corresponding changes before refresh. No sibling report or SharePoint folder/source mapping is updated by this exporter change.
 
 ### Internal identity versus report keys
 

@@ -108,8 +108,7 @@ if ($BaselineHashes) {
     $comparedBaseline = $true
 }
 
-# The original EBA project code is not a valid Tender governed code. Exercise
-# both fixed profiles with the explicit local fixture; never rewrite the originals.
+# Exercise both fixed profiles with an explicit local fixture; never rewrite the originals.
 $fixture = (Resolve-Path -LiteralPath $ProfileFixture).Path
 $fixturePaths = [Collections.Generic.List[string]]::new(); $fixturePaths.Add($fixture)
 $fixtureHash = (Get-FileHash -LiteralPath $fixture).Hash
@@ -144,7 +143,7 @@ foreach ($profile in @('Programme','Tender')) {
         $inputBytes = [Collections.Generic.Dictionary[string,byte[]]]::new([StringComparer]::Ordinal)
         $inputBytes.Add($fixtureName, [IO.File]::ReadAllBytes($fixture))
         $contracts = [XerToCsvConverter.ProgrammeReview.ProgrammeReviewContract]::Tables
-        $prefix = 'CSV::' + $projectCode + '::C::BL01::'
+        $prefix = 'CSV::' + [XerToCsvConverter.ReviewProjectIdentity]::EncodeComponent([XerToCsvConverter.ReviewProjectIdentity]::NormalizeCode($projectCode)) + '::C::BL01::'
     } else {
         $common.sources = @(@{ source_token = 'fixture-000001'; original_xer_filename = $fixtureName; xer_file_path = $fixture; status_date = $isoDate })
         $request = [Text.Json.JsonSerializer]::Deserialize(($common | ConvertTo-Json -Depth 6), [XerToCsvConverter.TenderReview.TenderReviewBundleRequest], $jsonOptions)
@@ -153,7 +152,7 @@ foreach ($profile in @('Programme','Tender')) {
         $upload = [XerToCsvConverter.TenderReview.TenderReviewSourceBytes]::new()
         $upload.SourceToken = 'fixture-000001'; $upload.Content = [IO.File]::ReadAllBytes($fixture); $inputBytes.Add($upload)
         $contracts = [XerToCsvConverter.TenderReview.TenderReviewContract]::Tables
-        $prefix = 'CSV::' + $projectCode + '::TENDER::' + $dataDate.ToString('yyyyMMdd', $culture) + '::'
+        $prefix = 'CSV::' + [XerToCsvConverter.ReviewProjectIdentity]::EncodeComponent([XerToCsvConverter.ReviewProjectIdentity]::NormalizeCode($projectCode)) + '::TENDER::' + $dataDate.ToString('yyyyMMdd', $culture) + '::'
     }
     try {
         $memoryResult = $bundleService.BuildFromXerBytesAsync($request, $inputBytes, $null, $cancel).GetAwaiter().GetResult()
@@ -165,7 +164,8 @@ foreach ($profile in @('Programme','Tender')) {
         $profileResults.Add([pscustomobject]@{ Profile = $profile; Validation = 'Rejected by unchanged profile contract'; Error = $cause.Message })
         continue
     }
-    Assert-Check ($memoryResult.Files.Count -eq 12) "$profile normal bundle envelope changed."
+    $expectedFiles = @($contracts | ForEach-Object FileName) + 'XER_CSV_MANIFEST.csv'
+    Assert-Check ((($memoryResult.Files.Keys | Sort-Object) -join '|') -ceq (($expectedFiles | Sort-Object) -join '|')) "$profile normal bundle envelope changed."
     $published = [Collections.Generic.Dictionary[string,byte[]]]::new([StringComparer]::Ordinal)
     foreach ($file in (Get-ChildItem -LiteralPath $fileResult.BundlePath -File)) { $published.Add($file.Name, [IO.File]::ReadAllBytes($file.FullName)) }
     Assert-FilesEqual $memoryResult.Files $published "$profile file/byte bundle"
@@ -201,7 +201,12 @@ foreach ($profile in @('Programme','Tender')) {
     }
     Assert-Check ($expectedQuantities.Count -eq $actualQuantities.Count) "$profile changed resource distribution groups."
     foreach ($key in $expectedQuantities.Keys) { Assert-Check ($actualQuantities.ContainsKey($key) -and $actualQuantities[$key] -eq $expectedQuantities[$key]) "$profile resource distribution differs from shared Standard quantities." }
-    $profileQuality = Get-CsvRows $memoryResult.Files['XER_DATA_QUALITY.csv']
+    # Review warnings remain available on the result but are outside the 11-file bundle.
+    $qualityStream = [IO.MemoryStream]::new()
+    try {
+        ([XerToCsvConverter.CsvExporter]::new()).WriteTableToStream($memoryResult.DataQualityTable, $qualityStream)
+        $profileQuality = Get-CsvRows $qualityStream.ToArray()
+    } finally { $qualityStream.Dispose() }
     $standardQuality = Get-CsvRows $fixtureStandard.Files['XER_DATA_QUALITY']
     Assert-Check ($profileQuality.Count -eq $memoryResult.WarningCount -and $standardQuality.Count -eq $fixtureStandard.WarningCount) "$profile warning totals disagree with companion rows."
     $allocationEvidence = @('FileName','source_row_number','allocation_portion','issue_code','taskrsrc_id',

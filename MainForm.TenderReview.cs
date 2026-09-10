@@ -101,10 +101,10 @@ public partial class MainForm
             DateOnly editedStatusDate = frozenLocalDate.AddDays(1);
             dialog.SetStatusDateForTesting(1, editedStatusDate);
             dialog.MoveSourceForTesting(1, -1);
-            dialog.SetIdentityForTesting("j1234", "Tender smoke project");
+            dialog.SetIdentityForTesting(" qac000623-01-02 Étape/港湾 ", "Tender smoke project");
             if (!dialog.TryBuildRequestForTesting(out TenderReviewBundleRequest? request) || request is null)
                 throw new InvalidOperationException("The Windows Tender dialog could not create its Core request.");
-            if (!string.Equals(request.ProjectCode, "J1234", StringComparison.Ordinal)
+            if (!string.Equals(request.ProjectCode, "QAC000623-01-02 ÉTAPE/港湾", StringComparison.Ordinal)
                 || request.Sources.Count != 2
                 || !string.Equals(request.Sources[0].SourceToken, secondToken, StringComparison.Ordinal)
                 || request.Sources[0].StatusDate != editedStatusDate

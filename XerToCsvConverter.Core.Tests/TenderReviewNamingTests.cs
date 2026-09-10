@@ -36,24 +36,27 @@ public sealed class TenderReviewNamingTests
     }
 
     [Theory]
-    [InlineData("J-5001")]
-    [InlineData("J.5001")]
-    [InlineData("Å5001")]
     [InlineData("")]
-    public void Project_code_rejects_delimiters_punctuation_non_ascii_and_blank(string value)
+    [InlineData(" \t ")]
+    [InlineData(null)]
+    public void Project_code_requires_a_nonblank_value(string? value)
     {
         TenderReviewValidationException error = Assert.Throws<TenderReviewValidationException>(() =>
             TenderReviewNaming.NormalizeProjectCode(value));
-        Assert.Contains("only A-Z, 0-9, and underscore", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("required", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
     [InlineData("J_5001", "J_5001")]
     [InlineData("  j_5001  ", "J_5001")]
-    [InlineData("NE Part B", "NE_PART_B")]
-    [InlineData("  ne   part   b  ", "NE_PART_B")]
+    [InlineData("NE Part B", "NE PART B")]
+    [InlineData("  ne   part   b  ", "NE   PART   B")]
+    [InlineData("QAC000623-01-02", "QAC000623-01-02")]
+    [InlineData("J.5001", "J.5001")]
+    [InlineData("Å5001 / 北", "Å5001 / 北")]
+    [InlineData("A::B|C%20D", "A::B|C%20D")]
     [InlineData("C5001", "C5001")]
-    public void Project_code_normalizes_whitespace_and_accepts_underscores(string input, string expected)
+    public void Project_code_preserves_name_characters_and_only_trims_and_uppercases(string input, string expected)
     {
         Assert.Equal(expected, TenderReviewNaming.NormalizeProjectCode(input));
     }
@@ -63,8 +66,10 @@ public sealed class TenderReviewNamingTests
     {
         Assert.True(TenderReviewNaming.IsSameProjectIdentity("C5001", "j5001"));
         Assert.True(TenderReviewNaming.IsSameProjectIdentity("J5001", "C5001"));
-        Assert.True(TenderReviewNaming.IsSameProjectIdentity("NE Part B", "NE_PART_B"));
-        Assert.True(TenderReviewNaming.IsSameProjectIdentity("NE_PART_B", "NE Part B"));
+        Assert.False(TenderReviewNaming.IsSameProjectIdentity("NE Part B", "NE_PART_B"));
+        Assert.False(TenderReviewNaming.IsSameProjectIdentity("NE_PART_B", "NE Part B"));
+        Assert.True(TenderReviewNaming.IsSameProjectIdentity("qac000623-01-02", "QAC000623-01-02"));
+        Assert.False(TenderReviewNaming.IsSameProjectIdentity("QAC000623-01-02", "QAC000623_01_02"));
         Assert.False(TenderReviewNaming.IsSameProjectIdentity("5001", "J5001"));
         Assert.False(TenderReviewNaming.IsSameProjectIdentity("CJ5001", "J5001"));
     }
@@ -78,7 +83,7 @@ public sealed class TenderReviewNamingTests
         Assert.NotNull(identity);
         Assert.Equal("NE Part B", identity.ProjectCode);
         Assert.Equal("North East Highway Part B", identity.ProjectName);
-        Assert.Equal("NE_PART_B", TenderReviewNaming.NormalizeProjectCode(identity.ProjectCode));
+        Assert.Equal("NE PART B", TenderReviewNaming.NormalizeProjectCode(identity.ProjectCode));
     }
 
     [Fact]
