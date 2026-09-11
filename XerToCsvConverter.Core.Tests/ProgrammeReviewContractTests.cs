@@ -5,17 +5,17 @@ namespace XerToCsvConverter.Core.Tests;
 public sealed class ProgrammeReviewContractTests
 {
     [Fact]
-    public void Contract_has_exact_ten_file_set_and_47_task_columns()
+    public void Contract_has_exact_eleven_file_set_and_47_task_columns()
     {
         string[] expectedFiles =
         {
             "01_XER_TASK.csv", "02_XER_PROJECT.csv", "03_XER_PROJWBS.csv",
             "06_XER_PREDECESSOR.csv", "07_XER_ACTVTYPE.csv", "08_XER_ACTVCODE.csv",
-            "09_XER_TASKACTV.csv", "10_XER_CALENDAR.csv", "12_XER_RSRC.csv",
+            "09_XER_TASKACTV.csv", "10_XER_CALENDAR.csv", "11_XER_CALENDAR_DETAILED.csv", "12_XER_RSRC.csv",
             "15_XER_RESOURCE_DISTRIBUTION.csv"
         };
 
-        Assert.Equal("4.0", ProgrammeReviewContract.SchemaVersion);
+        Assert.Equal("5.0", ProgrammeReviewContract.SchemaVersion);
         Assert.Equal(expectedFiles, ProgrammeReviewContract.Tables.Select(t => t.FileName));
         Assert.Equal(47, ProgrammeReviewContract.GetTable("01_XER_TASK").Columns.Count);
         Assert.Equal(

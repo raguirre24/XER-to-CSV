@@ -29,7 +29,7 @@ public sealed record TenderReviewTableContract(
 /// <summary>Versioned, ordered schema for the independent Tender Review export profile.</summary>
 public static class TenderReviewContract
 {
-    public const string SchemaVersion = "3.0";
+    public const string SchemaVersion = "4.0";
     public const string BundleProfile = "tender_review";
     public const string ManifestFileName = "XER_CSV_MANIFEST.csv";
     public const string CompleteStatus = "COMPLETE";
@@ -165,6 +165,19 @@ public static class TenderReviewContract
                 "10_XER_CALENDAR", "10_XER_CALENDAR.csv", EnhancedTableNames.XerCalendar10, true,
                 new[] { C("clndr_id_key", nullable: false), C("clndr_name", nullable: false) },
                 new[] { "clndr_id_key" }, new[] { "clndr_id_key" }),
+
+            new TenderReviewTableContract(
+                "11_XER_CALENDAR_DETAILED", "11_XER_CALENDAR_DETAILED.csv", EnhancedTableNames.XerCalendarDetailed11, true,
+                new[]
+                {
+                    C("clndr_name"), C("clndr_type"), C("date", TenderReviewColumnType.Date),
+                    C("day_of_week"), C("working_day"), C("work_hours", TenderReviewColumnType.Number),
+                    C("exception_type"), C("clndr_id_key"),
+                    C("MonthUpdate", TenderReviewColumnType.Date, false),
+                    C("day_of_week_num", TenderReviewColumnType.Integer),
+                    C("working_day_int", TenderReviewColumnType.Integer)
+                },
+                Array.Empty<string>(), new[] { "clndr_id_key", "date", "day_of_week_num", "exception_type" }),
 
             new TenderReviewTableContract(
                 "12_XER_RSRC", "12_XER_RSRC.csv", EnhancedTableNames.XerRsrc12, false,

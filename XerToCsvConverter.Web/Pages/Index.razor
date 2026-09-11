@@ -85,11 +85,11 @@
                     </label>
                     <label class="profile-option @(_exportProfile == ExportProfile.ProgrammeReview ? "selected" : "")">
                         <InputRadio TValue="ExportProfile" Value="@ExportProfile.ProgrammeReview" disabled="@_isProcessing" />
-                        <span><strong>Programme Review</strong><small>Validated full-history, ten-table report bundle and manifest, with source diagnostics in the activity log.</small></span>
+                        <span><strong>Programme Review</strong><small>Schema 5.0 full-history bundle: eleven report tables, including detailed calendars, plus a manifest. Source diagnostics appear in the activity log.</small></span>
                     </label>
                     <label class="profile-option @(_exportProfile == ExportProfile.TenderReview ? "selected" : "")">
                         <InputRadio TValue="ExportProfile" Value="@ExportProfile.TenderReview" disabled="@_isProcessing" />
-                        <span><strong>Tender Review</strong><small>Validated tender-stage, ten-table report bundle and manifest with editable status dates and source diagnostics in the activity log.</small></span>
+                        <span><strong>Tender Review</strong><small>Schema 4.0 tender-stage bundle: eleven report tables, including detailed calendars, plus a manifest. Editable status dates and source diagnostics in the activity log.</small></span>
                     </label>
                 </div>
             </InputRadioGroup>
@@ -678,7 +678,7 @@
             LogActivity($"Bundle: {bundle.BundleId}");
             LogActivity($"Retained {retainedNames.Count} of {_uploadedFiles.Count} supplied history snapshots; " +
                         $"{_uploadedFiles.Count - retainedNames.Count} superseded/pre-anchor snapshot(s) were skipped.");
-            LogActivity("Sent 10 report CSV files plus XER_CSV_MANIFEST.csv (11 files) to the browser download manager. Check browser downloads for saved-file delivery.");
+            LogActivity("Sent 11 report CSV files plus XER_CSV_MANIFEST.csv (12 files) to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Programme Review bundle generation was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Programme Review bundle failed: {ex.Message}"); }
@@ -753,7 +753,7 @@
                 file.Status = bundle.WarningCount > 0 ? "Warnings" : "Success";
             LogActivity($"Bundle: {bundle.BundleId}");
             LogActivity($"Exported {stagedFiles.Length} ordered Tender stage(s). Repeated source names and hashes remain distinct by stage identity.");
-            LogActivity("Sent 10 report CSV files plus XER_CSV_MANIFEST.csv (11 files) to the browser download manager. Check browser downloads for saved-file delivery.");
+            LogActivity("Sent 11 report CSV files plus XER_CSV_MANIFEST.csv (12 files) to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Tender Review bundle generation was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Tender Review bundle failed: {ex.Message}"); }
@@ -976,7 +976,7 @@
             : $"{subject} complete.";
         _exportWarningMessage = warningCount > 0
             ? $"{_progressMessage} {warningCount} data-quality issue(s). See the activity log for source diagnostics. " +
-              "The bundle contains ten report CSV files and the manifest only. Check browser downloads for saved-file delivery."
+              "The bundle contains eleven report CSV files and the manifest only. Check browser downloads for saved-file delivery."
             : string.Empty;
         LogActivity(warningCount > 0 ? _exportWarningMessage : _progressMessage);
         foreach (string message in XerDataQuality.GetMessages(dataQualityTable))

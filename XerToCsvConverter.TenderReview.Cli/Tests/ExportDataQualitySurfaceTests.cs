@@ -31,7 +31,7 @@ public sealed class ExportDataQualitySurfaceTests
             Assert.DoesNotContain("XER_DATA_QUALITY.csv", source, StringComparison.Ordinal);
             Assert.Contains("XerDataQuality.GetMessages(result.DataQualityTable)", source, StringComparison.Ordinal);
             Assert.Contains("activity log", source, StringComparison.Ordinal);
-            Assert.Contains("ten report CSV files and the manifest only", source, StringComparison.Ordinal);
+            Assert.Contains("eleven report CSV files and the manifest only", source, StringComparison.Ordinal);
         }
         Assert.Contains("Export Completed with Warnings", source, StringComparison.Ordinal);
     }
@@ -57,7 +57,7 @@ public sealed class ExportDataQualitySurfaceTests
         Assert.DoesNotContain("XER_DATA_QUALITY.csv", warningBlock, StringComparison.Ordinal);
         Assert.Contains("XerDataQuality.GetMessages(result.DataQualityTable)", warningBlock, StringComparison.Ordinal);
         Assert.Contains("Console.Error.WriteLine(message);", warningBlock, StringComparison.Ordinal);
-        Assert.Contains("ten report CSV files and the manifest only", warningBlock, StringComparison.Ordinal);
+        Assert.Contains("eleven report CSV files and the manifest only", warningBlock, StringComparison.Ordinal);
         Assert.DoesNotContain("Console.WriteLine(", warningBlock, StringComparison.Ordinal);
     }
 
@@ -102,16 +102,16 @@ public sealed class ExportDataQualitySurfaceTests
     }
 
     [Fact]
-    public void WebStandardUsesDiagnosticResultAndReviewsReportElevenFilesWithLoggedDiagnostics()
+    public void WebStandardUsesDiagnosticResultAndReviewsReportTwelveFilesWithLoggedDiagnostics()
     {
         string page = ReadSource("XerToCsvConverter.Web/Pages/Index.razor");
 
         Assert.Contains("StandardMemoryExportResult result = await _processingService.ExportTablesToMemoryWithDiagnosticsAsync(",
             page, StringComparison.Ordinal);
         Assert.Contains("Dictionary<string, byte[]> csvData = result.Files;", page, StringComparison.Ordinal);
-        Assert.Equal(2, page.Split("10 report CSV files plus XER_CSV_MANIFEST.csv (11 files)",
+        Assert.Equal(2, page.Split("11 report CSV files plus XER_CSV_MANIFEST.csv (12 files)",
             StringSplitOptions.None).Length - 1);
-        Assert.DoesNotContain("10 report CSV files plus XER_DATA_QUALITY.csv", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("report CSV files plus XER_DATA_QUALITY.csv", page, StringComparison.Ordinal);
         string reviewCompletion = ReadPrivateMethod(page, "private void SetReviewExportCompletion(");
         Assert.Contains("XerDataQuality.GetMessages(dataQualityTable)", reviewCompletion, StringComparison.Ordinal);
         Assert.Contains("LogActivity(message);", reviewCompletion, StringComparison.Ordinal);

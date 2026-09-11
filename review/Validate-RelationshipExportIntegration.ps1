@@ -201,7 +201,7 @@ foreach ($profile in @('Programme','Tender')) {
     }
     Assert-Check ($expectedQuantities.Count -eq $actualQuantities.Count) "$profile changed resource distribution groups."
     foreach ($key in $expectedQuantities.Keys) { Assert-Check ($actualQuantities.ContainsKey($key) -and $actualQuantities[$key] -eq $expectedQuantities[$key]) "$profile resource distribution differs from shared Standard quantities." }
-    # Review warnings remain available on the result but are outside the 11-file bundle.
+    # Review warnings remain available on the result but are outside the 12-file bundle.
     $qualityStream = [IO.MemoryStream]::new()
     try {
         ([XerToCsvConverter.CsvExporter]::new()).WriteTableToStream($memoryResult.DataQualityTable, $qualityStream)

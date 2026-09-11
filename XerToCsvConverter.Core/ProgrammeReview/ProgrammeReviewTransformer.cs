@@ -56,6 +56,7 @@ internal sealed class ProgrammeReviewTransformer
             [EnhancedTableNames.XerActvCode08] = transformer.Create08XerActvCode(),
             [EnhancedTableNames.XerTaskActv09] = transformer.Create09XerTaskActv(),
             [EnhancedTableNames.XerCalendar10] = transformer.Create10XerCalendar(),
+            [EnhancedTableNames.XerCalendarDetailed11] = transformer.Create11XerCalendarDetailed(),
             [EnhancedTableNames.XerRsrc12] = transformer.Create12XerRsrc(),
             [EnhancedTableNames.XerResourceDist15] = transformer.Create15XerResourceDistribution()
         };
@@ -262,7 +263,7 @@ internal sealed class ProgrammeReviewTransformer
             foreach (ProgrammeReviewColumn column in contract.Columns)
             {
                 string original = reader.Get(column);
-                if (column.Name is not ("ProjectCode" or "monthupdate" or "last_recalc_date")
+                if (column.Name is not ("ProjectCode" or "monthupdate" or "MonthUpdate" or "last_recalc_date")
                     && !source.FieldIndexes.ContainsKey(column.Name)
                     && !column.SourceAliases.Any(source.FieldIndexes.ContainsKey))
                     _quality.Warn(evidence, "REVIEW_SOURCE_COLUMN_MISSING",
@@ -272,7 +273,7 @@ internal sealed class ProgrammeReviewTransformer
                     string raw = column.Name switch
                     {
                         "ProjectCode" => _request.ProjectCode,
-                        "monthupdate" => Iso(snapshot.MonthUpdate),
+                        "monthupdate" or "MonthUpdate" => Iso(snapshot.MonthUpdate),
                         "last_recalc_date" => Iso(snapshot.DataDate),
                         "free_float" when contract.TableName == "06_XER_PREDECESSOR"
                             && reader.Get("free_float_status") is not ("Finite" or "Estimated") => string.Empty,
@@ -529,6 +530,7 @@ internal sealed class ProgrammeReviewTransformer
         RequireReferences(byName["01_XER_TASK"], "wbs_id_key", wbs);
         RequireReferences(byName["01_XER_TASK"], "proj_id_key", projects);
         RequireReferences(byName["01_XER_TASK"], "calendar_id_key", calendars);
+        RequireReferences(byName["11_XER_CALENDAR_DETAILED"], "clndr_id_key", calendars, allowBlank: true);
         RequireReferences(byName["03_XER_PROJWBS"], "parent_wbs_id_key", wbs, allowBlank: true);
         RequireReferences(byName["06_XER_PREDECESSOR"], "task_id_key", tasks);
         RequireReferences(byName["06_XER_PREDECESSOR"], "pred_task_id_key", tasks);

@@ -56,6 +56,7 @@ internal sealed class TenderReviewTransformer
             [EnhancedTableNames.XerActvCode08] = transformer.Create08XerActvCode(),
             [EnhancedTableNames.XerTaskActv09] = transformer.Create09XerTaskActv(),
             [EnhancedTableNames.XerCalendar10] = transformer.Create10XerCalendar(),
+            [EnhancedTableNames.XerCalendarDetailed11] = transformer.Create11XerCalendarDetailed(),
             [EnhancedTableNames.XerRsrc12] = transformer.Create12XerRsrc(),
             [EnhancedTableNames.XerResourceDist15] = transformer.Create15XerResourceDistribution()
         };
@@ -405,7 +406,7 @@ internal sealed class TenderReviewTransformer
             foreach (TenderReviewColumn column in contract.Columns)
             {
                 string original = reader.Get(column);
-                if (column.Name is not ("ProjectCode" or "monthupdate" or "last_recalc_date" or "udf_datalake_status_date"
+                if (column.Name is not ("ProjectCode" or "monthupdate" or "MonthUpdate" or "last_recalc_date" or "udf_datalake_status_date"
                     or "add_date" or "state" or "region" or "tender_status")
                     && !source.FieldIndexes.ContainsKey(column.Name)
                     && !column.SourceAliases.Any(source.FieldIndexes.ContainsKey))
@@ -417,7 +418,7 @@ internal sealed class TenderReviewTransformer
                     {
                         "ProjectCode" => _request.ProjectCode,
                         "state" when contract.TableName == "02_XER_PROJECT" => _request.State,
-                        "monthupdate" or "last_recalc_date" => Iso(RequiredDataDate(tenderSource)),
+                        "monthupdate" or "MonthUpdate" or "last_recalc_date" => Iso(RequiredDataDate(tenderSource)),
                         "udf_datalake_status_date" => Iso(tenderSource.StatusDate),
                         "distribution_month" when contract.TableName == "15_XER_RESOURCE_DISTRIBUTION" =>
                             NormalizeDistributionMonth(reader.Get(column), context),
@@ -746,6 +747,7 @@ internal sealed class TenderReviewTransformer
         RequireReferences(byName["01_XER_TASK"], "wbs_id_key", wbs);
         RequireReferences(byName["01_XER_TASK"], "proj_id_key", projects);
         RequireReferences(byName["01_XER_TASK"], "calendar_id_key", calendars);
+        RequireReferences(byName["11_XER_CALENDAR_DETAILED"], "clndr_id_key", calendars, allowBlank: true);
         RequireReferences(byName["03_XER_PROJWBS"], "parent_wbs_id_key", wbs, allowBlank: true);
         RequireReferences(byName["06_XER_PREDECESSOR"], "task_id_key", tasks);
         RequireReferences(byName["06_XER_PREDECESSOR"], "pred_task_id_key", tasks);

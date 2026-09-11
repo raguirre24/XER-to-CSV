@@ -8,7 +8,8 @@ history/weekday-variance rules are changed by this correction.
 
 Table 06 now places `free_float_status`, `free_float_basis` and
 `free_float_reason` immediately after `free_float` in Standard Enhanced,
-Programme Review **4.0** and Tender Review **2.0**. Only `Finite` and `Estimated`
+Programme Review (introduced in **4.0**, current **5.0**) and Tender Review
+(introduced in **2.0**, current **4.0**). Only `Finite` and `Estimated`
 serialize a number. The other public outcomes are `NoFiniteBound`, `Historical`,
 `FixedEvent`, `RequiresContext`, `MissingData` and `InvalidData`; they remain blank
 without infinity or a large numeric sentinel. The optional relationship audit is
@@ -152,7 +153,8 @@ because another input supplied that column.
 The optional `XerToCsvConverter.RelationshipAudit.Cli` accepts repeated `--input` arguments and an
 explicit `--output`, with `--overwrite` for an existing audit target. It provides
 relationship diagnostics on demand. Audit 1.1 is separate from the normal file
-envelope. Programme 4.0/Tender 2.0 add the table 06 metadata described above.
+envelope. Programme 4.0/Tender 2.0 introduced the table 06 metadata described above;
+current Programme 5.0/Tender 4.0 retain it unchanged.
 See the portable [relationship assessment reference](skills/p6-numbered-xer-reporting/references/relationship-audit.md)
 for interpretation and [integration validation](review/RELATIONSHIP_ASSESSMENT_VALIDATION.md)
 for commands and their evidence limits.
@@ -355,14 +357,18 @@ produce portion-specific warnings. This is not an exhaustive scheduling-quality
 audit; `TABLE_GENERATION_FAILED` separately identifies last-resort recovery after
 an unsuccessful transformation, rather than mislabelling it a scheduling defect.
 
-Review bundles contain ten numbered tables, companion and manifest (twelve files).
-Manifests retain their columns and publication-complete literals; each source gains
-one `XER_DATA_QUALITY` manifest row with warning count and companion hash. Numbered
-schema versions stay Programme 3.0 / Tender 1.0; the companion is independently
-versioned 1.2 with 35 columns including FileName. Windows, Web and CLI display completed-with-warnings when its row count
-is nonzero. CLI warnings use stderr and successful publication still returns zero.
-Consumers with a hard-coded eleven-file review envelope must allow this approved
-supplemental file; report/visual repositories were not changed.
+Current review bundles contain eleven numbered tables and one manifest (twelve
+files), including `11_XER_CALENDAR_DETAILED`. Programme 5.0/Tender 4.0 retain
+existing calculation semantics; table 11 projects the shared rule/exception
+decoder into the exact review header and governed calendar keys/MonthUpdate.
+Each retained source has eleven numbered-table manifest rows. Review warnings
+remain available through `DataQualityTable`/`WarningCount`, not a bundled
+`XER_DATA_QUALITY.csv` or manifest row. Standard Enhanced retains that independently
+versioned 1.2 companion with 35 columns including FileName. Windows, Web and CLI
+display completed-with-warnings when warning counts are nonzero; CLI warnings use
+stderr and successful publication still returns zero. Regenerate review bundles
+for the current-only Programme/Tender report loaders; do not simply relabel an old
+manifest version. See [profile contracts](skills/p6-numbered-xer-reporting/references/profile-contracts.md).
 
 ### Table 15 remaining resource curves
 

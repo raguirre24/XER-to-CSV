@@ -26,7 +26,7 @@ public sealed class ReviewProfileAuditTests
 
         var (files, qualityBytes) = await Export(store, tender);
 
-        Assert.Equal(11, files.Count);
+        Assert.Equal(12, files.Count);
         Assert.Equal(2, Rows(files["03_XER_PROJWBS.csv"]).Length);
         Assert.Equal(2, Rows(files["07_XER_ACTVTYPE.csv"]).Length);
         Assert.Single(Rows(files["08_XER_ACTVCODE.csv"]));
@@ -61,7 +61,7 @@ public sealed class ReviewProfileAuditTests
         var store = new XerDataStore();
         foreach (string table in original.TableNames.Where(n => n != missing)) store.AddTable(original.GetTable(table)!);
         var (files, qualityBytes) = await Export(store, tender);
-        Assert.Equal(11, files.Count);
+        Assert.Equal(12, files.Count);
         Assert.Single(Rows(files["02_XER_PROJECT.csv"]));
         Assert.Equal(missing == "TASK" ? 0 : 2, Rows(files["01_XER_TASK.csv"]).Length);
         Assert.NotEmpty(Rows(qualityBytes));

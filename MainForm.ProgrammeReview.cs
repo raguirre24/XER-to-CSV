@@ -25,7 +25,7 @@ public partial class MainForm
         };
         btnExportProgrammeReview.Click += BtnExportProgrammeReview_Click;
         toolTip.SetToolTip(btnExportProgrammeReview,
-            "Create the versioned ten-table Programme Review bundle and audit manifest; source diagnostics appear in the activity log");
+            "Create the Programme Review schema 5.0 eleven-table bundle, including detailed calendars, and audit manifest; source diagnostics appear in the activity log");
         ApplyButtonStyle(btnExportProgrammeReview, UiTheme.Success, UiTheme.Success, Color.White,
             Color.FromArgb(26, 157, 98), Color.FromArgb(21, 112, 70));
         btnExportProgrammeReview.Font = _uiFontBold;
@@ -441,7 +441,7 @@ public partial class MainForm
         bool hasWarnings = result.WarningCount > 0;
         string completion = hasWarnings
             ? $"Programme Review bundle completed with warnings.\n\n" +
-              $"{result.WarningCount} data-quality issue(s). Source diagnostics are shown in the activity log; the bundle contains ten report CSV files and the manifest only.\n\n"
+              $"{result.WarningCount} data-quality issue(s). Source diagnostics are shown in the activity log; the bundle contains eleven report CSV files and the manifest only.\n\n"
             : "Programme Review bundle created successfully.\n\n";
         DialogResult open = MessageBox.Show(
             this,

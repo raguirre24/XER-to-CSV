@@ -51,12 +51,12 @@ foreach ($helper in @('fnXerCsvProjectList','fnXerCsvProjectToken','fnXerCsvProj
     $second = (Get-Expression $tenderText $helper) -replace '\s+', ' '
     Assert-Check ($first -ceq $second) "Shared identity helper differs across reports: $helper."
 }
-Assert-Check ($programmeText -notmatch 'SupportedSchemaVersions|RecommendedSchemaVersion|bundle\[SchemaVersion\]\s*=\s*"[123]\.0"') 'Programme retains a legacy schema path.'
-Assert-Check ($programmeText -match 'RequiredSchemaVersion = "4\.0"') 'Programme current-only gate is not 4.0.'
+Assert-Check ($programmeText -notmatch 'SupportedSchemaVersions|RecommendedSchemaVersion|bundle\[SchemaVersion\]\s*=\s*"[1234]\.0"') 'Programme retains a legacy schema path.'
+Assert-Check ($programmeText -match 'RequiredSchemaVersion = "5\.0"') 'Programme current-only gate is not 5.0.'
 Assert-Check ($programmeText -match 'RawVersions\{0\} = RequiredSchemaVersion') 'Programme does not force raw manifest version validation.'
-Assert-Check ($tenderText -match 'SchemaVersions\{0\} <> "3\.0"') 'Tender current-only gate is not 3.0.'
+Assert-Check ($tenderText -match 'SchemaVersions\{0\} <> "4\.0"') 'Tender current-only gate is not 4.0.'
 Assert-Check ($tenderText -match 'BundleProfiles\{0\} <> "tender_review"') 'Tender profile discriminator is not required.'
-Assert-Check ($tenderText -notmatch 'SchemaVersions\{0\} <> "[12]\.0"') 'Tender retains a legacy version gate.'
+Assert-Check ($tenderText -notmatch 'SchemaVersions\{0\} <> "[123]\.0"') 'Tender retains a legacy version gate.'
 
 $fixture = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/J5001_C_BL01_2026-01-31.xer') -Raw
 $names = @('J5001', 'C5001', '5001', 'CIVIL', 'JIVIL', 'QAC11111', 'QAC000623-01-02', 'NE Part B', 'NE  Part B', 'Māori 工程 Étage 2', '../North\South:Part|B%25', 'North, "Section B"', ('A' * 260 + ' Māori/Part B'))
@@ -109,7 +109,7 @@ foreach ($profile in @('Programme','Tender')) {
             $inputs.Add('same.xer', $xer)
             $result = ([XerToCsvConverter.ProgrammeReview.ProgrammeReviewBundleService]::new()).BuildFromXerBytesAsync($request, $inputs, $null, $cancel).GetAwaiter().GetResult()
         }
-        Assert-Check ($result.Files.Count -eq 11) "$profile bundle must be ten numbered CSVs and one manifest."
+        Assert-Check ($result.Files.Count -eq 12) "$profile bundle must be eleven numbered CSVs and one manifest."
         $manifest = Get-Csv $result.Files['XER_CSV_MANIFEST.csv']
         Assert-Check (($manifest.Headers -join '|') -ceq ($literalManifest -join '|')) "$profile manifest headers differ from M."
         Assert-Check (@($manifest.Rows | Where-Object { $_.schema_version -cne $version }).Count -eq 0) "$profile emitted wrong version."
@@ -136,7 +136,7 @@ foreach ($profile in @('Programme','Tender')) {
             Assert-Check (@($manifest.Rows | Where-Object { $_.project_state -cne 'QLD' }).Count -eq 0) 'Tender manifest omitted or changed manual State.'
             $projectCsv = Get-Csv $result.Files['02_XER_PROJECT.csv']
             Assert-Check (@($projectCsv.Rows | Where-Object { $_.state -cne 'QLD' }).Count -eq 0) 'Tender table 02 does not mirror manual State.'
-            Assert-Check ($manifest.Rows.Count -eq 20) 'Tender collapsed repeated input stages.'
+            Assert-Check ($manifest.Rows.Count -eq 22) 'Tender collapsed repeated input stages.'
             Assert-Check (@($manifest.Rows.original_xer_filename | Sort-Object -Unique).Count -eq 1) 'Tender renamed original provenance.'
             Assert-Check (@($manifest.Rows.canonical_xer_filename | Sort-Object -Unique).Count -eq 2) 'Tender stages do not have separate canonical identities.'
         }

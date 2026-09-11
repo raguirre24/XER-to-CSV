@@ -20,6 +20,9 @@ public sealed class ReviewExportDiagnosticTests
         string profile, bool toDisk, bool malformedCalendar)
     {
         using var output = new TemporaryOutput();
+        // The existing allocation warning remains one; each of the five malformed
+        // weekday definitions now also has an independently reported table11 issue.
+        int expectedWarnings = malformedCalendar ? 6 : 1;
         IReadOnlyDictionary<string, byte[]> files;
         XerTable? qualityTable;
         if (profile == "programme")
@@ -32,14 +35,14 @@ public sealed class ReviewExportDiagnosticTests
             if (toDisk)
             {
                 var result = await service.BuildFromParsedDataAsync(store, request, output.Path);
-                Assert.Equal(1, result.WarningCount);
+                Assert.Equal(expectedWarnings, result.WarningCount);
                 qualityTable = result.DataQualityTable;
                 files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
             }
             else
             {
                 var result = await service.BuildFromParsedDataToMemoryAsync(store, request);
-                Assert.Equal(1, result.WarningCount);
+                Assert.Equal(expectedWarnings, result.WarningCount);
                 qualityTable = result.DataQualityTable;
                 files = result.Files;
             }
@@ -53,28 +56,33 @@ public sealed class ReviewExportDiagnosticTests
             if (toDisk)
             {
                 var result = await service.BuildFromParsedDataAsync(store, request, output.Path);
-                Assert.Equal(1, result.WarningCount);
+                Assert.Equal(expectedWarnings, result.WarningCount);
                 qualityTable = result.DataQualityTable;
                 files = Directory.EnumerateFiles(result.BundlePath).ToDictionary(path => Path.GetFileName(path), File.ReadAllBytes);
             }
             else
             {
                 var result = await service.BuildFromParsedDataToMemoryAsync(store, request);
-                Assert.Equal(1, result.WarningCount);
+                Assert.Equal(expectedWarnings, result.WarningCount);
                 qualityTable = result.DataQualityTable;
                 files = result.Files;
             }
         }
-        Assert.Equal(11, files.Count);
+        Assert.Equal(12, files.Count);
         Assert.DoesNotContain(XerDataQuality.FileName, files.Keys);
         string distribution = System.Text.Encoding.UTF8.GetString(files[EnhancedTableNames.XerResourceDist15 + ".csv"]);
         Assert.Single(distribution.Trim().Split('\n'));
         string diagnostics = System.Text.Encoding.UTF8.GetString(XerDataQuality.WriteToBytes(qualityTable!, CancellationToken.None));
         Assert.Contains(malformedCalendar ? "RESOURCE_CALENDAR_INVALID" : "REMAINING_NO_WORKING_TIME", diagnostics, StringComparison.Ordinal);
         if (malformedCalendar) Assert.Contains("Invalid calendar clock '25:00'", diagnostics, StringComparison.Ordinal);
-        // Fixed review bundles do not request table11; malformed working-time data
-        // is retained as the table15 warning rather than claimed to be a valid table11.
-        Assert.DoesNotContain("11_XER_CALENDAR_DETAILED.csv", files.Keys);
+        var calendarRows = ReviewProjectNameBundleTests.ReadCsv(files["11_XER_CALENDAR_DETAILED.csv"]);
+        Assert.Equal(7, calendarRows.Length);
+        XerTable quality = Assert.IsType<XerTable>(qualityTable);
+        Assert.Single(quality.Rows, row => row.Fields[quality.FieldIndexes["table_name"]] == EnhancedTableNames.XerResourceDist15);
+        var calendarWarnings = quality.Rows.Where(row => row.Fields[quality.FieldIndexes["table_name"]] == EnhancedTableNames.XerCalendarDetailed11).ToArray();
+        Assert.Equal(malformedCalendar ? 5 : 0, calendarWarnings.Length);
+        if (malformedCalendar)
+            Assert.Contains(calendarRows, row => row["work_hours"] == "" && row["working_day"] == "" && row["working_day_int"] == "");
         Assert.Contains("8.0000", diagnostics, StringComparison.Ordinal);
         Assert.Contains(OriginalFilename, diagnostics, StringComparison.Ordinal);
         Assert.Equal("preserve me", File.ReadAllText(Path.Combine(output.Path, "unrelated.txt")));

@@ -66,7 +66,7 @@ public static class TenderReviewCliApplication
                     cancellation.Token);
                 if (result.WarningCount > 0)
                     Console.Error.WriteLine($"Tender Review bundle completed with warnings: {result.WarningCount} data-quality issue(s). " +
-                                            "Source diagnostics follow on stderr; the bundle contains ten report CSV files and the manifest only.");
+                                            "Source diagnostics follow on stderr; the bundle contains eleven report CSV files and the manifest only.");
                 foreach (string message in XerToCsvConverter.XerDataQuality.GetMessages(result.DataQualityTable))
                     Console.Error.WriteLine(message);
                 Console.WriteLine(result.BundlePath);
@@ -110,7 +110,9 @@ public static class TenderReviewCliApplication
         Console.Error.WriteLine("original_xer_filename is optional and defaults to the path's filename. Repeated paths and names are valid.");
         Console.Error.WriteLine("project_code is the explicit reporting identity for every selected stage; it may differ from P6 PROJECT.proj_short_name.");
         Console.Error.WriteLine("Each XER must contain exactly one PROJECT row. No project code is inferred by removing revision suffixes.");
-        Console.Error.WriteLine("Tender schema 3.0: optional state is manual metadata for every stage, never inferred from XER data.");
+        Console.Error.WriteLine("Tender schema 4.0 exports eleven numbered CSVs, including 11_XER_CALENDAR_DETAILED.csv, plus the manifest (12 files).");
+        Console.Error.WriteLine("Use the matching current-only report loader and regenerate older bundles; do not edit version cells.");
+        Console.Error.WriteLine("Optional state is manual metadata for every stage, never inferred from XER data.");
         Console.Error.WriteLine("Blank state does not block export; state-based access cannot match it, but all-project/exact-project grants may apply.");
         Console.Error.WriteLine("State changes the audience of existing state grants. Only an authorised publisher should classify project visibility.");
     }

@@ -11,7 +11,7 @@ public sealed class TenderReviewContractTests
         {
             "01_XER_TASK.csv", "02_XER_PROJECT.csv", "03_XER_PROJWBS.csv",
             "06_XER_PREDECESSOR.csv", "07_XER_ACTVTYPE.csv", "08_XER_ACTVCODE.csv",
-            "09_XER_TASKACTV.csv", "10_XER_CALENDAR.csv", "12_XER_RSRC.csv",
+            "09_XER_TASKACTV.csv", "10_XER_CALENDAR.csv", "11_XER_CALENDAR_DETAILED.csv", "12_XER_RSRC.csv",
             "15_XER_RESOURCE_DISTRIBUTION.csv"
         };
         var expectedHeaders = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -24,11 +24,12 @@ public sealed class TenderReviewContractTests
             ["08_XER_ACTVCODE"] = "actv_code_id_key,actv_code_name,actv_code_type_id_key",
             ["09_XER_TASKACTV"] = "task_id_key,actv_code_id_key",
             ["10_XER_CALENDAR"] = "clndr_id_key,clndr_name",
+            ["11_XER_CALENDAR_DETAILED"] = ReviewDetailedCalendarTests.Headers,
             ["12_XER_RSRC"] = "rsrc_id_key,def_qty_per_hr",
             ["15_XER_RESOURCE_DISTRIBUTION"] = "task_id_key,rsrc_id_key,is_actual,distribution_month,monthly_quantity,rsrc_name,rsrc_type,unit,ProjectCode"
         };
 
-        Assert.Equal("3.0", TenderReviewContract.SchemaVersion);
+        Assert.Equal("4.0", TenderReviewContract.SchemaVersion);
         Assert.Equal("tender_review", TenderReviewContract.BundleProfile);
         Assert.Equal("COMPLETE", TenderReviewContract.CompleteStatus);
         Assert.Equal(expectedFiles, TenderReviewContract.Tables.Select(table => table.FileName));

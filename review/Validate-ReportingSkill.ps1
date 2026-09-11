@@ -7,25 +7,26 @@ if (-not (Test-Path -LiteralPath $assemblyPath)) { throw 'Build Core before chec
 $null = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($assemblyPath))
 
 $contractText = Get-Content -LiteralPath (Join-Path $skillRoot 'references/profile-contracts.md') -Raw
-$sharedMatch = [regex]::Match($contractText, '(?s)## Eight shared review table headers(.*?)## Manifests')
+$sharedMatch = [regex]::Match($contractText, '(?s)## Nine shared review table headers(.*?)## Manifests')
 if (-not $sharedMatch.Success) { throw 'Shared review contract section is missing.' }
 $sharedHeaders = @{}
 foreach ($match in [regex]::Matches($sharedMatch.Groups[1].Value, '(?m)^([0-9]{2}_XER_[A-Z_]+):\r?\n([^\r\n]+)')) {
     $sharedHeaders[$match.Groups[1].Value] = $match.Groups[2].Value
 }
-if ($sharedHeaders.Count -ne 8) { throw 'Expected exactly eight shared review table headers.' }
+if ($sharedHeaders.Count -ne 9) { throw 'Expected exactly nine shared review table headers.' }
 
 $profiles = @(
     @{ Name = 'Programme Review'; Pattern = '(?s)## Exact Programme Review headers(.*?)## Exact Tender Review headers'; Tables = [XerToCsvConverter.ProgrammeReview.ProgrammeReviewContract]::Tables },
-    @{ Name = 'Tender Review'; Pattern = '(?s)## Exact Tender Review headers(.*?)## Eight shared review table headers'; Tables = [XerToCsvConverter.TenderReview.TenderReviewContract]::Tables }
+    @{ Name = 'Tender Review'; Pattern = '(?s)## Exact Tender Review headers(.*?)## Nine shared review table headers'; Tables = [XerToCsvConverter.TenderReview.TenderReviewContract]::Tables }
 )
 $checkedContracts = 0
 $tenderManifestHeader = [regex]::Match($contractText, '(?m)^schema_version,bundle_profile,[^\r\n]+').Value
 if ($tenderManifestHeader -cne ([XerToCsvConverter.TenderReview.TenderReviewContract]::ManifestColumns -join ',')) {
     throw 'Documented Tender manifest header/order differs from Core.'
 }
-if ([XerToCsvConverter.TenderReview.TenderReviewContract]::SchemaVersion -cne '3.0' -or
-    $contractText -notmatch '\| Versioned report contract \| None \| 4\.0 \| 3\.0 \|') {
+if ([XerToCsvConverter.ProgrammeReview.ProgrammeReviewContract]::SchemaVersion -cne '5.0' -or
+    [XerToCsvConverter.TenderReview.TenderReviewContract]::SchemaVersion -cne '4.0' -or
+    $contractText -notmatch '\| Versioned report contract \| None \| 5\.0 \| 4\.0 \|') {
     throw 'Documented current profile versions disagree with Core.'
 }
 foreach ($profile in $profiles) {
@@ -72,4 +73,4 @@ foreach ($file in $files) {
         $linkCount++
     }
 }
-Write-Output "Passed: $checkedContracts exact numbered review table contracts, Tender 3.0 18-column manifest, additive 35-column diagnostic 1.2 companion header, $linkCount relative reference links, and skill whitespace."
+Write-Output "Passed: $checkedContracts exact numbered review table contracts including both table11 projections, Programme5.0/Tender4.0, Tender 18-column manifest, additive 35-column diagnostic 1.2 companion header, $linkCount relative reference links, and skill whitespace."

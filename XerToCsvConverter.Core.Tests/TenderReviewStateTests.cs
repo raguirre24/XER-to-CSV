@@ -69,11 +69,11 @@ public sealed class TenderReviewStateTests
 
         Assert.Equal(original, input);
         Assert.Equal(state, request.State);
-        Assert.Equal(11, result.Files.Count);
-        Assert.Equal(10, result.ManifestRows.Count);
+        Assert.Equal(12, result.Files.Count);
+        Assert.Equal(11, result.ManifestRows.Count);
         Assert.All(result.ManifestRows, row =>
         {
-            Assert.Equal("3.0", row.SchemaVersion);
+            Assert.Equal("4.0", row.SchemaVersion);
             Assert.Equal(expected, row.ProjectState);
         });
         var manifest = Rows(result.Files[TenderReviewContract.ManifestFileName]);
@@ -113,7 +113,7 @@ public sealed class TenderReviewStateTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task State_only_change_preserves_nine_tables_keys_sources_and_calculations(bool reverse)
+    public async Task State_only_change_preserves_ten_tables_keys_sources_and_calculations(bool reverse)
     {
         TenderReviewSource[] sources = [Source(0, "same.xer", "2026-09-05"), Source(1, "same.xer", "2026-09-06")];
         if (reverse) Array.Reverse(sources);
@@ -186,7 +186,7 @@ public sealed class TenderReviewStateTests
             Assert.Equal(disk.BundleId, memory.BundleId);
             Assert.Equal(disk.ManifestRows, memory.ManifestRows);
             Assert.Equal(disk.WarningCount, memory.WarningCount);
-            Assert.Equal(11, Directory.EnumerateFiles(disk.BundlePath).Count());
+            Assert.Equal(12, Directory.EnumerateFiles(disk.BundlePath).Count());
             foreach ((string name, byte[] bytes) in memory.Files)
                 Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(disk.BundlePath, name)));
             Assert.Equal(content, await File.ReadAllBytesAsync(path));

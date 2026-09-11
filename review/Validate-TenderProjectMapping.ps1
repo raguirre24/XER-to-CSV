@@ -40,11 +40,11 @@ foreach ($expected in @('TENDER_PROJECT_CODE_MAPPED', $nativeCode, "reporting pr
 if ($diagnostics.Contains('XER_DATA_QUALITY.csv')) { throw 'Review CLI incorrectly promises a diagnostic CSV.' }
 $bundle = ([IO.File]::ReadAllText($stdout)).Trim()
 $files = @(Get-ChildItem -LiteralPath $bundle -File)
-if ($files.Count -ne 11) { throw "Expected eleven bundle files, got $($files.Count)." }
+if ($files.Count -ne 12) { throw "Expected twelve bundle files, got $($files.Count)." }
 $manifest = @(Import-Csv -LiteralPath (Join-Path $bundle 'XER_CSV_MANIFEST.csv'))
-if ($manifest.Count -ne 10) { throw 'Expected ten manifest rows.' }
+if ($manifest.Count -ne 11) { throw 'Expected eleven manifest rows.' }
 foreach ($row in $manifest) {
-    if ($row.project_code -ne $reportCode -or $row.schema_version -ne '3.0' -or $row.bundle_profile -ne 'tender_review' -or $row.bundle_status -ne 'COMPLETE') {
+    if ($row.project_code -ne $reportCode -or $row.schema_version -ne '4.0' -or $row.bundle_profile -ne 'tender_review' -or $row.bundle_status -ne 'COMPLETE') {
         throw 'Manifest reporting identity or contract mismatch.'
     }
     if ($row.canonical_xer_filename -ne 'QAC000623-TENDER-20260905.xer') { throw 'Incorrect canonical reporting name.' }
@@ -59,4 +59,4 @@ foreach ($table in @('01_XER_TASK.csv', '02_XER_PROJECT.csv')) {
 if ((Get-FileHash -LiteralPath $source).Hash -ne $sourceHash -or (Get-FileHash -LiteralPath $fixture).Hash -ne $fixtureHash) {
     throw 'A source fixture was modified during export.'
 }
-Write-Output "PASS: explicit Tender project mapping, CLI diagnostics, eleven-file bundle, manifest identity and source preservation. Artifacts: $run"
+Write-Output "PASS: explicit Tender project mapping, CLI diagnostics, twelve-file bundle, manifest identity and source preservation. Artifacts: $run"

@@ -27,7 +27,7 @@ public partial class MainForm
         btnExportTenderReview.Click += BtnExportTenderReview_Click;
         toolTip.SetToolTip(
             btnExportTenderReview,
-            "Create the versioned ten-table Tender Review bundle and audit manifest; source diagnostics appear in the activity log");
+            "Create the Tender Review schema 4.0 eleven-table bundle, including detailed calendars, and audit manifest; source diagnostics appear in the activity log");
         ApplyButtonStyle(
             btnExportTenderReview,
             UiTheme.Accent,
@@ -269,7 +269,7 @@ public partial class MainForm
         bool hasWarnings = result.WarningCount > 0;
         string completion = hasWarnings
             ? $"Tender Review bundle completed with warnings.\n\n" +
-              $"{result.WarningCount} data-quality issue(s). Source diagnostics are shown in the activity log; the bundle contains ten report CSV files and the manifest only.\n\n"
+              $"{result.WarningCount} data-quality issue(s). Source diagnostics are shown in the activity log; the bundle contains eleven report CSV files and the manifest only.\n\n"
             : "Tender Review bundle created successfully.\n\n";
         DialogResult open = MessageBox.Show(
             this,

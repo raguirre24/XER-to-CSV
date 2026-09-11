@@ -33,7 +33,7 @@ public sealed record ProgrammeReviewTableContract(
 /// </summary>
 public static class ProgrammeReviewContract
 {
-    public const string SchemaVersion = "4.0";
+    public const string SchemaVersion = "5.0";
     public const string ManifestFileName = "XER_CSV_MANIFEST.csv";
     public const string CompleteStatus = "complete";
 
@@ -173,6 +173,19 @@ public static class ProgrammeReviewContract
                 "10_XER_CALENDAR", "10_XER_CALENDAR.csv", EnhancedTableNames.XerCalendar10, true,
                 new[] { C("clndr_id_key", nullable: false), C("clndr_name", nullable: false) },
                 new[] { "clndr_id_key" }, new[] { "clndr_id_key" }),
+
+            new ProgrammeReviewTableContract(
+                "11_XER_CALENDAR_DETAILED", "11_XER_CALENDAR_DETAILED.csv", EnhancedTableNames.XerCalendarDetailed11, true,
+                new[]
+                {
+                    C("clndr_name"), C("clndr_type"), C("date", ProgrammeReviewColumnType.Date),
+                    C("day_of_week"), C("working_day"), C("work_hours", ProgrammeReviewColumnType.Number),
+                    C("exception_type"), C("clndr_id_key"),
+                    C("MonthUpdate", ProgrammeReviewColumnType.Date, false),
+                    C("day_of_week_num", ProgrammeReviewColumnType.Integer),
+                    C("working_day_int", ProgrammeReviewColumnType.Integer)
+                },
+                Array.Empty<string>(), new[] { "clndr_id_key", "date", "day_of_week_num", "exception_type" }),
 
             new ProgrammeReviewTableContract(
                 "12_XER_RSRC", "12_XER_RSRC.csv", EnhancedTableNames.XerRsrc12, false,

@@ -36,10 +36,10 @@ public sealed class ReviewDataQualityBundleTests
             .BuildFromParsedDataToMemoryAsync(store, ProgrammeReviewNamingTests.Request(new[] { snapshot }));
 
         Assert.Equal(1, result.WarningCount);
-        Assert.Equal(11, result.Files.Count);
+        Assert.Equal(12, result.Files.Count);
         Assert.DoesNotContain(XerDataQuality.FileName, result.Files.Keys);
-        Assert.Equal(10, ProgrammeReviewContract.Tables.Count);
-        Assert.Equal(10, result.ManifestRows.Count);
+        Assert.Equal(11, ProgrammeReviewContract.Tables.Count);
+        Assert.Equal(11, result.ManifestRows.Count);
         byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
         Dictionary<string, string> warning = Assert.Single(ReadRows(qualityBytes));
         AssertWarning(warning, "CSV::J123::C::BL01", snapshot.OriginalXerFilename);
@@ -73,7 +73,7 @@ public sealed class ReviewDataQualityBundleTests
         {
             ProgrammeReviewBundleResult disk = await service.BuildFromParsedDataAsync(store, request, root);
             Assert.Equal(memory.WarningCount, disk.WarningCount);
-            Assert.Equal(11, Directory.EnumerateFiles(disk.BundlePath).Count());
+            Assert.Equal(12, Directory.EnumerateFiles(disk.BundlePath).Count());
             Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(disk.BundlePath).Select(Path.GetFileName));
             foreach ((string name, byte[] bytes) in memory.Files)
                 Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(disk.BundlePath, name)));
@@ -97,7 +97,7 @@ public sealed class ReviewDataQualityBundleTests
         Assert.Equal(0, result.WarningCount);
         byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
         Assert.Empty(ReadRows(qualityBytes));
-        Assert.Equal(10, result.ManifestRows.Count);
+        Assert.Equal(11, result.ManifestRows.Count);
         Assert.All(result.ManifestRows, row => Assert.Equal(retained.OriginalXerFilename, row.OriginalXerFilename));
         Assert.DoesNotContain(result.ManifestRows, row => row.TableName == XerDataQuality.TableName);
     }
@@ -119,10 +119,10 @@ public sealed class ReviewDataQualityBundleTests
             .BuildFromParsedDataToMemoryAsync(store, request);
 
         Assert.Equal(2, result.WarningCount);
-        Assert.Equal(11, result.Files.Count);
+        Assert.Equal(12, result.Files.Count);
         Assert.DoesNotContain(XerDataQuality.FileName, result.Files.Keys);
-        Assert.Equal(10, TenderReviewContract.Tables.Count);
-        Assert.Equal(20, result.ManifestRows.Count);
+        Assert.Equal(11, TenderReviewContract.Tables.Count);
+        Assert.Equal(22, result.ManifestRows.Count);
         byte[] qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
         IReadOnlyList<Dictionary<string, string>> warnings = ReadRows(qualityBytes);
         Assert.Equal(2, warnings.Count);
@@ -161,7 +161,7 @@ public sealed class ReviewDataQualityBundleTests
         {
             TenderReviewBundleResult disk = await service.BuildFromParsedDataAsync(store, request, root);
             Assert.Equal(memory.WarningCount, disk.WarningCount);
-            Assert.Equal(11, Directory.EnumerateFiles(disk.BundlePath).Count());
+            Assert.Equal(12, Directory.EnumerateFiles(disk.BundlePath).Count());
             Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(disk.BundlePath).Select(Path.GetFileName));
             foreach ((string name, byte[] bytes) in memory.Files)
                 Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(disk.BundlePath, name)));
@@ -262,7 +262,7 @@ public sealed class ReviewDataQualityBundleTests
                 bundlePath = disk.BundlePath;
                 AssertCompletedRemaining(browserFiles, browserQuality, "CSV::J123::C::BL01", original, 1);
             }
-            Assert.Equal(11, Directory.EnumerateFiles(bundlePath).Count());
+            Assert.Equal(12, Directory.EnumerateFiles(bundlePath).Count());
             Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(bundlePath).Select(Path.GetFileName));
             foreach ((string name, byte[] expected) in browserFiles)
                 Assert.Equal(expected, File.ReadAllBytes(Path.Combine(bundlePath, name)));
@@ -327,7 +327,7 @@ public sealed class ReviewDataQualityBundleTests
                 path = result.BundlePath;
                 qualityBytes = XerDataQuality.WriteToBytes(result.DataQualityTable!, CancellationToken.None);
             }
-            Assert.Equal(11, Directory.EnumerateFiles(path).Count());
+            Assert.Equal(12, Directory.EnumerateFiles(path).Count());
             Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(path).Select(Path.GetFileName));
             IReadOnlyList<Dictionary<string, string>> warnings = ReadRows(qualityBytes);
             Assert.Equal(new[] { "Actual", "Remaining" }, warnings.Select(row => row["allocation_portion"]));
@@ -411,7 +411,7 @@ public sealed class ReviewDataQualityBundleTests
 
     private static void AssertCompletedRemaining(IReadOnlyDictionary<string, byte[]> files, byte[] qualityBytes, string prefix, string original, int sources)
     {
-        Assert.Equal(11, files.Count);
+        Assert.Equal(12, files.Count);
         Assert.DoesNotContain(XerDataQuality.FileName, files.Keys);
         Assert.Equal(XerDataQuality.Columns.Append("FileName"), ReadHeader(qualityBytes));
         AssertRemainingWarning(Assert.Single(ReadRows(qualityBytes)), prefix, original);

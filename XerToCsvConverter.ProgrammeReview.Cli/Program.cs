@@ -67,7 +67,7 @@ static async Task<int> RunAsync(string[] args)
                 request, Path.GetFullPath(outputRoot), progress, cancellation.Token);
             if (result.WarningCount > 0)
                 Console.Error.WriteLine($"Programme Review bundle completed with warnings: {result.WarningCount} data-quality issue(s). " +
-                                        "Source diagnostics follow on stderr; the bundle contains ten report CSV files and the manifest only.");
+                                        "Source diagnostics follow on stderr; the bundle contains eleven report CSV files and the manifest only.");
             foreach (string message in XerToCsvConverter.XerDataQuality.GetMessages(result.DataQualityTable))
                 Console.Error.WriteLine(message);
             Console.WriteLine(result.BundlePath);
@@ -104,4 +104,6 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("Usage:");
     Console.Error.WriteLine("  dotnet run --project XerToCsvConverter.ProgrammeReview.Cli -- --config <bundle.json> --output-root <directory>");
+    Console.Error.WriteLine("Programme schema 5.0 exports eleven numbered CSVs, including 11_XER_CALENDAR_DETAILED.csv, plus the manifest (12 files).");
+    Console.Error.WriteLine("Use the matching current-only report loader and regenerate older bundles; do not edit version cells.");
 }

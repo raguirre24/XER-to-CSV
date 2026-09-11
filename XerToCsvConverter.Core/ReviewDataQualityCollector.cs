@@ -59,7 +59,7 @@ internal sealed class ReviewDataQualityCollector
             "01_XER_TASK" => "TASK", "02_XER_PROJECT" => "PROJECT", "03_XER_PROJWBS" => "PROJWBS",
             "06_XER_PREDECESSOR" => "TASKPRED", "07_XER_ACTVTYPE" => "ACTVTYPE",
             "08_XER_ACTVCODE" => "ACTVCODE", "09_XER_TASKACTV" => "TASKACTV",
-            "10_XER_CALENDAR" => "CALENDAR", "12_XER_RSRC" => "RSRC",
+            "10_XER_CALENDAR" or "11_XER_CALENDAR_DETAILED" => "CALENDAR", "12_XER_RSRC" => "RSRC",
             "15_XER_RESOURCE_DISTRIBUTION" => "TASKRSRC", _ => evidence.Table.Name
         };
         XerTable rawTable = _store.GetTable(rawTableName) ?? evidence.Table;

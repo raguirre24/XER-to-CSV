@@ -51,7 +51,7 @@ public sealed partial class ResourceCurveProfileTests
             var memory = await service.BuildFromParsedDataToMemoryAsync(store, request);
             warningCount = memory.WarningCount;
             qualityBytes = XerDataQuality.WriteToBytes(memory.DataQualityTable!, CancellationToken.None);
-            Assert.All(memory.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
+            Assert.All(memory.ManifestRows, row => Assert.Equal("5.0", row.SchemaVersion));
             Assert.DoesNotContain(memory.ManifestRows, row => row.TableName == XerDataQuality.TableName);
             files = memory.Files;
             if (disk)
@@ -68,7 +68,7 @@ public sealed partial class ResourceCurveProfileTests
             var memory = await service.BuildFromParsedDataToMemoryAsync(store, request);
             warningCount = memory.WarningCount;
             qualityBytes = XerDataQuality.WriteToBytes(memory.DataQualityTable!, CancellationToken.None);
-            Assert.All(memory.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
+            Assert.All(memory.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
             Assert.DoesNotContain(memory.ManifestRows, row => row.TableName == XerDataQuality.TableName);
             files = memory.Files;
             if (disk)
@@ -79,7 +79,7 @@ public sealed partial class ResourceCurveProfileTests
             }
         }
 
-        Assert.Equal(profile == "standard" ? 3 : 11, files.Count);
+        Assert.Equal(profile == "standard" ? 3 : 12, files.Count);
         Assert.Equal(2, warningCount);
         IReadOnlyList<string[]> csv = ReadCsv(files[DistributionFile]);
         Assert.Equal(profile == "standard" ? StandardHeaders : ProfileHeaders, string.Join(',', csv[0]));

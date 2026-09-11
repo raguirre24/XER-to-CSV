@@ -33,7 +33,7 @@ public sealed class ReviewProjectNameBundleTests
             string normalized = reportingCode.ToUpperInvariant();
             string canonical = TenderReviewNaming.CreateCanonicalFilename(normalized, source.StatusDate);
 
-            Assert.Equal(11, memory.Files.Count);
+            Assert.Equal(12, memory.Files.Count);
             Assert.Equal(disk.BundleId, memory.BundleId);
             Assert.All(memory.ManifestRows, row => Assert.Equal(normalized, row.ProjectCode));
             AssertMetadataAndJoins(memory.Files, normalized, canonical);
@@ -92,7 +92,7 @@ public sealed class ReviewProjectNameBundleTests
         var result = await new TenderReviewBundleService().BuildFromXerBytesAsync(
             TenderReviewNamingTests.Request(sources) with { ProjectCode = reportCode }, uploads, progress);
         Assert.Equal(sources.Select(source => source.SourceToken), progress.Sources);
-        Assert.Equal(20, result.ManifestRows.Count);
+        Assert.Equal(22, result.ManifestRows.Count);
         Assert.Equal(repeatedContent ? 1 : 2, result.ManifestRows.Select(row => row.SourceSha256).Distinct().Count());
         Assert.All(result.ManifestRows, row => Assert.Equal(reportCode, row.ProjectCode));
         Assert.Equal(4, ReadCsv(result.Files["01_XER_TASK.csv"]).Select(row => row["task_id_key"]).Distinct().Count());
@@ -209,7 +209,7 @@ public sealed class ReviewProjectNameBundleTests
             AssertSafeFilename(canonicalName);
             Assert.True(bundleId.Length < 180);
             Assert.True(canonicalName.Length < 150);
-            Assert.Equal(11, files.Count);
+            Assert.Equal(12, files.Count);
             foreach ((string name, byte[] content) in files)
             {
                 AssertSafeFilename(name);
@@ -253,7 +253,7 @@ public sealed class ReviewProjectNameBundleTests
 
             Assert.Equal(disk.BundleId, memory.BundleId);
             Assert.Equal(sources.Select(source => source.SourceToken), progress.Sources);
-            Assert.Equal(20, memory.ManifestRows.Count);
+            Assert.Equal(22, memory.ManifestRows.Count);
             Assert.Single(memory.ManifestRows.Select(row => row.SourceSha256).Distinct());
             Assert.Single(memory.ManifestRows.Select(row => row.OriginalXerFilename).Distinct());
             Assert.Equal(2, memory.ManifestRows.Select(row => row.CanonicalXerFilename).Distinct().Count());

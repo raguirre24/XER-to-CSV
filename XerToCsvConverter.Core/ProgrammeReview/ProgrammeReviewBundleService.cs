@@ -114,7 +114,8 @@ public sealed class ProgrammeReviewBundleService
 
     /// <summary>
     /// Browser-safe entrypoint that validates and hashes uploaded XER bytes, parses only the retained
-    /// baseline/update history, and returns the ten numbered tables, data-quality companion and manifest without using the file system.
+    /// baseline/update history, and returns the eleven numbered tables and manifest without using the file system.
+    /// Data-quality diagnostics remain on the result object, outside the bundle file envelope.
     /// </summary>
     public async Task<ProgrammeReviewInMemoryBundleResult> BuildFromXerBytesAsync(
         ProgrammeReviewBundleRequest request,

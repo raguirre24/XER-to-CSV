@@ -75,8 +75,8 @@ public sealed partial class ResourceCurveProfileTests
             Assert.Equal("1.00", row["month_working_days"]);
             Assert.Equal("2.00", row["total_working_days"]);
         });
-        Assert.All(programme.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
-        Assert.All(tender.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
+        Assert.All(programme.ManifestRows, row => Assert.Equal("5.0", row.SchemaVersion));
+        Assert.All(tender.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
 
         XerDataStore ProfileStore(string source, string projectCode)
         {
@@ -235,8 +235,8 @@ public sealed partial class ResourceCurveProfileTests
         TenderReviewInMemoryBundleResult tender = await new TenderReviewBundleService()
             .BuildFromParsedDataToMemoryAsync(createStore(source.SourceToken, "J5001"),
                 TenderReviewNamingTests.Request([source]));
-        Assert.All(programme.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
-        Assert.All(tender.ManifestRows, row => Assert.Equal("3.0", row.SchemaVersion));
+        Assert.All(programme.ManifestRows, row => Assert.Equal("5.0", row.SchemaVersion));
+        Assert.All(tender.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
         return new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
             ["standard"] = standard[EnhancedTableNames.XerResourceDist15],
@@ -416,7 +416,7 @@ public sealed partial class ResourceCurveProfileTests
                 break;
         }
 
-        Assert.Equal(profile == "standard" ? 3 : 11, files.Count);
+        Assert.Equal(profile == "standard" ? 3 : 12, files.Count);
         Dictionary<string, string>[] allocations = Records(ReadCsv(files[DistributionFile]));
         Assert.Equal(new[] { 80m, 20m }, Quantities(allocations));
         IReadOnlyList<string[]> diagnosticCsv = ReadCsv(qualityBytes);

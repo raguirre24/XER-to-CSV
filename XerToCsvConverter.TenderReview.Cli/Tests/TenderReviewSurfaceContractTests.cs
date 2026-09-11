@@ -8,6 +8,40 @@ namespace XerToCsvConverter.TenderReview.Surface.Tests;
 public sealed class TenderReviewSurfaceContractTests
 {
     [Fact]
+    public void ReviewSurfacesDescribeCurrentDetailedCalendarBundleContracts()
+    {
+        const string calendarFile = "11_XER_CALENDAR_DETAILED.csv";
+        const string calendarHeader = "clndr_name,clndr_type,date,day_of_week,working_day,work_hours,exception_type,clndr_id_key,MonthUpdate,day_of_week_num,working_day_int";
+        string root = Path.GetDirectoryName(FindWebProjectRoot())!;
+        string page = File.ReadAllText(Path.Combine(root, "XerToCsvConverter.Web", "Pages", "Index.razor"));
+        string programmeUi = File.ReadAllText(Path.Combine(root, "MainForm.ProgrammeReview.cs"));
+        string tenderUi = File.ReadAllText(Path.Combine(root, "MainForm.TenderReview.cs"));
+        string programmeCli = File.ReadAllText(Path.Combine(root, "XerToCsvConverter.ProgrammeReview.Cli", "Program.cs"));
+        string tenderCli = File.ReadAllText(Path.Combine(root, "XerToCsvConverter.TenderReview.Cli", "Program.cs"));
+        string tenderReadme = File.ReadAllText(Path.Combine(root, "XerToCsvConverter.TenderReview.Cli", "README.md"));
+
+        Assert.Equal("5.0", ProgrammeReview.ProgrammeReviewContract.SchemaVersion);
+        Assert.Equal("4.0", TenderReviewContract.SchemaVersion);
+        Assert.Equal(11, ProgrammeReview.ProgrammeReviewContract.Tables.Count);
+        Assert.Equal(11, TenderReviewContract.Tables.Count);
+        Assert.Equal(calendarHeader, string.Join(',', ProgrammeReview.ProgrammeReviewContract.Tables
+            .Single(table => table.FileName == calendarFile).Columns.Select(column => column.Name)));
+        Assert.Equal(calendarHeader, string.Join(',', TenderReviewContract.Tables
+            .Single(table => table.FileName == calendarFile).Columns.Select(column => column.Name)));
+        Assert.Contains("Schema 5.0 full-history bundle: eleven report tables", page, StringComparison.Ordinal);
+        Assert.Contains("Schema 4.0 tender-stage bundle: eleven report tables", page, StringComparison.Ordinal);
+        Assert.Contains("Programme Review schema 5.0 eleven-table bundle", programmeUi, StringComparison.Ordinal);
+        Assert.Contains("Tender Review schema 4.0 eleven-table bundle", tenderUi, StringComparison.Ordinal);
+        Assert.Contains("Programme schema 5.0 exports eleven numbered CSVs", programmeCli, StringComparison.Ordinal);
+        Assert.Contains("Tender schema 4.0 exports eleven numbered CSVs", tenderCli, StringComparison.Ordinal);
+        Assert.Contains(calendarFile, programmeCli, StringComparison.Ordinal);
+        Assert.Contains(calendarFile, tenderCli, StringComparison.Ordinal);
+        Assert.Contains(calendarHeader, tenderReadme, StringComparison.Ordinal);
+        Assert.Contains("eleven manifest rows per stage", tenderReadme, StringComparison.Ordinal);
+        Assert.Contains("No extra manual calendar input is required", tenderReadme, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BrowserDefaultScriptUsesLocalCalendarGettersAndLoadsBeforeBlazor()
     {
         string webRoot = FindWebProjectRoot();
