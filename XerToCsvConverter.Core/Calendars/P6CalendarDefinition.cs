@@ -12,6 +12,7 @@ public readonly record struct P6WorkInterval(TimeSpan Start, TimeSpan End)
 /// <summary>One source-qualified calendar, resolved to civil-day availability.</summary>
 public sealed class P6CalendarDefinition
 {
+    private readonly CalendarWorkIndex _workIndex;
     public string SourceToken { get; }
     public string CalendarId { get; }
     public string Name { get; }
@@ -38,9 +39,10 @@ public sealed class P6CalendarDefinition
         HoursPerDay = decimal.TryParse(rawHoursPerDay, NumberStyles.Float,
             CultureInfo.InvariantCulture, out decimal hours) && hours > 0 ? hours : null;
         (StandardWeek, Exceptions) = P6CalendarNormalization.Resolve(rawWeek, rawExceptions);
+        _workIndex = new CalendarWorkIndex(StandardWeek, Exceptions);
     }
 
-    public WorkingDayCalculator CreateCalculator() => new(StandardWeek, Exceptions);
+    public WorkingDayCalculator CreateCalculator() => new(_workIndex);
 }
 
 internal static class P6CalendarNormalization

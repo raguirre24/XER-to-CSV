@@ -41,7 +41,7 @@ public partial class XerTransformer
         XerTable? raw = _dataStore.GetTable(TableNames.Calendar);
         if (!IsTableValid(raw)) return result;
         P6CalendarRepository repository;
-        try { repository = new P6CalendarRepository(_dataStore, isolateInvalidIdentities: true); }
+        try { repository = GetResilientCalendarRepository(); }
         catch (InvalidDataException ex)
         {
             Console.WriteLine($"Relationship calendars unavailable: {ex.Message}");

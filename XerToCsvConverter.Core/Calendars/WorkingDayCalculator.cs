@@ -4,11 +4,9 @@ namespace XerToCsvConverter;
 public sealed class WorkingDayCalculator
 {
     private const int MaximumProjectionDays = 366_000;
-    private readonly IReadOnlyList<IReadOnlyList<P6WorkInterval>> _week;
-    private readonly IReadOnlyDictionary<DateTime, IReadOnlyList<P6WorkInterval>> _exceptions;
-    private readonly bool _hasWeeklyWork;
-    private readonly DateTime? _nonWorkingStart;
-    private readonly DateTime? _nonWorkingFinish;
+    private readonly CalendarWorkIndex _index;
+    private readonly int? _nonWorkingStartDay;
+    private readonly int? _nonWorkingFinishDay;
 
     /// <summary>An explicit conventional calendar for callers that deliberately request one.</summary>
     public static WorkingDayCalculator Default { get; } = CreateDefault();
@@ -40,19 +38,21 @@ public sealed class WorkingDayCalculator
                 exceptions.Add(pair.Key.Date, Array.Empty<P6WorkInterval>());
             }
         }
-        (_week, _exceptions) = P6CalendarNormalization.Resolve(week, exceptions);
-        _hasWeeklyWork = _week.Any(day => day.Count > 0);
+        var resolved = P6CalendarNormalization.Resolve(week, exceptions);
+        _index = new CalendarWorkIndex(resolved.Week, resolved.Exceptions);
     }
 
     internal WorkingDayCalculator(IReadOnlyList<IReadOnlyList<P6WorkInterval>> week,
         IReadOnlyDictionary<DateTime, IReadOnlyList<P6WorkInterval>> exceptions,
         DateTime? nonWorkingStart = null, DateTime? nonWorkingFinish = null)
+        : this(new CalendarWorkIndex(week, exceptions), nonWorkingStart, nonWorkingFinish) { }
+
+    internal WorkingDayCalculator(CalendarWorkIndex index, DateTime? nonWorkingStart = null,
+        DateTime? nonWorkingFinish = null)
     {
-        _week = week;
-        _exceptions = exceptions;
-        _hasWeeklyWork = week.Any(day => day.Count > 0);
-        _nonWorkingStart = nonWorkingStart;
-        _nonWorkingFinish = nonWorkingFinish;
+        _index = index;
+        _nonWorkingStartDay = nonWorkingStart.HasValue ? CalendarWorkIndex.DayNumber(nonWorkingStart.Value) : null;
+        _nonWorkingFinishDay = nonWorkingFinish.HasValue ? CalendarWorkIndex.DayNumber(nonWorkingFinish.Value) : null;
     }
 
     /// <summary>Activity-specific civil-day exclusion; shared calendar definitions and lag clocks stay unchanged.</summary>
@@ -60,34 +60,16 @@ public sealed class WorkingDayCalculator
     {
         if (finish.Date < start.Date)
             throw new ArgumentException("A nonworking period cannot finish before it starts.", nameof(finish));
-        return finish.Date == start.Date ? this : new WorkingDayCalculator(_week, _exceptions, start.Date, finish.Date);
+        return finish.Date == start.Date ? this : new WorkingDayCalculator(_index, start.Date, finish.Date);
     }
 
-    public bool IsWorkingDay(DateTime date) => GetIntervals(date.Date).Count > 0;
+    public bool IsWorkingDay(DateTime date) => GetIntervals(CalendarWorkIndex.DayNumber(date)).Length > 0;
 
     public decimal CountWorkingHours(DateTime startDate, DateTime endDate,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (startDate == endDate) return 0;
-        if (endDate < startDate) return -CountWorkingHours(endDate, startDate, cancellationToken);
-        decimal ticks = 0;
-        DateTime day = startDate.Date;
-        while (day <= endDate.Date)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            long lower = day == startDate.Date ? startDate.TimeOfDay.Ticks : 0;
-            long upper = day == endDate.Date ? endDate.TimeOfDay.Ticks : TimeSpan.TicksPerDay;
-            foreach (var interval in GetIntervals(day))
-            {
-                long left = Math.Max(lower, interval.Start.Ticks);
-                long right = Math.Min(upper, interval.End.Ticks);
-                if (right > left) ticks += right - left;
-            }
-            if (day == endDate.Date) break;
-            day = day.AddDays(1);
-        }
-        return ticks / TimeSpan.TicksPerHour;
+        return (Prefix(endDate.Ticks) - Prefix(startDate.Ticks)) / (decimal)TimeSpan.TicksPerHour;
     }
 
     public DateTime AddWorkingHours(DateTime startDate, decimal hours,
@@ -119,50 +101,113 @@ public sealed class WorkingDayCalculator
     private DateTime ProjectWorkingTicks(DateTime startDate, decimal ticksRemaining, bool forward,
         CancellationToken cancellationToken)
     {
-        if (!_hasWeeklyWork && !_exceptions.Any(pair => pair.Value.Count > 0
-                && (forward ? pair.Key >= startDate.Date : pair.Key <= startDate.Date)))
+        int startDay = CalendarWorkIndex.DayNumber(startDate);
+        if (!_index.HasWeeklyWork && !_index.HasPositiveException(startDay, forward))
             throw new InvalidDataException("The calendar has no working time in the requested direction.");
+        int dateLimit = forward ? CalendarWorkIndex.MaximumDayNumber : 0;
+        int limitDay = forward ? Math.Min(startDay + MaximumProjectionDays, dateLimit)
+            : Math.Max(startDay - MaximumProjectionDays, dateLimit);
+        long startPrefix = Prefix(startDate.Ticks);
+        int day = startDay;
+        long initialCapacity = forward ? BeforeDay(startDay + 1) - startPrefix : startPrefix - BeforeDay(startDay);
+        if (ticksRemaining > initialCapacity)
+        {
+            long capacity = forward ? BeforeDay(limitDay + 1) - startPrefix : startPrefix - BeforeDay(limitDay);
+            if (ticksRemaining > capacity) ThrowProjectionFailure(limitDay, dateLimit, forward);
 
-        DateTime day = startDate.Date;
-        long cursor = startDate.TimeOfDay.Ticks;
-        for (int searched = 0; searched <= MaximumProjectionDays; searched++)
+            // Bracket nearby projections first; one-tick boundary checks should not
+            // binary-search the entire thousand-year horizon on every relationship.
+            int direction = forward ? 1 : -1;
+            int maximumDistance = Math.Abs(limitDay - startDay);
+            int previousDistance = 0, distance = 1;
+            long Available(int offset)
+            {
+                int candidate = startDay + direction * offset;
+                return forward ? BeforeDay(candidate + 1) - startPrefix : startPrefix - BeforeDay(candidate);
+            }
+            while (Available(distance) < ticksRemaining)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                previousDistance = distance;
+                distance = Math.Min(distance * 2, maximumDistance);
+            }
+            // Compare differences to the unchanged decimal amount; adding it to a
+            // large absolute prefix could round a sub-tick request away.
+            int low = previousDistance + 1, high = distance;
+            while (low < high)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int middle = low + (high - low) / 2;
+                if (Available(middle) >= ticksRemaining) high = middle;
+                else low = middle + 1;
+            }
+            day = startDay + direction * low;
+        }
+        if (day != startDay)
+            ticksRemaining -= forward ? BeforeDay(day) - startPrefix : startPrefix - BeforeDay(day + 1);
+        long cursor = day == startDay ? startDate.TimeOfDay.Ticks : forward ? 0 : TimeSpan.TicksPerDay;
+        var intervals = GetIntervals(day);
+        for (int index = forward ? 0 : intervals.Length - 1;
+             forward ? index < intervals.Length : index >= 0; index += forward ? 1 : -1)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var intervals = GetIntervals(day);
-            for (int index = forward ? 0 : intervals.Count - 1;
-                 forward ? index < intervals.Count : index >= 0;
-                 index += forward ? 1 : -1)
+            var interval = intervals[index];
+            long left = forward ? Math.Max(cursor, interval.Start.Ticks) : interval.Start.Ticks;
+            long right = forward ? interval.End.Ticks : Math.Min(cursor, interval.End.Ticks);
+            long available = right - left;
+            if (available <= 0) continue;
+            if (ticksRemaining <= available)
             {
-                var interval = intervals[index];
-                long left = forward ? Math.Max(cursor, interval.Start.Ticks) : interval.Start.Ticks;
-                long right = forward ? interval.End.Ticks : Math.Min(cursor, interval.End.Ticks);
-                long available = right - left;
-                if (available <= 0) continue;
-                if (ticksRemaining <= available)
-                {
-                    long offset = checked((long)decimal.Round(ticksRemaining, 0, MidpointRounding.AwayFromZero));
-                    long timeOfDay = forward ? left + offset : right - offset;
-                    if (timeOfDay > DateTime.MaxValue.Ticks - day.Ticks)
-                        throw new InvalidDataException("Calendar projection exceeds the supported date range.");
-                    return day.AddTicks(timeOfDay);
-                }
-                ticksRemaining -= available;
+                // Select the interval before rounding, exactly as the daily engine did.
+                long offset = checked((long)decimal.Round(ticksRemaining, 0, MidpointRounding.AwayFromZero));
+                long timeOfDay = forward ? left + offset : right - offset;
+                long dayTicks = day * TimeSpan.TicksPerDay;
+                if (timeOfDay > DateTime.MaxValue.Ticks - dayTicks)
+                    throw new InvalidDataException("Calendar projection exceeds the supported date range.");
+                return startDate.Date.AddTicks((day - (long)startDay) * TimeSpan.TicksPerDay + timeOfDay);
             }
-            if (forward ? day == DateTime.MaxValue.Date : day == DateTime.MinValue.Date)
-                throw new InvalidDataException("Calendar projection exceeds the supported date range.");
-            day = day.AddDays(forward ? 1 : -1);
-            cursor = forward ? 0 : TimeSpan.TicksPerDay;
-            if (!_hasWeeklyWork && !_exceptions.Any(pair => pair.Value.Count > 0
-                    && (forward ? pair.Key >= day : pair.Key <= day)))
-                throw new InvalidDataException("The calendar has insufficient working time in the requested direction.");
+            ticksRemaining -= available;
         }
+        throw new InvalidOperationException("Indexed calendar projection did not resolve its working interval.");
+    }
+
+    private void ThrowProjectionFailure(int limitDay, int dateLimit, bool forward)
+    {
+        if (!_index.HasWeeklyWork)
+        {
+            int lastException = _index.LastPositiveException(forward);
+            if (forward ? lastException <= limitDay : lastException >= limitDay)
+            {
+                if (lastException != dateLimit)
+                    throw new InvalidDataException("The calendar has insufficient working time in the requested direction.");
+            }
+        }
+        if (limitDay == dateLimit)
+            throw new InvalidDataException("Calendar projection exceeds the supported date range.");
         throw new InvalidDataException("Calendar projection exceeds the bounded search horizon (1000 years).");
     }
 
-    private IReadOnlyList<P6WorkInterval> GetIntervals(DateTime date) =>
-        _nonWorkingStart.HasValue && date >= _nonWorkingStart.Value && date < _nonWorkingFinish!.Value
-            ? Array.Empty<P6WorkInterval>()
-            : _exceptions.TryGetValue(date, out var intervals) ? intervals : _week[(int)date.DayOfWeek];
+    private ReadOnlySpan<P6WorkInterval> GetIntervals(int day) =>
+        _nonWorkingStartDay.HasValue && day >= _nonWorkingStartDay.Value && day < _nonWorkingFinishDay!.Value
+            ? ReadOnlySpan<P6WorkInterval>.Empty : _index.Intervals(day);
+
+    private long Prefix(long ticks)
+    {
+        long total = _index.Prefix(ticks);
+        if (!_nonWorkingStartDay.HasValue) return total;
+        long start = _nonWorkingStartDay.Value * TimeSpan.TicksPerDay;
+        if (ticks <= start) return total;
+        long finish = _nonWorkingFinishDay!.Value * TimeSpan.TicksPerDay;
+        return total - (_index.Prefix(Math.Min(ticks, finish)) - _index.Prefix(start));
+    }
+
+    private long BeforeDay(int day)
+    {
+        long total = _index.BeforeDay(day);
+        if (!_nonWorkingStartDay.HasValue || day <= _nonWorkingStartDay.Value) return total;
+        return total - (_index.BeforeDay(Math.Min(day, _nonWorkingFinishDay!.Value))
+            - _index.BeforeDay(_nonWorkingStartDay.Value));
+    }
 
     private static P6WorkInterval ConvertSlot((TimeSpan Start, TimeSpan End) slot)
     {

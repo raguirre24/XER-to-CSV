@@ -131,7 +131,7 @@ public partial class XerTransformer
                         if (calendarFailures.TryGetValue((source, calendarId), out var priorFailure)) throw priorFailure;
                         try
                         {
-                            calendars ??= new P6CalendarRepository(_dataStore, isolateInvalidIdentities: true);
+                            calendars ??= GetResilientCalendarRepository();
                             var definition = calendars.Get(source, calendarId);
                             calendar = (definition, definition.CreateCalculator());
                             calendarCache.Add((source, calendarId), calendar);
