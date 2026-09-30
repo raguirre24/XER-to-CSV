@@ -410,7 +410,7 @@ public sealed class ProgrammeReviewBundleServiceTests
     }
 
     [Fact]
-    public async Task Multi_project_XER_is_rejected_instead_of_silently_filtered()
+    public async Task Multi_project_XER_publishes_every_project_with_warnings()
     {
         string root = NewTempDirectory();
         try
@@ -418,13 +418,18 @@ public sealed class ProgrammeReviewBundleServiceTests
             ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
                 "base.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-30");
             XerDataStore store = BuildDataStore((baseline, "2026-02-02", "2026-02-06"));
-            store.GetTable("PROJECT")!.AddRow(new DataRow(new[] { "P2", "2026-01-30" }, baseline.OriginalXerFilename));
+            store.GetTable("PROJECT")!.AddRow(new DataRow(new[] { "P2", "2026-01-27" }, baseline.OriginalXerFilename));
 
-            ProgrammeReviewValidationException error = await Assert.ThrowsAsync<ProgrammeReviewValidationException>(() =>
-                new ProgrammeReviewBundleService().BuildFromParsedDataAsync(
-                    store, ProgrammeReviewNamingTests.Request(new[] { baseline }), root));
-            Assert.Contains("exactly one native PROJECT", error.Message, StringComparison.Ordinal);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+            ProgrammeReviewBundleResult result = await new ProgrammeReviewBundleService().BuildFromParsedDataAsync(
+                store, ProgrammeReviewNamingTests.Request(new[] { baseline }), root);
+            Assert.Equal(12, Directory.EnumerateFiles(result.BundlePath).Count());
+            Assert.Equal(2, result.ManifestRows.Single(row => row.TableName == "02_XER_PROJECT").RowCount);
+            Assert.True(result.WarningCount > 0);
+            string projectCsv = File.ReadAllText(Path.Combine(result.BundlePath, "02_XER_PROJECT.csv"));
+            Assert.Contains("CSV::J123::C::BL01::P1", projectCsv, StringComparison.Ordinal);
+            Assert.Contains("CSV::J123::C::BL01::P2", projectCsv, StringComparison.Ordinal);
+            Assert.Contains("2026-01-27", projectCsv, StringComparison.Ordinal);
+            Assert.DoesNotContain(XerDataQuality.FileName, Directory.EnumerateFiles(result.BundlePath).Select(Path.GetFileName));
         }
         finally
         {

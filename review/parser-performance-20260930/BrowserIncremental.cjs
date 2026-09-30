@@ -144,12 +144,14 @@ async function reset(state) {
 async function configure(state) {
     const { page, mode, sources } = state;
     if (mode === 'programme') {
-        const rows = page.locator('.snapshot-table tbody tr');
+        const rows = page.locator('.snapshot-table tbody tr:has(input)');
         for (let index = 0; index < sources.length; index++) {
             const row = rows.nth(index), item = sources[index];
             await row.locator('select').selectOption(index === 0 ? 'Baseline' : 'Update');
             await row.locator('input').nth(0).fill(index === 0 ? 'BL01' : item.dataDate.slice(2, 7).replace('-', ''));
-            await row.locator('input').nth(1).fill(item.dataDate.slice(0, 7) + '-01');
+            const monthInput = row.locator('input').nth(1);
+            const monthDate = item.dataDate.slice(0, 7) + '-01';
+            await monthInput.fill(await monthInput.getAttribute('type') === 'month' ? monthDate.slice(0, 7) : monthDate);
             await row.locator('input').nth(2).fill(item.dataDate);
         }
     } else if (mode === 'tender') {

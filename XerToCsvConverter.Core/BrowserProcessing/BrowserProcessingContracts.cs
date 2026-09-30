@@ -31,6 +31,7 @@ internal sealed record BrowserResult
     public string JobId { get; init; } = string.Empty;
     public long Generation { get; init; }
     public string? DataDate { get; init; }
+    public IReadOnlyList<string> MetadataWarnings { get; init; } = Array.Empty<string>();
     public string? SourceSha256 { get; init; }
     public IReadOnlyList<string> TableNames { get; init; } = Array.Empty<string>();
     public int WarningCount { get; init; }

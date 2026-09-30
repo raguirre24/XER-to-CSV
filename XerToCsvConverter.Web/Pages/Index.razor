@@ -135,8 +135,9 @@
                         <div class="snapshot-table-wrap">
                             <table class="snapshot-table">
                                 <caption>
-                                    Snapshot metadata. Data date is detected from PROJECT/last_recalc_date when unambiguous
-                                    and remains editable. Dates must use yyyy-MM-dd.
+                                    Month update uses yyyy-MM and defaults to the detected Data Date's month when available.
+                                    Data date uses yyyy-MM-dd and remains editable. Multiple valid project Data Dates use
+                                    the latest with a warning; a missing or invalid project Data Date leaves it blank for review.
                                 </caption>
                                 <thead>
                                     <tr>
@@ -165,16 +166,31 @@
                                                        aria-label="Snapshot tag for @file.Name" placeholder="BL01 or YYMM" />
                                             </td>
                                             <td>
-                                                <input class="form-control" type="text" inputmode="numeric" placeholder="yyyy-MM-dd"
-                                                       @bind="file.MonthUpdate" disabled="@_isProcessing"
+                                                <input class="form-control" type="month"
+                                                       value="@file.MonthUpdate" @onchange="args => file.MonthUpdate = args.Value?.ToString() ?? string.Empty"
+                                                       disabled="@_isProcessing"
                                                        aria-label="Month update for @file.Name" />
                                             </td>
                                             <td>
                                                 <input class="form-control" type="text" inputmode="numeric" placeholder="yyyy-MM-dd"
                                                        @bind="file.DataDate" disabled="@_isProcessing"
-                                                       aria-label="Data date for @file.Name" />
+                                                       aria-label="Data date for @file.Name" aria-describedby="@file.MetadataWarningId" />
                                             </td>
                                         </tr>
+                                        @if (file.MetadataWarnings.Count > 0)
+                                        {
+                                            <tr>
+                                                <td colspan="5">
+                                                    <ul id="@file.MetadataWarningId" aria-label="Metadata warnings for @file.Name"
+                                                        style="margin:0;padding-left:1rem;">
+                                                        @foreach (string warning in file.MetadataWarnings)
+                                                        {
+                                                            <li><small>@warning</small></li>
+                                                        }
+                                                    </ul>
+                                                </td>
+                                            </tr>
+                                        }
                                     }
                                 </tbody>
                             </table>
@@ -442,6 +458,7 @@
             var pending = new List<UploadedFile>(selectedFiles.Count);
             var skippedNames = new List<string>();
             var undetectedDataDateNames = new List<string>();
+            var metadataNotices = new List<string>();
             for (int index = 0; index < selectedFiles.Count; index++)
             {
                 IBrowserFile browserFile = selectedFiles[index];
@@ -461,11 +478,17 @@
                 DateOnly? detectedDataDate = DateOnly.TryParseExact(metadata.DataDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly date) ? date : null;
                 if (programmeReview && detectedDataDate is null) undetectedDataDateNames.Add(browserFile.Name);
                 ProgrammeReviewUploadSuggestion suggestion = ProgrammeReviewUploadMetadata.Infer(browserFile.Name, detectedDataDate);
+                var sourceMetadataWarnings = new List<string>(metadata.MetadataWarnings);
+                if (ProgrammeReviewUploadMetadata.HasUpdateTagMonthConflict(suggestion))
+                    sourceMetadataWarnings.Add($"Filename update tag '{suggestion.SnapshotTag}' differs from the detected Data Date's month {suggestion.MonthUpdate}. Review the tag or month before exporting.");
+                if (programmeReview)
+                    metadataNotices.AddRange(sourceMetadataWarnings.Select(warning => $"{browserFile.Name}: {warning}"));
                 pending.Add(new UploadedFile
                 {
                     SourceToken = sourceToken, Name = browserFile.Name, Size = browserFile.Size, SourceSha256 = metadata.SourceSha256,
                     Status = "Ready", SnapshotKind = suggestion.SnapshotKind, SnapshotTag = suggestion.SnapshotTag,
-                    MonthUpdate = suggestion.MonthUpdate, DataDate = metadata.DataDate ?? string.Empty, StatusDate = addedLocalStatusDate
+                    MonthUpdate = suggestion.MonthUpdate, DataDate = metadata.DataDate ?? string.Empty, StatusDate = addedLocalStatusDate,
+                    MetadataWarnings = sourceMetadataWarnings.ToArray()
                 });
                 totalBytes += browserFile.Size;
             }
@@ -480,7 +503,8 @@
             if (skippedNames.Count > 0)
                 notices.Add((programmeReview ? "Skipped unsupported or duplicate file name(s): " : "Skipped unsupported file(s): ") + string.Join(", ", skippedNames));
             if (undetectedDataDateNames.Count > 0)
-                notices.Add("Data date could not be detected from one unambiguous PROJECT row; enter it manually for: " + string.Join(", ", undetectedDataDateNames));
+                notices.Add("Data Date was left blank because PROJECT/last_recalc_date could not be validated; review and enter it manually for: " + string.Join(", ", undetectedDataDateNames));
+            notices.AddRange(metadataNotices);
             _validationMessage = string.Join(" ", notices);
         }
         catch (OperationCanceledException) when (batch.Token.IsCancellationRequested) { }
@@ -694,8 +718,8 @@
         var snapshots = new List<ProgrammeReviewSnapshot>(_uploadedFiles.Count);
         foreach (UploadedFile file in _uploadedFiles)
         {
-            if (!DateOnly.TryParseExact(file.MonthUpdate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly monthUpdate))
-            { error = $"{file.Name}: Month update must use yyyy-MM-dd."; return false; }
+            if (!ProgrammeReviewUploadMetadata.TryParseMonthUpdate(file.MonthUpdate, out DateOnly monthUpdate))
+            { error = $"{file.Name}: Month update must use yyyy-MM."; return false; }
             if (string.IsNullOrWhiteSpace(file.DataDate))
             { error = $"{file.Name}: Data date could not be detected from PROJECT/last_recalc_date. Enter it manually as yyyy-MM-dd."; return false; }
             if (!DateOnly.TryParseExact(file.DataDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly dataDate))
@@ -705,8 +729,6 @@
             if (file.SnapshotKind == "Baseline") kind = ProgrammeReviewSnapshotKind.Baseline;
             else if (file.SnapshotKind == "Update") kind = ProgrammeReviewSnapshotKind.Update;
             else { error = $"{file.Name}: Select baseline or update."; return false; }
-            if (kind == ProgrammeReviewSnapshotKind.Update && monthUpdate.Day != 1)
-            { error = $"{file.Name}: Update Month update must use the first day of its YYMM month."; return false; }
 
             snapshots.Add(new ProgrammeReviewSnapshot
             {
@@ -979,6 +1001,8 @@
         public string SnapshotTag { get; set; } = string.Empty;
         public string MonthUpdate { get; set; } = string.Empty;
         public string DataDate { get; set; } = string.Empty;
+        public IReadOnlyList<string> MetadataWarnings { get; init; } = Array.Empty<string>();
+        public string? MetadataWarningId => MetadataWarnings.Count > 0 ? $"metadata-warnings-{SourceToken}" : null;
         public string StatusDate { get; set; } = string.Empty;
     }
 }

@@ -100,6 +100,29 @@ public sealed class BrowserProcessingSessionTests
     }
 
     [Fact]
+    public async Task Multi_project_metadata_prefills_latest_date_and_transports_warning_without_parsing_or_mutating_file()
+    {
+        var files = new PrivateFiles();
+        BrowserSource source = files.Add("multi", "combined.xer", Encoding.UTF8.GetBytes(
+            "%T\tPROJECT\r\n%F\tproj_id\tlast_recalc_date\r\n"
+            + "%R\t1\t2026-07-31 08:00\r\n%R\t2\t2026-08-25 17:00\r\n%E\r\n"));
+        var session = new BrowserProcessingSession(files.Read);
+
+        BrowserResult metadata = await session.RunAsync(Job("metadata", [source]));
+        string json = System.Text.Json.JsonSerializer.Serialize(metadata, BrowserJsonContext.Default.BrowserResult);
+        BrowserResult restored = System.Text.Json.JsonSerializer.Deserialize(json, BrowserJsonContext.Default.BrowserResult)!;
+
+        Assert.Equal("2026-08-25", restored.DataDate);
+        Assert.Contains("different data dates", Assert.Single(restored.MetadataWarnings));
+        Assert.Equal(Hash(files.Content(source)), restored.SourceSha256);
+        Assert.Equal(0, metadata.ParsedSources);
+        Assert.Equal(0, metadata.RetainedSourceCount);
+        Assert.Null(metadata.ZipContent);
+        Assert.Equal(1, files.ReadCount(source));
+        files.AssertUnchangedPrivateBuffers();
+    }
+
+    [Fact]
     public async Task Identical_tender_bytes_and_filenames_remain_two_independent_stages_on_cache_hit()
     {
         var files = new PrivateFiles();

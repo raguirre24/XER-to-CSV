@@ -72,10 +72,13 @@ internal sealed class BrowserProcessingSession(Func<BrowserSource, CancellationT
                 var watch = Stopwatch.StartNew();
                 await ReadOwnedAsync(state, token);
                 ConfiguredHash(job.Sources[0].SourceSha256, state.Hash!);
+                ProgrammeReviewDetectedMetadata metadata;
                 using (ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, state.Source.Name))
-                    state.DataDate = await ProgrammeReviewXerMetadataReader.ReadSingleProjectDataDateAsync(state.PendingBytes!, token);
+                    metadata = await ProgrammeReviewXerMetadataReader.ReadProjectMetadataAsync(state.PendingBytes!, token);
+                state.DataDate = metadata.DataDate;
                 stages["readHashMetadata"] = watch.Elapsed.TotalMilliseconds;
-                return Result() with { DataDate = state.DataDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), SourceSha256 = state.Hash };
+                return Result() with { DataDate = state.DataDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    MetadataWarnings = metadata.Warnings, SourceSha256 = state.Hash };
             }
 
             foreach (BrowserSource source in job.Sources)

@@ -26,7 +26,7 @@ internal sealed class ProgrammeReviewTransformer
     private readonly XerDataStore _dataStore;
     private readonly ResolvedProgrammeReviewRequest _request;
     private readonly IReadOnlyDictionary<string, ResolvedProgrammeReviewSnapshot> _snapshotByOriginal;
-    private readonly Dictionary<string, string> _projectNativeIdBySource = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _projectNativeIdsBySource = new(StringComparer.OrdinalIgnoreCase);
     private readonly ReviewDataQualityCollector _quality;
     private readonly ReviewValueNormalizationCache _normalization = new();
     private readonly Dictionary<IReadOnlyDictionary<string, string>, ReviewRowEvidence> _outputEvidence = new(ReferenceEqualityComparer.Instance);
@@ -47,7 +47,7 @@ internal sealed class ProgrammeReviewTransformer
     internal IReadOnlyList<ProgrammeReviewOutputTable> Build(CancellationToken cancellationToken)
     {
         using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "programme review tables");
-        ValidateSingleProjectPerSnapshot();
+        ValidateProjectsPerSnapshot();
         var transformer = XerTransformer.ForExportOperation(_dataStore);
         var enhanced = new Dictionary<string, XerTable?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -233,8 +233,8 @@ internal sealed class ProgrammeReviewTransformer
 
             string nativeProjectId = _quality.Evaluate(evidence, "proj_id_key", reader.Get("proj_id_key"),
                 () => ExtractNativeId(reader.Get("proj_id_key"), snapshot.OriginalXerFilename, "proj_id_key"));
-            if (!_projectNativeIdBySource.TryGetValue(snapshot.OriginalXerFilename, out string? existingProject)
-                || !string.Equals(existingProject, nativeProjectId, StringComparison.OrdinalIgnoreCase))
+            if (!_projectNativeIdsBySource.TryGetValue(snapshot.OriginalXerFilename, out HashSet<string>? existingProjects)
+                || !existingProjects.Contains(nativeProjectId))
                 _quality.Warn(evidence, "REVIEW_PROJECT_REFERENCE_INVALID",
                     $"TASK proj_id '{nativeProjectId}' does not match the governed source PROJECT identity.", "proj_id_key", reader.Get("proj_id_key"));
 
@@ -284,7 +284,7 @@ internal sealed class ProgrammeReviewTransformer
                     {
                         "ProjectCode" => _request.ProjectCode,
                         "monthupdate" or "MonthUpdate" => Iso(snapshot.MonthUpdate),
-                        "last_recalc_date" => Iso(snapshot.DataDate),
+                        "last_recalc_date" => IsMultiProjectSource(snapshot) ? original : Iso(snapshot.DataDate),
                         "free_float" when contract.TableName == "06_XER_PREDECESSOR"
                             && reader.Get("free_float_status") is not ("Finite" or "Estimated") => string.Empty,
                         _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(original, snapshot, column.Name),
@@ -301,7 +301,13 @@ internal sealed class ProgrammeReviewTransformer
                 });
             }
 
-            if (contract.TableName == "02_XER_PROJECT") ValidateDataDate(reader, snapshot, context, "last_recalc_date");
+            if (contract.TableName == "02_XER_PROJECT")
+            {
+                if (IsMultiProjectSource(snapshot))
+                    ValidateMultiProjectDataDate(reader, snapshot, evidence, values["last_recalc_date"]);
+                else
+                    ValidateDataDate(reader, snapshot, context, "last_recalc_date");
+            }
             _outputEvidence[values] = evidence;
             rows.Add(new ProgrammeReviewOutputRow(snapshot, Finalize(contract, values)));
         }
@@ -482,26 +488,52 @@ internal sealed class ProgrammeReviewTransformer
         }
     }
 
-    private void ValidateSingleProjectPerSnapshot()
+    private bool IsMultiProjectSource(ResolvedProgrammeReviewSnapshot snapshot) =>
+        _projectNativeIdsBySource[snapshot.OriginalXerFilename].Count > 1;
+
+    private void ValidateProjectsPerSnapshot()
     {
-        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme single-project snapshots");
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme source projects");
         XerTable? projects = _dataStore.GetTable(TableNames.Project);
         if (projects?.Headers is null || !projects.FieldIndexes.TryGetValue(FieldNames.ProjectId, out int projectIdIndex))
             throw new ProgrammeReviewValidationException("Raw PROJECT data with a proj_id column is required.");
 
         foreach (ResolvedProgrammeReviewSnapshot snapshot in _request.Snapshots)
         {
-            string[] projectIds = projects.Rows
+            DataRow[] projectRows = projects.Rows
                 .Where(row => string.Equals(row.SourceFilename, snapshot.OriginalXerFilename, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            HashSet<string> projectIds = projectRows
                 .Select(row => XerTable.GetFieldValueSafe(row, projectIdIndex).Trim())
                 .Where(value => value.Length > 0)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (projectIds.Length != 1)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (projectIds.Count == 0)
                 throw new ProgrammeReviewValidationException(
-                    $"{snapshot.OriginalXerFilename}: expected exactly one native PROJECT/proj_id, found {projectIds.Length}. Split multi-project exports before publication.");
-            _projectNativeIdBySource[snapshot.OriginalXerFilename] = projectIds[0];
+                    $"{snapshot.OriginalXerFilename}: expected at least one native PROJECT/proj_id, found 0.");
+            _projectNativeIdsBySource[snapshot.OriginalXerFilename] = projectIds;
+            if (projectIds.Count > 1)
+            {
+                foreach (DataRow row in projectRows)
+                    _quality.Warn(_quality.ForRow(projects, row), "REVIEW_MULTIPLE_PROJECTS",
+                        $"The source contains {projectIds.Count} native PROJECT identities; all project rows are retained. Snapshot metadata remains file-level and duplicate activity identities retain the existing blank-history safeguards.",
+                        FieldNames.ProjectId, XerTable.GetFieldValueSafe(row, projectIdIndex), "02_XER_PROJECT");
+            }
         }
+    }
+
+    private void ValidateMultiProjectDataDate(EnhancedRowReader reader,
+        ResolvedProgrammeReviewSnapshot snapshot, ReviewRowEvidence evidence, string normalized)
+    {
+        const string column = "last_recalc_date";
+        string raw = reader.Get(column);
+        if (string.IsNullOrWhiteSpace(raw))
+            _quality.Warn(evidence, "REVIEW_PROJECT_DATA_DATE_MISSING",
+                "The source PROJECT data date is missing; the project row is retained with a blank date and file-level snapshot metadata does not replace it.",
+                column, raw);
+        else if (normalized.Length > 0 && !string.Equals(normalized, Iso(snapshot.DataDate), StringComparison.Ordinal))
+            _quality.Warn(evidence, "REVIEW_PROJECT_DATA_DATE_MISMATCH",
+                $"Source PROJECT {column} {normalized} differs from manifest data_date {snapshot.DataDate:yyyy-MM-dd}; the source project date is retained and snapshot metadata remains file-level.",
+                column, raw);
     }
 
     private void ValidateKeysAndRelationships(IReadOnlyList<ProgrammeReviewOutputTable> tables)

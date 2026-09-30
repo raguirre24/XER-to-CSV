@@ -132,6 +132,8 @@ Remove-Item Env:BASELINE_URL,Env:REPORT_FILE,Env:ZIP_PREFIX -ErrorAction Silentl
 
 Run the full cancellation/download/lifecycle and incremental cache scenarios in both channels. The real-source parameters prevent a small synthetic schedule from being mistaken for the real memory/update test:
 
+The browser harnesses detect whether Programme Month update uses a full-date field or a month picker and supply `yyyy-MM-dd` or `yyyy-MM` respectively, preserving the same first-day `DateOnly` request values.
+
 ```powershell
 $taskAugustSource = (Resolve-Path 'XER Sample/2608-EBA_PAA_8.0 (draft).xer').Path
 $taskJulySource = 'C:/Users/ricar/Downloads/2607 C5064-C-2607.xer'

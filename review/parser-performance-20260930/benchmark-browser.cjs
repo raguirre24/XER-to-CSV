@@ -65,12 +65,14 @@ async function workload(state, paths, iteration, warmup = false) {
   catch (error) { console.log('UPLOAD FAILURE', variant, mode, await page.locator('body').innerText(), state.errors); throw error; }
   const uploadMs = performance.now() - started;
   if (mode === 'programme') {
-    const rows = page.locator('.snapshot-table tbody tr');
+    const rows = page.locator('.snapshot-table tbody tr:has(input)');
     for (let i = 0; i < paths.length; i++) {
       const row = rows.nth(i);
       await row.locator('select').selectOption(i === 0 ? 'Baseline' : 'Update');
       await row.locator('input').nth(0).fill(i === 0 ? 'BL01' : '2608');
-      await row.locator('input').nth(1).fill(i === 0 ? '2026-07-01' : '2026-08-01');
+      const monthInput = row.locator('input').nth(1);
+      const monthDate = i === 0 ? '2026-07-01' : '2026-08-01';
+      await monthInput.fill(await monthInput.getAttribute('type') === 'month' ? monthDate.slice(0, 7) : monthDate);
       await row.locator('input').nth(2).fill(i === 0 && paths.length > 1 ? '2026-07-31' : '2026-08-25');
     }
     await page.locator('body').click({ position: { x: 5, y: 5 } });
