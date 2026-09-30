@@ -1,7 +1,7 @@
 @page "/"
-@implements IDisposable
+@implements IAsyncDisposable
 @using System.Globalization
-@using System.IO.Compression
+@using XerToCsvConverter.BrowserProcessing
 @using XerToCsvConverter
 @using XerToCsvConverter.ProgrammeReview
 @using XerToCsvConverter.TenderReview
@@ -32,7 +32,7 @@
                  aria-disabled="@_isBusy"
                  @ondragenter="HandleDragEnter" @ondragleave="HandleDragLeave"
                  @ondragover:preventDefault @ondrop:preventDefault>
-                <InputFile OnChange="HandleFileSelected" multiple accept=".xer"
+                <InputFile @key="_fileInputGeneration" id="xer-file-input" OnChange="HandleFileSelected" multiple accept=".xer"
                            disabled="@_isBusy"
                            @ondragenter="HandleDragEnter" @ondragleave="HandleDragLeave"
                            aria-label="Select XER files to upload"
@@ -404,128 +404,107 @@
     private readonly BrowserUploadSession _uploads = new();
     private bool _disposed;
     private long _operationVersion;
-    private bool _isUploading => _uploads.IsUploading;
+    private int _pendingUploadBatches;
+    private long _fileInputGeneration;
+    private bool _isUploading => _uploads.IsUploading || _pendingUploadBatches > 0;
     private bool _isBusy => _isProcessing || _isUploading || _disposed;
-    private XerDataStore? _dataStore;
-    private readonly ProcessingService _processingService = new();
+    private bool _standardParsed;
+    private BrowserProcessingEngine? _engine;
     private CancellationTokenSource? _cts;
     private ElementReference _logElement;
-    private DownloadService? _downloadService;
 
     private string ReviewProfileDisplayName => _exportProfile == ExportProfile.TenderReview
         ? "Tender Review"
         : "Programme Review";
 
-    protected override void OnInitialized() => _downloadService = new DownloadService(JS);
+    protected override void OnInitialized() => _engine = new BrowserProcessingEngine(JS);
 
     private async Task HandleFileSelected(InputFileChangeEventArgs e)
     {
         _isDragOver = false;
-        if (_isBusy)
-            return;
-
+        if (_isBusy) return;
         BrowserUploadSession.Batch? batch = _uploads.TryBegin();
         if (batch is null) return;
+        _pendingUploadBatches++;
+        var registered = new List<string>();
+        bool committed = false;
         StateHasChanged();
-
         try
         {
             bool programmeReview = _exportProfile == ExportProfile.ProgrammeReview;
             bool tenderReview = _exportProfile == ExportProfile.TenderReview;
-            bool reviewProfile = programmeReview || tenderReview;
-            int maximumFiles = reviewProfile ? MaxBrowserFiles : MaxStandardFiles;
-            long maximumFileBytes = reviewProfile ? MaxBrowserFileBytes : MaxStandardFileBytes;
+            int maximumFiles = programmeReview || tenderReview ? MaxBrowserFiles : MaxStandardFiles;
+            long maximumFileBytes = programmeReview || tenderReview ? MaxBrowserFileBytes : MaxStandardFileBytes;
             IReadOnlyList<IBrowserFile> selectedFiles = e.GetMultipleFiles(maximumFiles);
             string addedLocalStatusDate = await CaptureBrowserLocalDateForUploadAsync(tenderReview);
             batch.Token.ThrowIfCancellationRequested();
-
-            long totalBytes = _uploadedFiles.Sum(file => file.Data.LongLength);
+            long totalBytes = _uploadedFiles.Sum(file => file.Size);
             var pending = new List<UploadedFile>(selectedFiles.Count);
             var skippedNames = new List<string>();
             var undetectedDataDateNames = new List<string>();
-            foreach (IBrowserFile browserFile in selectedFiles)
+            for (int index = 0; index < selectedFiles.Count; index++)
             {
-                if (!browserFile.Name.EndsWith(".xer", StringComparison.OrdinalIgnoreCase))
-                {
-                    skippedNames.Add(browserFile.Name);
-                    continue;
-                }
+                IBrowserFile browserFile = selectedFiles[index];
+                if (!browserFile.Name.EndsWith(".xer", StringComparison.OrdinalIgnoreCase)
+                    || programmeReview && _uploadedFiles.Concat(pending).Any(file => file.Name.Equals(browserFile.Name, StringComparison.OrdinalIgnoreCase)))
+                { skippedNames.Add(browserFile.Name); continue; }
                 batch.Token.ThrowIfCancellationRequested();
-                if (programmeReview && _uploadedFiles.Concat(pending).Any(file =>
-                        file.Name.Equals(browserFile.Name, StringComparison.OrdinalIgnoreCase)))
-                {
-                    skippedNames.Add(browserFile.Name);
-                    continue;
-                }
                 if (_uploadedFiles.Count + pending.Count >= maximumFiles)
                     throw new InvalidOperationException($"This profile accepts at most {maximumFiles} XER files.");
                 if (browserFile.Size > maximumFileBytes)
-                    throw new InvalidOperationException(
-                        $"{browserFile.Name} is larger than this profile's {maximumFileBytes / (1024 * 1024)} MB per-file limit.");
+                    throw new InvalidOperationException($"{browserFile.Name} is larger than this profile's {maximumFileBytes / (1024 * 1024)} MB per-file limit.");
                 if (totalBytes + browserFile.Size > MaxBrowserTotalBytes)
-                    throw new InvalidOperationException(
-                        $"The selected history exceeds the {MaxBrowserTotalMegabytes} MB browser limit. " +
-                        "Use the Windows app for larger histories.");
-
-                byte[] data = GC.AllocateUninitializedArray<byte>(checked((int)browserFile.Size));
-                await using (Stream stream = browserFile.OpenReadStream(maximumFileBytes, batch.Token))
-                    await stream.ReadExactlyAsync(data, batch.Token);
-                DateOnly? detectedDataDate = await ProgrammeReviewXerMetadataReader
-                    .ReadSingleProjectDataDateAsync(data, batch.Token);
-                if (programmeReview && detectedDataDate is null)
-                    undetectedDataDateNames.Add(browserFile.Name);
+                    throw new InvalidOperationException($"The selected history exceeds the {MaxBrowserTotalMegabytes} MB browser limit. Use the Windows app for larger histories.");
+                string sourceToken = _uploads.NextSourceToken(batch);
+                registered.Add(sourceToken);
+                BrowserResult metadata = await _engine!.RegisterAsync(new BrowserSource(sourceToken, browserFile.Name, browserFile.Size), index, batch.Token);
+                DateOnly? detectedDataDate = DateOnly.TryParseExact(metadata.DataDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly date) ? date : null;
+                if (programmeReview && detectedDataDate is null) undetectedDataDateNames.Add(browserFile.Name);
                 ProgrammeReviewUploadSuggestion suggestion = ProgrammeReviewUploadMetadata.Infer(browserFile.Name, detectedDataDate);
                 pending.Add(new UploadedFile
                 {
-                    SourceToken = _uploads.NextSourceToken(batch),
-                    Name = browserFile.Name,
-                    Data = data,
-                    Status = "Ready",
-                    SnapshotKind = suggestion.SnapshotKind,
-                    SnapshotTag = suggestion.SnapshotTag,
-                    MonthUpdate = suggestion.MonthUpdate,
-                    DataDate = detectedDataDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty,
-                    StatusDate = addedLocalStatusDate
+                    SourceToken = sourceToken, Name = browserFile.Name, Size = browserFile.Size, SourceSha256 = metadata.SourceSha256,
+                    Status = "Ready", SnapshotKind = suggestion.SnapshotKind, SnapshotTag = suggestion.SnapshotTag,
+                    MonthUpdate = suggestion.MonthUpdate, DataDate = metadata.DataDate ?? string.Empty, StatusDate = addedLocalStatusDate
                 });
                 totalBytes += browserFile.Size;
             }
-
-            // Commit against the live collection, and only if clear/profile/disposal has not
-            // invalidated this generation. A late read may never resurrect discarded sources.
-            if (!_uploads.TryCommit(batch, () =>
+            committed = _uploads.TryCommit(batch, () =>
             {
-                BrowserUploadSession.ValidateCombined(
-                    _uploadedFiles.Concat(pending).Select(file => new BrowserUploadDescriptor(file.Name, file.Data.LongLength)),
+                BrowserUploadSession.ValidateCombined(_uploadedFiles.Concat(pending).Select(file => new BrowserUploadDescriptor(file.Name, file.Size)),
                     maximumFiles, maximumFileBytes, MaxBrowserTotalBytes, allowRepeatedNames: !programmeReview);
-                if (pending.Count > 0)
-                {
-                    _uploadedFiles.AddRange(pending);
-                    ClearResults(keepLog: false);
-                }
-            }))
-                return;
+                if (pending.Count > 0) { _uploadedFiles.AddRange(pending); ClearResults(keepLog: false); }
+            });
+            if (!committed) return;
             var notices = new List<string>();
             if (skippedNames.Count > 0)
-                notices.Add((programmeReview ? "Skipped unsupported or duplicate file name(s): " : "Skipped unsupported file(s): ") +
-                            string.Join(", ", skippedNames));
+                notices.Add((programmeReview ? "Skipped unsupported or duplicate file name(s): " : "Skipped unsupported file(s): ") + string.Join(", ", skippedNames));
             if (undetectedDataDateNames.Count > 0)
-                notices.Add(
-                    "Data date could not be detected from one unambiguous PROJECT row; enter it manually for: " +
-                    string.Join(", ", undetectedDataDateNames));
+                notices.Add("Data date could not be detected from one unambiguous PROJECT row; enter it manually for: " + string.Join(", ", undetectedDataDateNames));
             _validationMessage = string.Join(" ", notices);
         }
         catch (OperationCanceledException) when (batch.Token.IsCancellationRequested) { }
-        catch (Exception ex)
-        {
-            if (_uploads.IsCurrent(batch)) _validationMessage = "Files were not added: " + ex.Message;
-        }
+        catch (Exception ex) { if (_uploads.IsCurrent(batch)) _validationMessage = "Files were not added: " + ex.Message; }
         finally
         {
-            _uploads.Complete(batch);
-            if (!_disposed)
+            try
             {
-                _fileSizeWarning = IsHighMemoryHistory();
-                StateHasChanged();
+                if (!committed && !_disposed)
+                    foreach (string token in registered)
+                    {
+                        if (_disposed) break;
+                        await _engine!.RemoveAsync(token);
+                    }
+            }
+            finally
+            {
+                try { _uploads.Complete(batch); }
+                finally
+                {
+                    _pendingUploadBatches--;
+                    _fileInputGeneration++;
+                    if (!_disposed) { _fileSizeWarning = IsHighMemoryHistory(); StateHasChanged(); }
+                }
             }
         }
     }
@@ -535,6 +514,8 @@
         if (_isProcessing || _disposed) return;
         _uploads.Invalidate();
         _uploadedFiles.Remove(file);
+        _fileInputGeneration++;
+        Observe(_engine!.RemoveAsync(file.SourceToken));
         _fileSizeWarning = IsHighMemoryHistory();
         ClearResults(keepLog: false);
     }
@@ -544,13 +525,16 @@
         if (_isProcessing || _disposed) return;
         _uploads.Invalidate();
         _uploadedFiles.Clear();
+        _fileInputGeneration++;
+        Observe(_engine!.ClearAsync());
         _fileSizeWarning = false;
         ClearResults(keepLog: false);
     }
 
     private void ClearResults(bool keepLog)
     {
-        _dataStore = null;
+        _standardParsed = false;
+        if (_engine is not null) Observe(_engine.InvalidateAsync());
         foreach (UploadedFile file in _uploadedFiles) file.Status = "Ready";
         _allTableNames.Clear();
         _filteredTableNames.Clear();
@@ -569,45 +553,21 @@
     {
         if (_isBusy || _uploadedFiles.Count == 0) return;
         UploadedFile[] stagedFiles = _uploadedFiles.ToArray();
-        try
-        {
-            BrowserUploadSession.ValidateCombined(
-                stagedFiles.Select(file => new BrowserUploadDescriptor(file.Name, file.Data.LongLength)),
-                MaxStandardFiles, MaxStandardFileBytes, MaxBrowserTotalBytes, allowRepeatedNames: true);
-        }
-        catch (InvalidOperationException ex)
-        {
-            _validationMessage = ex.Message;
-            return;
-        }
+        try { BrowserUploadSession.ValidateCombined(stagedFiles.Select(file => new BrowserUploadDescriptor(file.Name, file.Size)),
+            MaxStandardFiles, MaxStandardFileBytes, MaxBrowserTotalBytes, allowRepeatedNames: true); }
+        catch (InvalidOperationException ex) { _validationMessage = ex.Message; return; }
         BeginOperation("Starting standard XER parse...");
-        _allTableNames.Clear();
-        _filteredTableNames.Clear();
-        _selectedTables.Clear();
+        _standardParsed = false;
+        _allTableNames.Clear(); _filteredTableNames.Clear(); _selectedTables.Clear();
         try
         {
-            var progress = CreateParseProgress(stagedFiles);
-            var streams = stagedFiles.Select(file => ((Stream)new MemoryStream(file.Data, writable: false), file.Name)).ToList();
-            try
-            {
-                await Task.Yield();
-                _dataStore = await _processingService.ParseXerStreamsAsync(streams, progress, _cts!.Token);
-                _cts.Token.ThrowIfCancellationRequested();
-            }
-            finally
-            {
-                foreach ((Stream stream, _) in streams) stream.Dispose();
-            }
+            BrowserResult result = await _engine!.RunAsync(new BrowserJob { Kind = "parse", Sources = Sources(stagedFiles) }, CreateParseProgress(stagedFiles), _cts!.Token);
+            _cts.Token.ThrowIfCancellationRequested();
+            _standardParsed = true;
             foreach (UploadedFile file in stagedFiles) file.Status = "Success";
-
-            if (_dataStore.TableCount == 0)
-            {
-                LogActivity("No tables found in the uploaded files.");
-                return;
-            }
-
-            LogActivity($"Parsed {_dataStore.TableCount} tables successfully.");
-            _allTableNames = _dataStore.TableNames.OrderBy(name => name).ToList();
+            if (result.TableNames.Count == 0) { LogActivity("No tables found in the uploaded files."); return; }
+            LogActivity($"Parsed {result.TableNames.Count} tables successfully.");
+            _allTableNames = result.TableNames.OrderBy(name => name).ToList();
             if (_generatePowerBiTables) AddEnhancedTableNames();
             _filteredTableNames = new List<string>(_allTableNames);
             foreach (string table in _allTableNames) _selectedTables.Add(table);
@@ -621,49 +581,22 @@
     private async Task CreateProgrammeReviewBundle()
     {
         if (_isBusy) return;
-        if (!TryCreateProgrammeReviewRequest(out ProgrammeReviewBundleRequest? request, out string error))
-        {
-            _validationMessage = error;
-            return;
-        }
-
-        // Release prior parsed dataStore before bundle generation to free hundreds of MBs of heap
-        _dataStore = null;
-        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
-
+        if (!TryCreateProgrammeReviewRequest(out ProgrammeReviewBundleRequest? request, out string error)) { _validationMessage = error; return; }
+        _standardParsed = false;
         BeginOperation("Validating Programme Review history...");
         try
         {
-            await InvokeAsync(StateHasChanged);
-            await Task.Delay(1, _cts!.Token);
-            var files = _uploadedFiles.ToDictionary(file => file.Name, file => file.Data, StringComparer.Ordinal);
-            var service = new ProgrammeReviewBundleService();
-
-            using var zipStream = new MemoryStream();
-            ProgrammeReviewZipStreamBundleResult bundle = await service.BuildFromXerBytesToZipStreamAsync(
-                request!, files, zipStream, CreateProgrammeReviewProgress(), _cts!.Token);
+            BrowserResult bundle = await _engine!.RunAsync(new BrowserJob { Kind = "programme", Sources = Sources(_uploadedFiles), ProgrammeRequest = request }, CreateProgrammeReviewProgress(), _cts!.Token);
             _cts.Token.ThrowIfCancellationRequested();
-
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
-
-            _progressMessage = "Preparing browser download...";
-            _progressPercent = 97;
-            StateHasChanged();
-            await _downloadService!.DownloadFileAsync(
-                $"{bundle.BundleId}.zip", zipStream, "application/zip", _cts.Token);
-            SetReviewExportCompletion("Programme Review bundle", bundle.WarningCount, bundle.DataQualityTable);
+            _progressMessage = "Preparing browser download..."; _progressPercent = 97; StateHasChanged();
+            await _engine.CommitAsync(bundle, _cts.Token);
+            SetReviewExportCompletion("Programme Review bundle", bundle.WarningCount, bundle.DiagnosticMessages);
             _progressPercent = 100;
-            HashSet<string> retainedNames = bundle.ManifestRows
-                .Select(row => row.OriginalXerFilename)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (UploadedFile file in _uploadedFiles)
-                file.Status = retainedNames.Contains(file.Name)
-                    ? (bundle.WarningCount > 0 ? "Warnings" : "Success")
-                    : "Skipped";
+            HashSet<string> retainedNames = bundle.RetainedSourceNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (UploadedFile file in _uploadedFiles) file.Status = retainedNames.Contains(file.Name) ? (bundle.WarningCount > 0 ? "Warnings" : "Success") : "Skipped";
             LogActivity($"Bundle: {bundle.BundleId}");
-            LogActivity($"Retained {retainedNames.Count} of {_uploadedFiles.Count} supplied history snapshots; " +
-                        $"{_uploadedFiles.Count - retainedNames.Count} superseded/pre-anchor snapshot(s) were skipped.");
-            LogActivity("Sent 11 report CSV files plus XER_CSV_MANIFEST.csv (12 files) to the browser download manager. Check browser downloads for saved-file delivery.");
+            LogActivity($"Retained {retainedNames.Count} of {_uploadedFiles.Count} supplied history snapshots; {_uploadedFiles.Count - retainedNames.Count} superseded/pre-anchor snapshot(s) were skipped.");
+            LogActivity($"Sent 11 report CSV files plus XER_CSV_MANIFEST.csv ({bundle.FileCount} files) to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Programme Review bundle generation was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Programme Review bundle failed: {ex.Message}"); }
@@ -672,53 +605,23 @@
 
     private async Task CreateTenderReviewBundle()
     {
-        if (_isBusy)
-            return;
-
+        if (_isBusy) return;
         UploadedFile[] stagedFiles = _uploadedFiles.ToArray();
-        if (!TryCreateTenderReviewRequest(stagedFiles, out TenderReviewBundleRequest? request, out string error))
-        {
-            _validationMessage = error;
-            return;
-        }
-
-        // Release prior parsed dataStore before bundle generation to free hundreds of MBs of heap
-        _dataStore = null;
-        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
-
+        if (!TryCreateTenderReviewRequest(stagedFiles, out TenderReviewBundleRequest? request, out string error)) { _validationMessage = error; return; }
+        _standardParsed = false;
         BeginOperation("Validating Tender Review stages...");
         try
         {
-            await InvokeAsync(StateHasChanged);
-            await Task.Delay(1, _cts!.Token);
-            TenderReviewSourceBytes[] sourceBytes = stagedFiles
-                .Select(file => new TenderReviewSourceBytes
-                {
-                    SourceToken = file.SourceToken,
-                    Content = file.Data
-                })
-                .ToArray();
-            var service = new TenderReviewBundleService();
-
-            using var zipStream = new MemoryStream();
-            TenderReviewZipStreamBundleResult bundle = await service.BuildFromXerBytesToZipStreamAsync(
-                request!, sourceBytes, zipStream, CreateTenderReviewProgress(), _cts!.Token);
+            BrowserResult bundle = await _engine!.RunAsync(new BrowserJob { Kind = "tender", Sources = Sources(stagedFiles), TenderRequest = request }, CreateTenderReviewProgress(), _cts!.Token);
             _cts.Token.ThrowIfCancellationRequested();
-
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
-
-            _progressMessage = "Preparing browser download...";
-            _progressPercent = 97;
-            StateHasChanged();
-            await _downloadService!.DownloadFileAsync(
-                $"{bundle.BundleId}.zip", zipStream, "application/zip", _cts.Token);
-            SetReviewExportCompletion("Tender Review bundle", bundle.WarningCount, bundle.DataQualityTable);
+            _progressMessage = "Preparing browser download..."; _progressPercent = 97; StateHasChanged();
+            await _engine.CommitAsync(bundle, _cts.Token);
+            SetReviewExportCompletion("Tender Review bundle", bundle.WarningCount, bundle.DiagnosticMessages);
             _progressPercent = 100;
-            foreach (UploadedFile file in stagedFiles)
-                file.Status = bundle.WarningCount > 0 ? "Warnings" : "Success";
+            foreach (UploadedFile file in stagedFiles) file.Status = bundle.WarningCount > 0 ? "Warnings" : "Success";
             LogActivity($"Bundle: {bundle.BundleId}");
             LogActivity($"Exported {stagedFiles.Length} ordered Tender stage(s). Repeated source names and hashes remain distinct by stage identity.");
-            LogActivity("Sent 11 report CSV files plus XER_CSV_MANIFEST.csv (12 files) to the browser download manager. Check browser downloads for saved-file delivery.");
+            LogActivity($"Sent 11 report CSV files plus XER_CSV_MANIFEST.csv ({bundle.FileCount} files) to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Tender Review bundle generation was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Tender Review bundle failed: {ex.Message}"); }
@@ -738,10 +641,10 @@
         if (stagedFiles.Count == 0) { error = "Add at least one XER file."; return false; }
         if (stagedFiles.Count > MaxBrowserFiles)
         { error = $"Tender Review supports at most {MaxBrowserFiles} files in the browser. Use the Windows app or Tender Review CLI for this build."; return false; }
-        UploadedFile? oversized = stagedFiles.FirstOrDefault(file => file.Data.LongLength > MaxBrowserFileBytes);
+        UploadedFile? oversized = stagedFiles.FirstOrDefault(file => file.Size > MaxBrowserFileBytes);
         if (oversized is not null)
         { error = $"{oversized.Name} exceeds the {MaxBrowserFileMegabytes} MB Tender Review browser limit. Use the Windows app or Tender Review CLI."; return false; }
-        if (stagedFiles.Sum(file => file.Data.LongLength) > MaxBrowserTotalBytes)
+        if (stagedFiles.Sum(file => file.Size) > MaxBrowserTotalBytes)
         { error = $"These Tender stages exceed the {MaxBrowserTotalMegabytes} MB browser limit. Use the Windows app or Tender Review CLI."; return false; }
 
         try
@@ -782,10 +685,10 @@
         { error = "Programme Review does not accept duplicate XER filenames. Remove duplicate names or use Tender Review."; return false; }
         if (_uploadedFiles.Count > MaxBrowserFiles)
         { error = $"Programme Review supports at most {MaxBrowserFiles} files in the browser. Use the Windows app for this history."; return false; }
-        UploadedFile? oversized = _uploadedFiles.FirstOrDefault(file => file.Data.LongLength > MaxBrowserFileBytes);
+        UploadedFile? oversized = _uploadedFiles.FirstOrDefault(file => file.Size > MaxBrowserFileBytes);
         if (oversized is not null)
         { error = $"{oversized.Name} exceeds the {MaxBrowserFileMegabytes} MB Programme Review browser limit. Use the Windows app."; return false; }
-        if (_uploadedFiles.Sum(file => file.Data.LongLength) > MaxBrowserTotalBytes)
+        if (_uploadedFiles.Sum(file => file.Size) > MaxBrowserTotalBytes)
         { error = $"This history exceeds the {MaxBrowserTotalMegabytes} MB Programme Review browser limit. Use the Windows app."; return false; }
 
         var snapshots = new List<ProgrammeReviewSnapshot>(_uploadedFiles.Count);
@@ -811,7 +714,8 @@
                 SnapshotKind = kind,
                 SnapshotTag = file.SnapshotTag.Trim().ToUpperInvariant(),
                 MonthUpdate = monthUpdate,
-                DataDate = dataDate
+                DataDate = dataDate,
+                SourceSha256 = file.SourceSha256
             });
         }
 
@@ -832,7 +736,7 @@
         return new Progress<ProcessingService.DetailedProgress>(progress =>
         {
             if (_disposed || version != _operationVersion) return;
-            _progressPercent = progress.Percent;
+            _progressPercent = Math.Max(_progressPercent, Math.Clamp(progress.Percent, 0, 97));
             _progressMessage = progress.Message ?? string.Empty;
             if (!string.IsNullOrEmpty(progress.FilePath) && !string.IsNullOrEmpty(progress.FileStatus))
             {
@@ -851,11 +755,7 @@
         return new Progress<ProcessingService.DetailedProgress>(progress =>
         {
             if (_disposed || version != _operationVersion) return;
-            bool building = string.Equals(
-                progress.Message,
-                "Building and validating Programme Review tables...",
-                StringComparison.Ordinal);
-            _progressPercent = building ? 75 : Math.Min(70, Math.Max(0, progress.Percent) * 70 / 100);
+            _progressPercent = Math.Max(_progressPercent, Math.Clamp(progress.Percent, 0, 97));
             _progressMessage = progress.Message ?? string.Empty;
             if (!string.IsNullOrEmpty(progress.FilePath) && !string.IsNullOrEmpty(progress.FileStatus))
             {
@@ -872,7 +772,7 @@
         return new Progress<ProcessingService.DetailedProgress>(progress =>
         {
             if (_disposed || version != _operationVersion) return;
-            _progressPercent = Math.Min(80, Math.Max(0, progress.Percent) * 80 / 100);
+            _progressPercent = Math.Max(_progressPercent, Math.Clamp(progress.Percent, 0, 97));
             _progressMessage = progress.Message ?? string.Empty;
             if (!string.IsNullOrEmpty(progress.FilePath) && !string.IsNullOrEmpty(progress.FileStatus))
             {
@@ -934,7 +834,7 @@
         LogActivity(warningCount > 0 ? _exportWarningMessage : _progressMessage);
     }
 
-    private void SetReviewExportCompletion(string subject, int warningCount, XerTable? dataQualityTable)
+    private void SetReviewExportCompletion(string subject, int warningCount, IReadOnlyList<string> diagnosticMessages)
     {
         _progressMessage = warningCount > 0
             ? $"{subject} completed with warnings."
@@ -944,30 +844,30 @@
               "The bundle contains eleven report CSV files and the manifest only. Check browser downloads for saved-file delivery."
             : string.Empty;
         LogActivity(warningCount > 0 ? _exportWarningMessage : _progressMessage);
-        foreach (string message in XerDataQuality.GetMessages(dataQualityTable))
+        foreach (string message in diagnosticMessages)
             LogActivity(message);
     }
 
     private void AddEnhancedTableNames()
     {
-        if (_dataStore is null) return;
+        if (!_standardParsed) return;
         var enhanced = new List<string>();
         // Show every Enhanced output with a primary source; missing lookups
         // are reported by Core without hiding otherwise available source rows.
-        if (_dataStore.ContainsTable(TableNames.Task))
+        if (_allTableNames.Contains(TableNames.Task, StringComparer.OrdinalIgnoreCase))
         { enhanced.Add(EnhancedTableNames.XerTask01); enhanced.Add(EnhancedTableNames.XerBaseline04); }
-        if (_dataStore.ContainsTable(TableNames.Project)) enhanced.Add(EnhancedTableNames.XerProject02);
-        if (_dataStore.ContainsTable(TableNames.ProjWbs)) enhanced.Add(EnhancedTableNames.XerProjWbs03);
-        if (_dataStore.ContainsTable(TableNames.TaskPred)) enhanced.Add(EnhancedTableNames.XerPredecessor06);
-        if (_dataStore.ContainsTable(TableNames.ActvType)) enhanced.Add(EnhancedTableNames.XerActvType07);
-        if (_dataStore.ContainsTable(TableNames.ActvCode)) enhanced.Add(EnhancedTableNames.XerActvCode08);
-        if (_dataStore.ContainsTable(TableNames.TaskActv)) enhanced.Add(EnhancedTableNames.XerTaskActv09);
-        if (_dataStore.ContainsTable(TableNames.Calendar))
+        if (_allTableNames.Contains(TableNames.Project, StringComparer.OrdinalIgnoreCase)) enhanced.Add(EnhancedTableNames.XerProject02);
+        if (_allTableNames.Contains(TableNames.ProjWbs, StringComparer.OrdinalIgnoreCase)) enhanced.Add(EnhancedTableNames.XerProjWbs03);
+        if (_allTableNames.Contains(TableNames.TaskPred, StringComparer.OrdinalIgnoreCase)) enhanced.Add(EnhancedTableNames.XerPredecessor06);
+        if (_allTableNames.Contains(TableNames.ActvType, StringComparer.OrdinalIgnoreCase)) enhanced.Add(EnhancedTableNames.XerActvType07);
+        if (_allTableNames.Contains(TableNames.ActvCode, StringComparer.OrdinalIgnoreCase)) enhanced.Add(EnhancedTableNames.XerActvCode08);
+        if (_allTableNames.Contains(TableNames.TaskActv, StringComparer.OrdinalIgnoreCase)) enhanced.Add(EnhancedTableNames.XerTaskActv09);
+        if (_allTableNames.Contains(TableNames.Calendar, StringComparer.OrdinalIgnoreCase))
         { enhanced.Add(EnhancedTableNames.XerCalendar10); enhanced.Add(EnhancedTableNames.XerCalendarDetailed11); }
-        if (_dataStore.ContainsTable(TableNames.Rsrc)) enhanced.Add(EnhancedTableNames.XerRsrc12);
-        if (_dataStore.ContainsTable(TableNames.TaskRsrc)) enhanced.Add(EnhancedTableNames.XerTaskRsrc13);
-        if (_dataStore.ContainsTable(TableNames.Umeasure)) enhanced.Add(EnhancedTableNames.XerUmeasure14);
-        if (_dataStore.ContainsTable(TableNames.TaskRsrc))
+        if (_allTableNames.Contains(TableNames.Rsrc, StringComparer.OrdinalIgnoreCase)) enhanced.Add(EnhancedTableNames.XerRsrc12);
+        if (_allTableNames.Contains(TableNames.TaskRsrc, StringComparer.OrdinalIgnoreCase)) enhanced.Add(EnhancedTableNames.XerTaskRsrc13);
+        if (_allTableNames.Contains(TableNames.Umeasure, StringComparer.OrdinalIgnoreCase)) enhanced.Add(EnhancedTableNames.XerUmeasure14);
+        if (_allTableNames.Contains(TableNames.TaskRsrc, StringComparer.OrdinalIgnoreCase))
             enhanced.Add(EnhancedTableNames.XerResourceDist15);
         foreach (string name in enhanced)
             if (!_allTableNames.Contains(name, StringComparer.OrdinalIgnoreCase)) _allTableNames.Add(name);
@@ -975,44 +875,28 @@
     }
 
     private Task ExportAll() => ExportTables(_allTableNames);
-    private Task ExportSelected() => ExportTables(_selectedTables.ToList());
-    private Task ExportPowerBi() => ExportTables(_allTableNames.Where(IsEnhancedTable).ToList());
 
     private async Task ExportTables(List<string> tables)
     {
-        if (_isBusy || _dataStore is null || tables.Count == 0) return;
+        if (_isBusy || !_standardParsed || tables.Count == 0) return;
         BeginOperation($"Exporting {tables.Count} tables...", resetFileStatuses: false);
         try
         {
-            long version = _operationVersion;
-            var progress = new Progress<(int percent, string message)>(item =>
-            {
-                if (_disposed || version != _operationVersion) return;
-                _progressPercent = item.percent;
-                _progressMessage = item.message;
-                RefreshProgress(version);
-            });
-            using var zipStream = new MemoryStream();
-            int warningCount = await _processingService.ExportTablesToZipStreamAsync(
-                _dataStore, tables, zipStream, progress, _cts!.Token);
-
-            _dataStore = null;
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
-
+            BrowserResult result = await _engine!.RunAsync(new BrowserJob { Kind = "export", Sources = Sources(_uploadedFiles), Tables = tables }, CreateParseProgress(_uploadedFiles), _cts!.Token);
             _cts.Token.ThrowIfCancellationRequested();
-            _progressMessage = "Preparing browser download...";
-            _progressPercent = 97;
-            StateHasChanged();
-            await _downloadService!.DownloadFileAsync("XER_Export.zip", zipStream, "application/zip", _cts.Token);
-            SetExportCompletion("Export", warningCount);
-            foreach (UploadedFile file in _uploadedFiles)
-                file.Status = warningCount > 0 ? "Warnings" : "Success";
-            LogActivity($"{tables.Count} CSV files sent to the browser download manager. Check browser downloads for saved-file delivery.");
+            _progressMessage = "Preparing browser download..."; _progressPercent = 97; StateHasChanged();
+            await _engine.CommitAsync(result, _cts.Token);
+            SetExportCompletion("Export", result.WarningCount);
+            foreach (UploadedFile file in _uploadedFiles) file.Status = result.WarningCount > 0 ? "Warnings" : "Success";
+            LogActivity($"{result.FileCount} CSV files sent to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Export was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Export failed: {ex.Message}"); }
         finally { EndOperation(); }
     }
+
+    private Task ExportSelected() => ExportTables(_selectedTables.ToList());
+    private Task ExportPowerBi() => ExportTables(_allTableNames.Where(IsEnhancedTable).ToList());
 
     private void CancelOperation()
     {
@@ -1020,19 +904,13 @@
         LogActivity("Cancellation requested...");
     }
 
-    private static async Task WriteZipContentAsync(
-        Stream destination,
-        byte[] content,
-        CancellationToken cancellationToken)
+    private static BrowserSource[] Sources(IEnumerable<UploadedFile> files) => files
+        .Select(file => new BrowserSource(file.SourceToken, file.Name, file.Size, file.SourceSha256)).ToArray();
+
+    private async void Observe(Task task)
     {
-        const int chunkSize = 1024 * 1024;
-        for (int offset = 0; offset < content.Length; offset += chunkSize)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            int count = Math.Min(chunkSize, content.Length - offset);
-            await destination.WriteAsync(content.AsMemory(offset, count), cancellationToken);
-            await Task.Delay(1, cancellationToken);
-        }
+        try { await task; }
+        catch (Exception ex) { if (!_disposed) SetOperationError($"Browser session update failed: {ex.Message}"); }
     }
 
     private void ToggleTable(string table, bool selected)
@@ -1076,22 +954,26 @@
             .GroupBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
             .Any(group => group.Count() > 1);
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
         _disposed = true;
+        _operationVersion++;
         _uploads.Dispose();
         _cts?.Cancel();
+        if (_engine is not null) await _engine.DisposeAsync();
+        _cts?.Dispose();
+        _cts = null;
     }
 
     private bool IsHighMemoryHistory() =>
-        _uploadedFiles.Sum(file => file.Data.LongLength) > BrowserWarningBytes;
+        _uploadedFiles.Sum(file => file.Size) > BrowserWarningBytes;
 
     private sealed class UploadedFile
     {
         public string SourceToken { get; init; } = string.Empty;
         public string Name { get; init; } = string.Empty;
-        public byte[] Data { get; init; } = Array.Empty<byte>();
+        public long Size { get; init; }
+        public string? SourceSha256 { get; init; }
         public string Status { get; set; } = "Ready";
         public string SnapshotKind { get; set; } = string.Empty;
         public string SnapshotTag { get; set; } = string.Empty;

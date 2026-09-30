@@ -6,35 +6,42 @@
         const item = prepared.get(id);
         if (!item) return;
         prepared.delete(id);
+        item.chunks.length = 0;
         if (item.url) URL.revokeObjectURL(item.url);
     }
 
     window.xerDownloads = {
+        applicationVersion() {
+            return document.querySelector('meta[name="application-version"]')?.content ?? '__APP_VERSION__';
+        },
         async prepare(id, filename, contentType, contentStreamReference) {
             if (prepared.has(id)) throw new Error("Download identity is already prepared.");
-            const item = { filename, url: null };
+            const item = { filename, url: null, chunks: [] };
             prepared.set(id, item);
+            let reader;
             try {
-                // Read the .NET stream as a chunked ReadableStream instead of a single
-                // contiguous arrayBuffer(). The Blob constructor accepts an array of chunks
-                // without requiring one huge contiguous allocation — critical for avoiding
-                // out-of-memory crashes in the 32-bit WebAssembly browser heap.
+                // Avoid an additional contiguous JavaScript arrayBuffer allocation while
+                // reading the .NET ZIP. The complete compressed download is still buffered.
                 const readable = await contentStreamReference.stream();
-                const reader = readable.getReader();
-                const chunks = [];
+                reader = readable.getReader();
                 for (;;) {
                     const { done, value } = await reader.read();
                     if (done) break;
-                    chunks.push(value);
+                    // Keep draining after discard so .NET can complete its stream transfer,
+                    // but stop retaining chunks for a preparation that can no longer commit.
+                    if (prepared.get(id) === item) item.chunks.push(value);
                 }
                 // Interop can time out/disconnect while JS is still reading. A finally/discard
                 // must invalidate that pending read rather than let it retain a late URL.
                 if (prepared.get(id) !== item) return;
-                const blob = new Blob(chunks, { type: contentType });
+                const blob = new Blob(item.chunks, { type: contentType });
+                item.chunks.length = 0;
                 item.url = URL.createObjectURL(blob);
             } catch (error) {
                 if (prepared.get(id) === item) discard(id);
                 throw error;
+            } finally {
+                if (reader) reader.releaseLock();
             }
         },
         commit(id) {

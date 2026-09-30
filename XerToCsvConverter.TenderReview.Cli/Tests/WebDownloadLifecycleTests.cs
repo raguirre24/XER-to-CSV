@@ -7,6 +7,62 @@ namespace XerToCsvConverter.TenderReview.Surface.Tests;
 public sealed class WebDownloadLifecycleTests
 {
     [Fact]
+    public async Task Prepared_download_has_no_handoff_until_explicit_commit_and_can_be_cancelled_between_phases()
+    {
+        var js = new RecordingJsRuntime();
+        using var content = new MemoryStream(new byte[] { 1, 2, 3 });
+        var downloads = new DownloadService(js);
+        string id = await downloads.PrepareFileAsync("export.zip", content);
+        Assert.NotEmpty(id);
+        Assert.Equal(new[] { "xerDownloads.prepare" }, js.Calls);
+        Assert.True(content.CanRead);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => downloads.CommitPreparedAsync(id, cancellation.Token));
+        Assert.Equal(new[] { "xerDownloads.prepare", "xerDownloads.discard" }, js.Calls);
+        Assert.True(content.CanRead);
+    }
+
+    [Fact]
+    public async Task Successful_return_waits_for_preparation_and_commit_and_preserves_stream_ownership()
+    {
+        var prepareEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prepareFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var commitEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var commitFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var content = new MemoryStream(new byte[] { 1, 2, 3 });
+        content.Position = content.Length;
+        var js = new RecordingJsRuntime
+        {
+            OnInvoke = async identifier =>
+            {
+                if (identifier == "xerDownloads.prepare")
+                {
+                    Assert.Equal(0, content.Position);
+                    prepareEntered.SetResult();
+                    await prepareFinished.Task;
+                }
+                if (identifier == "xerDownloads.commit")
+                {
+                    commitEntered.SetResult();
+                    await commitFinished.Task;
+                }
+            }
+        };
+        Task download = new DownloadService(js).DownloadFileAsync("export.zip", content);
+        await prepareEntered.Task;
+        Assert.False(download.IsCompleted);
+        prepareFinished.SetResult();
+        await commitEntered.Task;
+        Assert.False(download.IsCompleted);
+        Assert.True(content.CanRead);
+        commitFinished.SetResult();
+        await download;
+        Assert.Equal(new[] { "xerDownloads.prepare", "xerDownloads.commit", "xerDownloads.discard" }, js.Calls);
+        Assert.True(content.CanRead);
+    }
+
+    [Fact]
     public async Task CancellationBeforePreparationDoesNotCallJavaScript()
     {
         var js = new RecordingJsRuntime();

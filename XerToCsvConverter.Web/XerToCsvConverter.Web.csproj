@@ -12,4 +12,14 @@
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="8.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="8.0.0" PrivateAssets="all" />
   </ItemGroup>
+  <Target Name="PublishProcessingWorker" AfterTargets="Publish" Condition="'$(SkipProcessingWorker)' != 'true'">
+    <MSBuild Projects="../XerToCsvConverter.Web.Worker/XerToCsvConverter.Web.Worker.csproj"
+             Targets="Restore;Publish" BuildInParallel="false"
+             Properties="Configuration=$(Configuration);PublishDir=$(MSBuildProjectDirectory)/obj/$(Configuration)/worker-publish/" />
+    <ItemGroup>
+      <_ProcessingWorkerFiles Include="$(MSBuildProjectDirectory)/obj/$(Configuration)/worker-publish/wwwroot/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_ProcessingWorkerFiles)"
+          DestinationFiles="@(_ProcessingWorkerFiles->'$(PublishDir)wwwroot/worker/%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
 </Project>

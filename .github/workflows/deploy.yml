@@ -25,15 +25,31 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '8.0.421'
+
+      - name: Install pinned WebAssembly workloads
+        run: dotnet workload install wasm-tools wasm-experimental --skip-manifest-update
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate parser and browser lifecycle
+        run: |
+          dotnet test XerToCsvConverter.Core.Tests/XerToCsvConverter.Core.Tests.csproj -c Release
+          dotnet test XerToCsvConverter.TenderReview.Cli/Tests/XerToCsvConverter.TenderReview.Surface.Tests.csproj -c Release
+          dotnet test XerToCsvConverter.RelationshipAudit.Cli/Tests/XerToCsvConverter.RelationshipAudit.Cli.Tests.csproj -c Release
+          node --test XerToCsvConverter.Web/tests/*.test.cjs
+          git diff --check
 
       - name: Publish Blazor WASM
-        run: dotnet publish XerToCsvConverter.Web/XerToCsvConverter.Web.csproj -c Release -o release
+        run: dotnet publish XerToCsvConverter.Web/XerToCsvConverter.Web.csproj -c Release -p:PublishProfile= -o release
 
       - name: Adjust base path for GitHub Pages
         run: |
           sed -i 's|<base href="/" />|<base href="/XER-to-CSV/" />|g' release/wwwroot/index.html
           sed -i "s|__APP_VERSION__|${GITHUB_SHA}|g" release/wwwroot/index.html
+          sed -i "s|__APP_VERSION__|${GITHUB_SHA}|g" release/wwwroot/worker/main.js
 
       - name: Add .nojekyll
         run: touch release/wwwroot/.nojekyll

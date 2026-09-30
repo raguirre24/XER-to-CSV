@@ -93,34 +93,6 @@ public sealed class TenderReviewSurfaceContractTests
     }
 
     [Fact]
-    public void TenderWebZipUsesOneManifestDerivedTimestampWithoutChangingProgrammePackaging()
-    {
-        string webRoot = FindWebProjectRoot();
-        string page = File.ReadAllText(Path.Combine(webRoot, "Pages", "Index.razor"));
-
-        Assert.Contains("bundle.ManifestRows[0].ExportedAtUtc", page, StringComparison.Ordinal);
-        Assert.Contains("entry.LastWriteTime = zipEntryTimestamp;", page, StringComparison.Ordinal);
-        Assert.Equal(
-            1,
-            page.Split("entry.LastWriteTime = zipEntryTimestamp;", StringSplitOptions.None).Length - 1);
-    }
-
-    [Fact]
-    public void TenderWebFreezesOrderedSourcesAndBlocksUploadMutationWhileProcessing()
-    {
-        string webRoot = FindWebProjectRoot();
-        string page = File.ReadAllText(Path.Combine(webRoot, "Pages", "Index.razor"));
-
-        Assert.Contains("disabled=\"@_isProcessing\"", page, StringComparison.Ordinal);
-        Assert.Contains("if (_isBusy)\n            return;", page.Replace("\r\n", "\n"), StringComparison.Ordinal);
-        Assert.Contains("UploadedFile[] stagedFiles = _uploadedFiles.ToArray();", page, StringComparison.Ordinal);
-        Assert.Contains("TryCreateTenderReviewRequest(stagedFiles", page, StringComparison.Ordinal);
-        Assert.Contains("TenderReviewSourceBytes[] sourceBytes = stagedFiles", page, StringComparison.Ordinal);
-        Assert.Contains("foreach (UploadedFile file in stagedFiles)", page, StringComparison.Ordinal);
-        Assert.Contains("Exported {stagedFiles.Length} ordered Tender stage(s)", page, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void WebMappingPreservesOrderAndRepeatedOriginalFilenames()
     {
         TenderReviewSource[] sources = TenderReviewWebContract.CreateOrderedSources(new[]

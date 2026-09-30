@@ -368,3 +368,9 @@ FodyWeavers.xsd
 
 # Legacy backup methods
 OLD_ENHANCED_TABLES_CODE_METHODS.cs
+
+# Locally installed pinned SDK and WebAssembly workload packs
+/local-dotnet-sdk/
+
+# Temporary browser audit publish output; final candidates live under artifacts.
+/review/parser-performance-20260930/worker-ui-publish/

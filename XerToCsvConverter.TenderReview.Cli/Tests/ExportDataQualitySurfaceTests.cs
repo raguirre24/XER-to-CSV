@@ -61,27 +61,6 @@ public sealed class ExportDataQualitySurfaceTests
         Assert.DoesNotContain("Console.WriteLine(", warningBlock, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData("CreateProgrammeReviewBundle", "Programme Review bundle", "bundle.WarningCount")]
-    [InlineData("CreateTenderReviewBundle", "Tender Review bundle", "bundle.WarningCount")]
-    [InlineData("ExportTables", "Export", "result.WarningCount")]
-    public void WebOnlyMarksWarningCompletionAfterBrowserDownloadHandoff(
-        string methodName, string subject, string warningCount)
-    {
-        string page = ReadSource("XerToCsvConverter.Web/Pages/Index.razor");
-        string method = ReadPrivateMethod(page, $"private async Task {methodName}(");
-        int handoff = method.IndexOf("await _downloadService!.DownloadFileAsync(", StringComparison.Ordinal);
-        string completionCall = methodName == "ExportTables"
-            ? $"SetExportCompletion(\"{subject}\", {warningCount});"
-            : $"SetReviewExportCompletion(\"{subject}\", {warningCount}, bundle.DataQualityTable);";
-        int completion = method.IndexOf(completionCall, StringComparison.Ordinal);
-
-        Assert.True(handoff >= 0 && completion > handoff,
-            "A successful bundle generation alone must not claim browser handoff completion.");
-        Assert.Contains($"{warningCount} > 0 ? \"Warnings\" : \"Success\"", method, StringComparison.Ordinal);
-        Assert.Contains("Check browser downloads for saved-file delivery.", method, StringComparison.Ordinal);
-    }
-
     [Fact]
     public void WebWarningBannerPersistsAfterCompletionAndClearsForTheNextOperation()
     {
@@ -102,18 +81,22 @@ public sealed class ExportDataQualitySurfaceTests
     }
 
     [Fact]
-    public void WebStandardUsesDiagnosticResultAndReviewsReportTwelveFilesWithLoggedDiagnostics()
+    public void WebReviewsUseTypedFileCountsAndLogTheReturnedDiagnosticMessagesAfterHandoff()
     {
         string page = ReadSource("XerToCsvConverter.Web/Pages/Index.razor");
 
-        Assert.Contains("StandardMemoryExportResult result = await _processingService.ExportTablesToMemoryWithDiagnosticsAsync(",
-            page, StringComparison.Ordinal);
-        Assert.Contains("Dictionary<string, byte[]> csvData = result.Files;", page, StringComparison.Ordinal);
-        Assert.Equal(2, page.Split("11 report CSV files plus XER_CSV_MANIFEST.csv (12 files)",
-            StringSplitOptions.None).Length - 1);
+        foreach (string method in new[] { "private async Task CreateProgrammeReviewBundle()", "private async Task CreateTenderReviewBundle()" })
+        {
+            string operation = ReadPrivateMethod(page, method);
+            int handoff = operation.IndexOf("await _engine.CommitAsync(bundle", StringComparison.Ordinal);
+            int completion = operation.IndexOf("SetReviewExportCompletion(", StringComparison.Ordinal);
+            Assert.True(handoff >= 0 && completion > handoff, "Review completion must follow the confirmed browser handoff.");
+            Assert.Contains("bundle.WarningCount, bundle.DiagnosticMessages", operation, StringComparison.Ordinal);
+            Assert.Contains("XER_CSV_MANIFEST.csv ({bundle.FileCount} files)", operation, StringComparison.Ordinal);
+        }
         Assert.DoesNotContain("report CSV files plus XER_DATA_QUALITY.csv", page, StringComparison.Ordinal);
         string reviewCompletion = ReadPrivateMethod(page, "private void SetReviewExportCompletion(");
-        Assert.Contains("XerDataQuality.GetMessages(dataQualityTable)", reviewCompletion, StringComparison.Ordinal);
+        Assert.Contains("foreach (string message in diagnosticMessages)", reviewCompletion, StringComparison.Ordinal);
         Assert.Contains("LogActivity(message);", reviewCompletion, StringComparison.Ordinal);
         Assert.Contains("_exportWarningMessage = warningCount > 0", reviewCompletion, StringComparison.Ordinal);
         Assert.Contains("activity log", reviewCompletion, StringComparison.Ordinal);
@@ -137,10 +120,12 @@ public sealed class ExportDataQualitySurfaceTests
 
         string web = ReadPrivateMethod(ReadSource("XerToCsvConverter.Web/Pages/Index.razor"),
             "private void AddEnhancedTableNames()");
-        Assert.Contains("if (_dataStore.ContainsTable(TableNames.Task))", web, StringComparison.Ordinal);
-        Assert.Contains("if (_dataStore.ContainsTable(TableNames.TaskPred))", web, StringComparison.Ordinal);
-        Assert.Contains("if (_dataStore.ContainsTable(TableNames.TaskRsrc))", web, StringComparison.Ordinal);
+        Assert.Contains("if (!_standardParsed) return;", web, StringComparison.Ordinal);
+        foreach (string primarySource in new[] { "Task", "Project", "ProjWbs", "TaskPred", "ActvType", "ActvCode", "TaskActv", "Calendar", "Rsrc", "TaskRsrc", "Umeasure" })
+            Assert.Contains($"if (_allTableNames.Contains(TableNames.{primarySource}, StringComparer.OrdinalIgnoreCase))", web, StringComparison.Ordinal);
         Assert.DoesNotContain("&&", web, StringComparison.Ordinal);
+        string parse = ReadPrivateMethod(ReadSource("XerToCsvConverter.Web/Pages/Index.razor"), "private async Task ParseFiles()");
+        Assert.Contains("_allTableNames = result.TableNames.OrderBy", parse, StringComparison.Ordinal);
     }
 
     private static string ReadPrivateMethod(string source, string signature)

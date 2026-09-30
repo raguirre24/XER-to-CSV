@@ -28,5 +28,9 @@
              Link="Web\ProgrammeReviewUploadMetadata.cs" />
     <Compile Include="..\..\XerToCsvConverter.Web\Services\DownloadService.cs"
              Link="Web\DownloadService.cs" />
+    <Compile Include="..\..\XerToCsvConverter.Web\Services\IBrowserProcessingEngine.cs"
+             Link="Web\IBrowserProcessingEngine.cs" />
+    <Compile Include="..\..\XerToCsvConverter.Web\Services\BrowserProcessingEngine.cs"
+             Link="Web\BrowserProcessingEngine.cs" />
   </ItemGroup>
 </Project>

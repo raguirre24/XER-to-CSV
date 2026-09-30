@@ -12,6 +12,16 @@ public class DownloadService(IJSRuntime jsRuntime)
         string contentType = "application/octet-stream",
         CancellationToken cancellationToken = default)
     {
+        string downloadId = await PrepareFileAsync(filename, content, contentType, cancellationToken);
+        await CommitPreparedAsync(downloadId, cancellationToken);
+    }
+
+    public async Task<string> PrepareFileAsync(
+        string filename,
+        Stream content,
+        string contentType = "application/octet-stream",
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(content);
         if (!content.CanRead) throw new ArgumentException("The download stream must be readable.", nameof(content));
         cancellationToken.ThrowIfCancellationRequested();
@@ -19,7 +29,6 @@ public class DownloadService(IJSRuntime jsRuntime)
 
         using var streamReference = new DotNetStreamReference(content, leaveOpen: true);
         string downloadId = Guid.NewGuid().ToString("N");
-        bool handoffAttempted = false;
         try
         {
             // Keep the stream alive until JavaScript finishes reading it. Cancelling only the
@@ -27,9 +36,24 @@ public class DownloadService(IJSRuntime jsRuntime)
             await _jsRuntime.InvokeVoidAsync(
                 "xerDownloads.prepare", downloadId, filename, contentType, streamReference);
             cancellationToken.ThrowIfCancellationRequested();
+            return downloadId;
+        }
+        catch
+        {
+            await DiscardPreparedAsync(downloadId);
+            throw;
+        }
+    }
 
-            // This is the irreversible boundary. No cancellation token or post-handoff
-            // cancellation check: once submitted, browser delivery cannot be recalled.
+    public async Task CommitPreparedAsync(string downloadId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(downloadId);
+        bool handoffAttempted = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Once submitted, browser delivery cannot be recalled. Do not cancel the
+            // interop wait or perform a post-handoff cancellation check.
             handoffAttempted = true;
             await _jsRuntime.InvokeVoidAsync("xerDownloads.commit", downloadId);
         }
@@ -41,10 +65,15 @@ public class DownloadService(IJSRuntime jsRuntime)
         }
         finally
         {
-            try { await _jsRuntime.InvokeVoidAsync("xerDownloads.discard", downloadId); }
-            catch (JSDisconnectedException) { }
-            catch (JSException) { /* A disconnected page cannot retain a usable download. */ }
-            catch (OperationCanceledException) { /* Cleanup cannot undo an acknowledged handoff. */ }
+            await DiscardPreparedAsync(downloadId);
         }
+    }
+
+    public async Task DiscardPreparedAsync(string downloadId)
+    {
+        try { await _jsRuntime.InvokeVoidAsync("xerDownloads.discard", downloadId); }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { /* A disconnected page cannot retain a usable download. */ }
+        catch (OperationCanceledException) { /* Cleanup cannot undo an acknowledged handoff. */ }
     }
 }
