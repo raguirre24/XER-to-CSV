@@ -96,11 +96,13 @@ internal static class ProgrammeReviewCsv
             NewLine = "\r\n"
         };
 
-        WriteCsvRow(writer, table.Contract.Columns.Select(c => c.Name));
+        string[] names = table.Contract.Columns.Select(column => column.Name).ToArray();
+        var records = new BufferedCsvRecordWriter(writer);
+        records.WriteHeader(names);
         foreach (ProgrammeReviewOutputRow row in table.Rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            WriteCsvRow(writer, table.Contract.Columns.Select(column => row.Values[column.Name]));
+            records.WriteProjected(names, row.Values);
         }
         writer.Flush();
     }
@@ -152,7 +154,7 @@ internal static class ProgrammeReviewCsv
         writer.Flush();
     }
 
-    internal static string Normalize(string? value, ProgrammeReviewColumn column, string context)
+    internal static string Normalize(string? value, ProgrammeReviewColumn column, string context, ReviewValueNormalizationCache? cache = null)
     {
         string original = value ?? string.Empty;
         if (column.Type == ProgrammeReviewColumnType.Text)
@@ -170,7 +172,8 @@ internal static class ProgrammeReviewCsv
             return string.Empty;
         }
 
-        return column.Type switch
+        if (cache is not null && cache.TryGet((int)column.Type, raw, out string cached)) return cached;
+        string normalized = column.Type switch
         {
             ProgrammeReviewColumnType.Text => raw,
             ProgrammeReviewColumnType.Date => NormalizeDate(raw, context, column.Name),
@@ -179,6 +182,8 @@ internal static class ProgrammeReviewCsv
             ProgrammeReviewColumnType.Boolean => NormalizeBoolean(raw, context, column.Name),
             _ => throw new ArgumentOutOfRangeException(nameof(column))
         };
+        cache?.Add((int)column.Type, raw, normalized);
+        return normalized;
     }
 
     internal static string ComputeSha256(string path)

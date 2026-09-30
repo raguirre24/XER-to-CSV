@@ -8,6 +8,8 @@ public sealed class OperationCalendarSharingTests
         XerDataStore store = Store();
         XerTable calendar = store.GetTable("CALENDAR")!;
         calendar.AddRow(new DataRow(["", "Blank identity", "CA_Project", "", "8", "malformed"], "2608.xer", "occurrence"));
+        var inputRows = store.TableNames.ToDictionary(name => name,
+            name => store.GetTable(name)!.Rows.Select(row => row.Fields.ToArray()).ToArray());
         Assert.Throws<InvalidDataException>(() => new P6CalendarRepository(store));
         var publicTransformer = new XerTransformer(store);
         var operationTransformer = XerTransformer.ForExportOperation(store);
@@ -19,6 +21,13 @@ public sealed class OperationCalendarSharingTests
         XerTable diagnostics = operationTransformer.CreateDataQualityTable();
         Assert.Contains(diagnostics.Rows,
             row => row.Fields[diagnostics.FieldIndexes["issue_code"]] == "CALENDAR_IDENTITY_INVALID");
+        foreach (string name in store.TableNames)
+        {
+            XerTable table = store.GetTable(name)!;
+            Assert.Equal(inputRows[name].Length, table.RowCount);
+            for (int index = 0; index < table.RowCount; index++)
+                Assert.Equal(inputRows[name][index], table.Rows[index].Fields);
+        }
     }
 
     [Fact]

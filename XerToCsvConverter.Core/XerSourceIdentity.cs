@@ -42,7 +42,7 @@ internal sealed record XerSourceIdentity(string SourceToken, string OriginalFile
         foreach (string name in source.TableNames)
         {
             XerTable input = source.GetTable(name)!;
-            var table = new XerTable(name, input.RowCount);
+            var table = new XerTable(name, Math.Max(1, input.RowCount));
             if (input.Headers is not null) table.SetHeaders(input.Headers.ToArray());
             foreach (DataRow row in input.Rows)
                 table.AddRow(row with

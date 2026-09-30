@@ -64,7 +64,7 @@ public sealed class ProgrammeReviewBundleService
             }
 
             ProgrammeReviewBundleRequest hydrated = request with { Snapshots = snapshots };
-            ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(
+            ResolvedProgrammeReviewRequest resolved = ResolveRequest(
                 hydrated,
                 snapshot => snapshot.SourceSha256
                     ?? throw new ProgrammeReviewValidationException($"Source SHA-256 is missing for '{snapshot.OriginalXerFilename}'."));
@@ -106,7 +106,7 @@ public sealed class ProgrammeReviewBundleService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(dataStore);
-        ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(
+        ResolvedProgrammeReviewRequest resolved = ResolveRequest(
             request,
             snapshot => snapshot.SourceSha256
                 ?? throw new ProgrammeReviewValidationException(
@@ -190,7 +190,7 @@ public sealed class ProgrammeReviewBundleService
                 throw new ProgrammeReviewValidationException(
                     $"Uploaded XER content is missing for '{snapshot.OriginalXerFilename}'.");
 
-            string computedHash = ProgrammeReviewCsv.ComputeSha256(content);
+            string computedHash = ComputeSourceSha256(content);
             if (!string.IsNullOrWhiteSpace(snapshot.SourceSha256)
                 && !string.Equals(snapshot.SourceSha256.Trim(), computedHash, StringComparison.OrdinalIgnoreCase))
                 throw new ProgrammeReviewValidationException(
@@ -204,7 +204,7 @@ public sealed class ProgrammeReviewBundleService
         }
 
         ProgrammeReviewBundleRequest hydrated = request with { Snapshots = snapshots };
-        ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(
+        ResolvedProgrammeReviewRequest resolved = ResolveRequest(
             hydrated,
             snapshot => snapshot.SourceSha256
                 ?? throw new ProgrammeReviewValidationException(
@@ -227,7 +227,7 @@ public sealed class ProgrammeReviewBundleService
             foreach (ResolvedProgrammeReviewSnapshot snapshot in resolved.Snapshots)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                string afterParseHash = ProgrammeReviewCsv.ComputeSha256(
+                string afterParseHash = ComputeSourceSha256(
                     validatedXerFiles[snapshot.OriginalXerFilename]);
                 if (!string.Equals(afterParseHash, snapshot.SourceSha256, StringComparison.Ordinal))
                     throw new ProgrammeReviewValidationException(
@@ -255,7 +255,7 @@ public sealed class ProgrammeReviewBundleService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(dataStore);
-        ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(
+        ResolvedProgrammeReviewRequest resolved = ResolveRequest(
             request,
             snapshot => snapshot.SourceSha256
                 ?? throw new ProgrammeReviewValidationException(
@@ -275,7 +275,7 @@ public sealed class ProgrammeReviewBundleService
         ArgumentNullException.ThrowIfNull(request);
         ZipStreamExport.ValidateDestination(zipOutputStream);
         cancellationToken.ThrowIfCancellationRequested();
-        ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(request,
+        ResolvedProgrammeReviewRequest resolved = ResolveRequest(request,
             snapshot => snapshot.SourceSha256
                 ?? throw new ProgrammeReviewValidationException(
                     $"source_sha256 is required for parsed snapshot '{snapshot.OriginalXerFilename}'."));
@@ -431,7 +431,7 @@ public sealed class ProgrammeReviewBundleService
 
         var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
         IReadOnlyList<ProgrammeReviewManifestRow> manifestRows;
-        using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
+        using (var archive = ParserOperationTelemetry.CreateZipArchive(zipOutputStream))
         {
             int tableIndex = 0;
             foreach (ProgrammeReviewOutputTable table in tables.OrderBy(table => table.Contract.FileName, StringComparer.Ordinal))
@@ -447,12 +447,17 @@ public sealed class ProgrammeReviewBundleService
                 await Task.Delay(1, cancellationToken).ConfigureAwait(false);
 
                 ZipArchiveEntry entry = archive.CreateEntry($"{request.BundleId}/{table.Contract.FileName}", CompressionLevel.Fastest);
-                using (var entryStream = entry.Open())
+                using (var entryStream = ParserOperationTelemetry.OpenZipEntry(entry))
                 using (var hashingStream = new HashingWriteStream(entryStream))
+                using (var csvStream = ParserOperationTelemetry.TrackCsvHashing(hashingStream, entryStream, table.Contract.FileName))
                 {
-                    ProgrammeReviewCsv.WriteTableToStream(hashingStream, table, cancellationToken);
-                    hashingStream.Flush();
-                    hashes.Add(table.Contract.FileName, hashingStream.GetHash());
+                    using (ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, table.Contract.FileName))
+                    {
+                        ProgrammeReviewCsv.WriteTableToStream(csvStream, table, cancellationToken);
+                        csvStream.Flush();
+                    }
+                    using (ParserOperationTelemetry.Measure(ParserOperationPhase.CsvHashing, table.Contract.FileName + ":digest"))
+                        hashes.Add(table.Contract.FileName, hashingStream.GetHash());
                 }
                 await Task.Delay(1, cancellationToken).ConfigureAwait(false);
             }
@@ -460,8 +465,9 @@ public sealed class ProgrammeReviewBundleService
             manifestRows = CreateManifestRows(request, tables, hashes);
 
             ZipArchiveEntry manifestEntry = archive.CreateEntry($"{request.BundleId}/{ProgrammeReviewContract.ManifestFileName}", CompressionLevel.Fastest);
-            using (var manifestStream = manifestEntry.Open())
+            using (var manifestStream = ParserOperationTelemetry.OpenZipEntry(manifestEntry))
             {
+                using var csvPhase = ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, ProgrammeReviewContract.ManifestFileName);
                 ProgrammeReviewCsv.WriteManifestToStream(manifestStream, manifestRows, cancellationToken);
             }
             progress?.Report(new ProcessingService.DetailedProgress
@@ -494,6 +500,7 @@ public sealed class ProgrammeReviewBundleService
         IReadOnlyList<ProgrammeReviewOutputTable> tables,
         IReadOnlyDictionary<string, string> hashes)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "programme manifest metadata");
         var manifestRows = new List<ProgrammeReviewManifestRow>(request.Snapshots.Count * tables.Count);
         foreach (ResolvedProgrammeReviewSnapshot snapshot in request.Snapshots
             .OrderBy(s => s.CanonicalXerFilename, StringComparer.Ordinal))
@@ -529,14 +536,28 @@ public sealed class ProgrammeReviewBundleService
         return manifestRows;
     }
 
+    private static ResolvedProgrammeReviewRequest ResolveRequest(ProgrammeReviewBundleRequest request,
+        Func<ProgrammeReviewSnapshot, string> sourceHashProvider)
+    {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "programme request metadata");
+        return ProgrammeReviewNaming.Resolve(request, sourceHashProvider);
+    }
+
     private static string ComputeSourceSha256(Stream stream)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.SourceSha256, "programme XER stream");
         if (!stream.CanSeek)
             throw new ProgrammeReviewValidationException("A seekable XER source stream is required for hash verification.");
         stream.Position = 0;
         string hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
         stream.Position = 0;
         return hash;
+    }
+
+    private static string ComputeSourceSha256(ReadOnlySpan<byte> content)
+    {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.SourceSha256, "programme uploaded XER bytes");
+        return ProgrammeReviewCsv.ComputeSha256(content);
     }
 
     private static void DeleteOwnedStagingDirectory(string root, string stagingPath)

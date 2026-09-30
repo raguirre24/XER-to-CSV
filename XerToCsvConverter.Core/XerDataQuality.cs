@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 namespace XerToCsvConverter;
@@ -46,12 +47,9 @@ public static class XerDataQuality
 
     /// <summary>Ordered source fields, including omitted cells; no internal occurrence token.</summary>
     public static string RawRowJson(XerTable table, DataRow row) => JsonSerializer.Serialize(
-        (table.Headers ?? []).Select((name, index) => new
-        {
-            column = name,
-            value = index < row.Fields.Length ? row.Fields[index] : null,
-            presence = row.GetRawField(name).State.ToString()
-        }));
+        (table.Headers ?? []).Select((name, index) => new RawRowField(name,
+            index < row.Fields.Length ? row.Fields[index] : null,
+            row.GetRawField(name).State.ToString())), CoreJsonContext.Default.RawRowFields);
 
     public static byte[] WriteToBytes(XerTable table, CancellationToken cancellationToken = default)
     {
@@ -94,18 +92,42 @@ public static class XerDataQuality
             }
 
             string source = row.OriginalSourceFilename;
-            // Diagnostics may originate in callers; never leak the internal occurrence identity.
+            // Filename and issue code are public provenance. Only redact the identity
+            // in occurrence annotations or as a complete token in message evidence.
             if (!string.IsNullOrEmpty(row.SourceToken))
             {
-                source = source.Replace(row.SourceToken, "[source]", StringComparison.Ordinal);
-                code = code.Replace(row.SourceToken, "[source]", StringComparison.Ordinal);
-                message = message.Replace(row.SourceToken, "[source]", StringComparison.Ordinal);
+                message = message.Replace($" (input occurrence '{row.SourceToken}')", "", StringComparison.Ordinal)
+                    .Replace($" (occurrence '{row.SourceToken}')", "", StringComparison.Ordinal);
+                message = RedactIdentityReferences(message, row.SourceToken, source);
             }
             result.Add($"{source}: [{code}] {message}");
         }
         if (omitted > 0)
             result.Add($"{omitted.ToString(CultureInfo.InvariantCulture)} additional source diagnostic(s) omitted from this display; all remain available on the Core result's DataQualityTable.");
         return result;
+
+        static string RedactIdentityReferences(string message, string token, string originalFilename)
+        {
+            StringBuilder? redacted = null;
+            int cursor = 0;
+            int filenameStart = originalFilename.Length == 0 ? -1 : message.IndexOf(originalFilename, StringComparison.Ordinal);
+            for (int index = message.IndexOf(token, StringComparison.Ordinal); index >= 0;
+                index = message.IndexOf(token, index + token.Length, StringComparison.Ordinal))
+            {
+                while (filenameStart >= 0 && filenameStart + originalFilename.Length <= index)
+                    filenameStart = message.IndexOf(originalFilename, filenameStart + originalFilename.Length, StringComparison.Ordinal);
+                bool inFilename = filenameStart >= 0 && filenameStart <= index && index + token.Length <= filenameStart + originalFilename.Length;
+                bool startsToken = index == 0 || !IsIdentityCharacter(message[index - 1]);
+                bool endsToken = index + token.Length == message.Length || !IsIdentityCharacter(message[index + token.Length]);
+                if (inFilename || !startsToken || !endsToken) continue;
+                redacted ??= new StringBuilder(message.Length);
+                redacted.Append(message, cursor, index - cursor).Append("[source]");
+                cursor = index + token.Length;
+            }
+            return redacted is null ? message : redacted.Append(message, cursor, message.Length - cursor).ToString();
+
+            static bool IsIdentityCharacter(char value) => char.IsLetterOrDigit(value) || value is '_' or '-';
+        }
     }
 }
 

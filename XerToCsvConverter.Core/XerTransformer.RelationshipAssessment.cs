@@ -5,50 +5,77 @@ namespace XerToCsvConverter;
 
 public partial class XerTransformer
 {
-    private sealed record RelationshipScheduleOptions(
-        DataRow? ProjectRow = null, DataRow? OptionRow = null,
-        bool ProjectAmbiguous = false, bool OptionsAmbiguous = false)
+    // Export needs allowance/classification/warning values. The immutable empty
+    // assessment has no source roots; each returned result is a record copy.
+    private static readonly RelationshipFloatAssessment EmptyExportRelationshipAssessment = new();
+
+    private sealed class RelationshipScheduleOptions
     {
+        public DataRow? ProjectRow { get; }
+        public DataRow? OptionRow { get; }
+        public bool ProjectAmbiguous { get; }
+        public bool OptionsAmbiguous { get; }
         public bool IsAmbiguous => ProjectAmbiguous || OptionsAmbiguous;
-        public string DefaultCalendarId => RawText(ProjectRow, "clndr_id");
-        public DateTime? DataDate => RawDate(ProjectRow, "last_recalc_date");
-        public string LagCalendar
+        public string DefaultCalendarId { get; }
+        public string DataDateText { get; }
+        public DateTime? DataDate { get; }
+        public string LagCalendarInputText { get; }
+        public string LagCalendar { get; }
+        public string RetainedLogicText { get; }
+        public string ProgressOverrideText { get; }
+        public string OuterDependType { get; }
+        public string Mode { get; }
+        public string SsBasis { get; }
+
+        public RelationshipScheduleOptions(DataRow? projectRow, DataRow? optionRow,
+            bool projectAmbiguous, bool optionsAmbiguous)
         {
-            get
-            {
-                var raw = OptionRow?.GetEvaluationField("sched_calendar_on_relationship_lag");
-                return raw?.State == XerRawFieldState.Blank ? "rcal_Successor"
-                    : raw?.State == XerRawFieldState.Present ? raw.Value.RawValue.Trim() : "";
-            }
+            ProjectRow = projectRow;
+            OptionRow = optionRow;
+            ProjectAmbiguous = projectAmbiguous;
+            OptionsAmbiguous = optionsAmbiguous;
+            DefaultCalendarId = RawText(projectRow, "clndr_id");
+            DataDateText = RawText(projectRow, "last_recalc_date");
+            DataDate = DateParser.TryParse(DataDateText);
+            var rawLagCalendar = optionRow?.GetEvaluationField("sched_calendar_on_relationship_lag");
+            LagCalendarInputText = rawLagCalendar?.RawValue.Trim() ?? "";
+            LagCalendar = rawLagCalendar?.State == XerRawFieldState.Blank ? "rcal_Successor"
+                : rawLagCalendar?.State == XerRawFieldState.Present ? LagCalendarInputText : "";
+            RetainedLogicText = RawText(optionRow, "sched_retained_logic");
+            ProgressOverrideText = RawText(optionRow, "sched_progress_override");
+            OuterDependType = RawText(optionRow, "sched_outer_depend_type");
+            Mode = IsAmbiguous ? "Unresolved" :
+                (RetainedLogicText.ToUpperInvariant(), ProgressOverrideText.ToUpperInvariant()) switch
+                {
+                    ("Y", "N") => "RetainedLogic", ("N", "Y") => "ProgressOverride",
+                    ("N", "N") => "ActualDates", _ => "Unresolved"
+                };
+            SsBasis = IsAmbiguous ? "Unresolved" : Mode == "ActualDates" ? "NotApplicable" :
+                RawText(optionRow, "sched_lag_early_start_flag").ToUpperInvariant() switch
+                { "Y" => "EarlyStart", "N" => "ActualStart", _ => "Unresolved" };
         }
-        public string Mode => IsAmbiguous ? "Unresolved" :
-            (RawText(OptionRow, "sched_retained_logic").ToUpperInvariant(),
-             RawText(OptionRow, "sched_progress_override").ToUpperInvariant()) switch
-            {
-                ("Y", "N") => "RetainedLogic", ("N", "Y") => "ProgressOverride",
-                ("N", "N") => "ActualDates", _ => "Unresolved"
-            };
-        public string SsBasis => IsAmbiguous ? "Unresolved" : Mode == "ActualDates" ? "NotApplicable" :
-            RawText(OptionRow, "sched_lag_early_start_flag").ToUpperInvariant() switch
-            { "Y" => "EarlyStart", "N" => "ActualStart", _ => "Unresolved" };
     }
 
     private Dictionary<(string Source, string Project), RelationshipScheduleOptions> BuildProjectScheduleOptionsLookup(XerTable? options)
     {
-        var result = new Dictionary<(string Source, string Project), RelationshipScheduleOptions>();
+        // Assemble both row owners before deriving immutable values. Record cloning
+        // here would otherwise carry cached values from an incomplete project entry.
+        var inputs = new Dictionary<(string Source, string Project),
+            (DataRow? ProjectRow, DataRow? OptionRow, bool ProjectAmbiguous, bool OptionsAmbiguous)>();
         var projects = _dataStore.GetTable(TableNames.Project);
         if (IsTableValid(projects))
             foreach (var group in projects.Rows.GroupBy(row => (Source: row.SourceToken, Project: RawText(row, "proj_id"))))
                 if (group.Key.Project.Length > 0)
-                    result[group.Key] = new(ProjectRow: group.First(), ProjectAmbiguous: group.Skip(1).Any());
+                    inputs[group.Key] = (group.First(), null, group.Skip(1).Any(), false);
         if (IsTableValid(options))
             foreach (var group in options.Rows.GroupBy(row => (Source: row.SourceToken, Project: RawText(row, "proj_id"))))
                 if (group.Key.Project.Length > 0)
                 {
-                    result.TryGetValue(group.Key, out var prior);
-                    result[group.Key] = (prior ?? new()) with { OptionRow = group.First(), OptionsAmbiguous = group.Skip(1).Any() };
+                    inputs.TryGetValue(group.Key, out var prior);
+                    inputs[group.Key] = (prior.ProjectRow, group.First(), prior.ProjectAmbiguous, group.Skip(1).Any());
                 }
-        return result;
+        return inputs.ToDictionary(pair => pair.Key, pair => new RelationshipScheduleOptions(
+            pair.Value.ProjectRow, pair.Value.OptionRow, pair.Value.ProjectAmbiguous, pair.Value.OptionsAmbiguous));
     }
 
     /// <summary>One assessment per TASKPRED row in input order. Does not mutate the store or export any files.</summary>
@@ -97,21 +124,20 @@ public partial class XerTransformer
         scheduleOptions.TryGetValue((row.SourceToken, successorProject), out var options);
         scheduleOptions.TryGetValue((row.SourceToken, predecessorProject), out var otherOptions);
         bool external = successorProject.Length > 0 && predecessorProject.Length > 0 && successorProject != predecessorProject;
-        var assessment = new RelationshipFloatAssessment
-        {
-            FileName = row.OriginalSourceFilename, SourceNamespace = row.SourceFilename, SourceRowNumber = ordinal,
-            RelationshipId = Read("task_pred_id"), RelationshipIdKey = Key(Read("task_pred_id")),
-            ProjectIdKey = Key(successorProject), PredecessorProjectIdKey = Key(predecessorProject),
-            SuccessorIdKey = successor is null ? "" : Key(Read("task_id")),
-            PredecessorIdKey = predecessor is null ? "" : Key(Read("pred_task_id")),
-            RelationshipType = type, PredecessorStatus = predecessor?.Status ?? "", SuccessorStatus = successor?.Status ?? "",
-            SchedulingMode = options?.Mode ?? "Unresolved", SsLagBasis = options?.SsBasis ?? "Unresolved",
-            LagCalendarSetting = options?.LagCalendar ?? "", RawLag = row.GetRawField("lag_hr_cnt").RawValue,
-            ProjectDataDate = options?.DataDate,
-            PredecessorCalendarKey = predecessor is null ? "" : Key(predecessor.CalendarId)
-        };
-        if (includeEvidence)
-            assessment = assessment with { InputEvidence = BuildRelationshipEvidence(row, predecessor, successor, otherOptions, options) };
+        var assessment = includeEvidence ? new RelationshipFloatAssessment
+            {
+                FileName = row.OriginalSourceFilename, SourceNamespace = row.SourceFilename, SourceRowNumber = ordinal,
+                RelationshipId = Read("task_pred_id"), RelationshipIdKey = Key(Read("task_pred_id")),
+                ProjectIdKey = Key(successorProject), PredecessorProjectIdKey = Key(predecessorProject),
+                SuccessorIdKey = successor is null ? "" : Key(Read("task_id")),
+                PredecessorIdKey = predecessor is null ? "" : Key(Read("pred_task_id")),
+                RelationshipType = type, PredecessorStatus = predecessor?.Status ?? "", SuccessorStatus = successor?.Status ?? "",
+                SchedulingMode = options?.Mode ?? "Unresolved", SsLagBasis = options?.SsBasis ?? "Unresolved",
+                LagCalendarSetting = options?.LagCalendar ?? "", RawLag = row.GetRawField("lag_hr_cnt").RawValue,
+                ProjectDataDate = options?.DataDate,
+                PredecessorCalendarKey = predecessor is null ? "" : Key(predecessor.CalendarId),
+                InputEvidence = BuildRelationshipEvidence(row, predecessor, successor, otherOptions, options)
+            } : EmptyExportRelationshipAssessment;
         RelationshipFloatAssessment Result(RelationshipFloatClassification classification, string reason, string message) =>
             assessment with
             {
@@ -137,7 +163,7 @@ public partial class XerTransformer
         RelationshipFloatAssessment Unsupported(string reason, string message) => Result(RelationshipFloatClassification.Unsupported, reason, message);
 
         if (external && options is { IsAmbiguous: false } &&
-            string.Equals(RawText(options.OptionRow, "sched_outer_depend_type"), "SD_None", StringComparison.OrdinalIgnoreCase))
+            string.Equals(options.OuterDependType, "SD_None", StringComparison.OrdinalIgnoreCase))
             return Result(RelationshipFloatClassification.Ignored, "IgnoredExternalRelationship",
                 "External relationship is ignored under the successor project's exported settings; no governing scheduling run is inferred.");
 
@@ -169,8 +195,8 @@ public partial class XerTransformer
                 : "The exported activity type has no supported remaining endpoint movement model.");
         foreach (var task in new[] { predecessor, successor })
         {
-            if (RawText(task.Row, "act_end_date").Length > 0 ||
-                (task.Status == "TK_NOTSTART" && RawText(task.Row, "act_start_date").Length > 0))
+            if (task.ActualEndText.Length > 0 ||
+                (task.Status == "TK_NOTSTART" && task.ActualStartText.Length > 0))
                 return Invalid("InconsistentActivityState", "Actual dates conflict with the exported unfinished activity status; source dates are not repaired.");
             var start = RemainingEndpoint(task, true);
             var finish = RemainingEndpoint(task, false);
@@ -183,9 +209,9 @@ public partial class XerTransformer
         // actuals cannot receive a numeric finish allowance or a fixed-event label.
         foreach (var task in new[] { predecessor, successor }.Where(task => task.Status == "TK_ACTIVE"))
         {
-            DateTime? actual = RawDate(task.Row, "act_start_date");
+            DateTime? actual = task.ActualStart;
             if (!actual.HasValue)
-                return Result(RawText(task.Row, "act_start_date").Length > 0
+                return Result(task.ActualStartText.Length > 0
                         ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
                     "UnresolvedActualStart", "Every active endpoint requires an explicit valid actual start; no source dates are repaired.");
             foreach (bool startEndpoint in new[] { true, false })
@@ -196,7 +222,7 @@ public partial class XerTransformer
             }
             var owningOptions = ReferenceEquals(task, predecessor) ? otherOptions : options;
             if (owningOptions?.ProjectAmbiguous == true || owningOptions?.DataDate is null)
-                return Result(owningOptions?.ProjectAmbiguous == true || RawText(owningOptions?.ProjectRow, "last_recalc_date").Length > 0
+                return Result(owningOptions?.ProjectAmbiguous == true || owningOptions?.DataDateText.Length > 0
                         ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
                     "UnresolvedProjectDataDate", "Every active endpoint requires a valid unambiguous owning project Data Date.");
             if (actual > owningOptions.DataDate)
@@ -207,21 +233,23 @@ public partial class XerTransformer
 
         if (predecessor.Status == "TK_ACTIVE" && (type == "PR_SF" ||
             (type == "PR_SS" && options is { Mode: "RetainedLogic" or "ProgressOverride", SsBasis: "ActualStart" })))
-            return Result(RelationshipFloatClassification.Unsupported, "FixedActualPredecessorStart",
+        {
+            var fixedEvent = Result(RelationshipFloatClassification.Unsupported, "FixedActualPredecessorStart",
                 "The relationship uses the predecessor's fixed actual start; remaining work delay cannot move this event. Any fixed release or unexpired lag is separate from remaining allowance.") with
             {
                 AllowanceStatus = RelationshipAllowanceStatus.FixedEvent,
-                CalculationBasis = "FixedActualStart",
-                PredecessorEndpoint = RawDate(predecessor.Row, "act_start_date"),
-                PredecessorEndpointField = "act_start_date"
+                CalculationBasis = "FixedActualStart"
             };
+            return includeEvidence ? fixedEvent with
+                { PredecessorEndpoint = predecessor.ActualStart, PredecessorEndpointField = "act_start_date" } : fixedEvent;
+        }
 
         var rawLag = row.GetEvaluationField("lag_hr_cnt");
         if (rawLag.State != XerRawFieldState.Present)
             return Missing("MissingRelationshipLag", "An absent, truncated or blank lag cannot establish zero lag.");
         if (!decimal.TryParse(rawLag.RawValue, NumberStyles.Float, CultureInfo.InvariantCulture, out decimal lagHours))
             return Invalid("InvalidRelationshipLag", "Relationship lag is not a finite representable decimal hour value.");
-        assessment = assessment with { EffectiveLagHours = lagHours };
+        if (includeEvidence) assessment = assessment with { EffectiveLagHours = lagHours };
 
         bool activeSuccessor = successor.Status == "TK_ACTIVE";
         if (activeSuccessor)
@@ -229,8 +257,8 @@ public partial class XerTransformer
             if (options?.Mode is null or "Unresolved")
             {
                 bool invalid = options?.IsAmbiguous == true ||
-                    (RawText(options?.OptionRow, "sched_retained_logic").Length > 0 &&
-                     RawText(options?.OptionRow, "sched_progress_override").Length > 0);
+                    (options?.RetainedLogicText.Length > 0 &&
+                     options?.ProgressOverrideText.Length > 0);
                 return Result(invalid ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
                     "UnresolvedProgressMode", "Progress-sensitive evaluation requires explicit unambiguous Retained Logic/Progress Override flags; absent flags do not imply Actual Dates.");
             }
@@ -249,8 +277,9 @@ public partial class XerTransformer
 
         var from = RemainingEndpoint(predecessor, type is "PR_SS" or "PR_SF");
         var to = RemainingEndpoint(successor, type is "PR_FS" or "PR_SS");
-        assessment = assessment with { PredecessorEndpoint = from.Date, PredecessorEndpointField = from.Field,
-            SuccessorEndpoint = to.Date, SuccessorEndpointField = to.Field };
+        if (includeEvidence)
+            assessment = assessment with { PredecessorEndpoint = from.Date, PredecessorEndpointField = from.Field,
+                SuccessorEndpoint = to.Date, SuccessorEndpointField = to.Field };
         if (from.Date is null || to.Date is null)
         {
             bool malformed = (from.Date is null && predecessor.Row.GetEvaluationField(from.Field).State == XerRawFieldState.Present) ||
@@ -262,17 +291,17 @@ public partial class XerTransformer
             return Missing("UnresolvedPredecessorCalendar", "The required predecessor calendar identity is absent.");
         if (predecessorCalendar.Calculator is null)
             return Invalid("InvalidPredecessorCalendar", predecessorCalendar.Failure ?? "The predecessor calendar cannot be resolved.");
-        assessment = assessment with { PredecessorHoursPerDay = predecessorCalendar.HoursPerDay };
+        if (includeEvidence) assessment = assessment with { PredecessorHoursPerDay = predecessorCalendar.HoursPerDay };
         if (predecessorCalendar.HoursPerDay is not > 0)
             return Result(predecessorCalendar.HoursPerDayInput.State == XerRawFieldState.Present
                     ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
                 "UnresolvedPredecessorHoursPerDay", $"A positive predecessor hours-per-day factor is required; supplied day_hr_cnt='{predecessorCalendar.HoursPerDayInput.RawValue}'. Eight hours is not assumed.");
         WorkingDayCalculator lagCalendar = predecessorCalendar.Calculator;
-        string lagKey = Key(predecessor.CalendarId);
+        string lagKey = includeEvidence ? Key(predecessor.CalendarId) : "";
         if (lagHours != 0)
         {
             if (options?.IsAmbiguous == true || !RelationshipLagCalendarPolicy.TryParse(options?.LagCalendar, out var kind))
-                return Result(options?.IsAmbiguous == true || RawText(options?.OptionRow, "sched_calendar_on_relationship_lag").Length > 0
+                return Result(options?.IsAmbiguous == true || options?.LagCalendarInputText.Length > 0
                         ? RelationshipFloatClassification.InvalidData : RelationshipFloatClassification.MissingData,
                     "UnresolvedLagCalendarSetting", "Nonzero lag requires a recognised unambiguous lag-calendar setting; missing is not an explicit blank default.");
             if (external && (otherOptions is null || otherOptions.IsAmbiguous ||
@@ -287,7 +316,7 @@ public partial class XerTransformer
                 if (definition.Calculator is null)
                     return Invalid("InvalidLagCalendar", definition.Failure ?? "The selected lag calendar cannot be resolved.");
                 lagCalendar = definition.Calculator;
-                lagKey = Key(calendarId);
+                if (includeEvidence) lagKey = Key(calendarId);
             }
             else if (kind == RelationshipLagCalendar.TwentyFourHour)
             {
@@ -295,7 +324,7 @@ public partial class XerTransformer
                 lagKey = "24Hour";
             }
         }
-        assessment = assessment with { LagCalendarKey = lagHours == 0 ? "NotRequired" : lagKey };
+        if (includeEvidence) assessment = assessment with { LagCalendarKey = lagHours == 0 ? "NotRequired" : lagKey };
         var suspension = ResolveRelationshipSuspension(predecessor);
         if (suspension.Failure.HasValue)
             return Result(suspension.Failure.Value, suspension.Reason!,
@@ -332,24 +361,17 @@ public partial class XerTransformer
         }
     }
 
-    private static (DateTime? Date, string Field) RemainingEndpoint(RelationshipTask task, bool start)
-    {
-        string field = start ? "restart_date" : "reend_date";
-        // Only unstarted activities may use an early date when a preferred value is absent/blank.
-        // Malformed nonblank values are authoritative invalid evidence, never repaired.
-        if (task.Status == "TK_NOTSTART" && RawText(task.Row, field).Length == 0)
-            field = start ? "early_start_date" : "early_end_date";
-        return (RawDate(task.Row, field), field);
-    }
+    private static (DateTime? Date, string Field) RemainingEndpoint(RelationshipTask task, bool start) =>
+        start ? task.RemainingStart : task.RemainingFinish;
 
     private static (DateTime? Start, DateTime? Finish, RelationshipFloatClassification? Failure, string? Reason)
         ResolveRelationshipSuspension(RelationshipTask task)
     {
-        string suspendText = RawText(task.Row, "suspend_date"), resumeText = RawText(task.Row, "resume_date");
+        string suspendText = task.SuspendText, resumeText = task.ResumeText;
         if (suspendText.Length == 0 && resumeText.Length == 0) return default;
         if (task.Status != "TK_ACTIVE" || task.Type is not ("TT_TASK" or "TT_RSRC"))
             return (null, null, RelationshipFloatClassification.InvalidData, "InconsistentSuspensionState");
-        DateTime? suspend = RawDate(task.Row, "suspend_date"), resume = RawDate(task.Row, "resume_date");
+        DateTime? suspend = task.Suspend, resume = task.Resume;
         if ((suspendText.Length > 0 && !suspend.HasValue) || (resumeText.Length > 0 && !resume.HasValue))
             return (null, null, RelationshipFloatClassification.InvalidData, "InvalidSuspensionBounds");
         if (!suspend.HasValue || !resume.HasValue)
@@ -358,7 +380,7 @@ public partial class XerTransformer
         // A same-day pair excludes no time; raw intraday clock differences do not reverse it.
         if (resume.Value.Date < suspend.Value.Date)
             return (null, null, RelationshipFloatClassification.InvalidData, "InvalidSuspensionBounds");
-        if (suspend.Value.Date < RawDate(task.Row, "act_start_date")!.Value.Date)
+        if (suspend.Value.Date < task.ActualStart!.Value.Date)
             return (null, null, RelationshipFloatClassification.InvalidData, "InconsistentSuspensionState");
         return (suspend.Value.Date, resume.Value.Date, null, null);
     }

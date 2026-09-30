@@ -34,11 +34,6 @@ public static class RelationshipAuditCsv
     }.Concat(OptionFields.SelectMany(field => new[] { field, field + "_state" }))
         .Append("input_evidence").ToArray());
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-    };
-
     public static void Write(IEnumerable<RelationshipFloatAssessment> assessments, TextWriter writer,
         CancellationToken cancellationToken = default)
     {
@@ -199,7 +194,7 @@ public static class RelationshipAuditCsv
         // lookup construction paths. These are raw field names, not input identities.
         var orderedEvidence = value.InputEvidence.OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-        yield return JsonSerializer.Serialize(orderedEvidence, JsonOptions);
+        yield return JsonSerializer.Serialize(orderedEvidence, CoreJsonContext.Audit.RelationshipEvidence);
     }
 
     private static string Number(decimal? value) => value?.ToString("G29", CultureInfo.InvariantCulture) ?? "";

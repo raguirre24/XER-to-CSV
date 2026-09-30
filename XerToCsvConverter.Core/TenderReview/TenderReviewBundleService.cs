@@ -159,7 +159,7 @@ public sealed class TenderReviewBundleService
                 throw new TenderReviewValidationException(
                     $"Tender XER content is missing for source token '{source.SourceToken}'.");
 
-            string computedHash = TenderReviewCsv.ComputeSha256(upload.Content);
+            string computedHash = ComputeSourceSha256(upload.Content);
             ValidateConfiguredHash(source, computedHash);
             hydratedSources.Add(source with { XerFilePath = null, SourceSha256 = computedHash });
             await Task.Delay(1, cancellationToken).ConfigureAwait(false);
@@ -187,7 +187,7 @@ public sealed class TenderReviewBundleService
             for (int index = 0; index < resolved.Sources.Count; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                string afterParseHash = TenderReviewCsv.ComputeSha256(xerFiles[index].Content);
+                string afterParseHash = ComputeSourceSha256(xerFiles[index].Content);
                 if (!string.Equals(afterParseHash, resolved.Sources[index].SourceSha256, StringComparison.Ordinal))
                     throw new TenderReviewValidationException(
                         $"Tender XER input {index + 1} ('{resolved.Sources[index].OriginalXerFilename}') changed while it was being parsed. No bundle was created.");
@@ -406,7 +406,7 @@ public sealed class TenderReviewBundleService
 
         var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
         IReadOnlyList<TenderReviewManifestRow> manifestRows;
-        using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
+        using (var archive = ParserOperationTelemetry.CreateZipArchive(zipOutputStream))
         {
             int tableIndex = 0;
             foreach (TenderReviewOutputTable table in transformed.Tables.OrderBy(table => table.Contract.FileName, StringComparer.Ordinal))
@@ -423,12 +423,17 @@ public sealed class TenderReviewBundleService
 
                 ZipArchiveEntry entry = archive.CreateEntry($"{transformed.Request.BundleId}/{table.Contract.FileName}", CompressionLevel.Fastest);
                 entry.LastWriteTime = zipEntryTimestamp;
-                using (var entryStream = entry.Open())
+                using (var entryStream = ParserOperationTelemetry.OpenZipEntry(entry))
                 using (var hashingStream = new HashingWriteStream(entryStream))
+                using (var csvStream = ParserOperationTelemetry.TrackCsvHashing(hashingStream, entryStream, table.Contract.FileName))
                 {
-                    TenderReviewCsv.WriteTableToStream(hashingStream, table, cancellationToken);
-                    hashingStream.Flush();
-                    hashes.Add(table.Contract.FileName, hashingStream.GetHash());
+                    using (ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, table.Contract.FileName))
+                    {
+                        TenderReviewCsv.WriteTableToStream(csvStream, table, cancellationToken);
+                        csvStream.Flush();
+                    }
+                    using (ParserOperationTelemetry.Measure(ParserOperationPhase.CsvHashing, table.Contract.FileName + ":digest"))
+                        hashes.Add(table.Contract.FileName, hashingStream.GetHash());
                 }
                 await Task.Delay(1, cancellationToken).ConfigureAwait(false);
             }
@@ -438,8 +443,9 @@ public sealed class TenderReviewBundleService
 
             ZipArchiveEntry manifestEntry = archive.CreateEntry($"{transformed.Request.BundleId}/{TenderReviewContract.ManifestFileName}", CompressionLevel.Fastest);
             manifestEntry.LastWriteTime = zipEntryTimestamp;
-            using (var manifestStream = manifestEntry.Open())
+            using (var manifestStream = ParserOperationTelemetry.OpenZipEntry(manifestEntry))
             {
+                using var csvPhase = ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, TenderReviewContract.ManifestFileName);
                 TenderReviewCsv.WriteManifestToStream(manifestStream, manifestRows, cancellationToken);
             }
             progress?.Report(new ProcessingService.DetailedProgress
@@ -473,6 +479,7 @@ public sealed class TenderReviewBundleService
         IReadOnlyList<TenderReviewOutputTable> tables,
         IReadOnlyDictionary<string, string> hashes)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "tender manifest metadata");
         var rows = new List<TenderReviewManifestRow>(request.Sources.Count * tables.Count);
         foreach (ResolvedTenderReviewSource source in request.Sources.OrderBy(item => item.InputIndex))
         {
@@ -516,6 +523,7 @@ public sealed class TenderReviewBundleService
         IReadOnlyDictionary<string, string> hashes,
         IReadOnlyList<TenderReviewManifestRow> manifestRows)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "tender manifest consistency");
         if (manifestRows.Count != request.Sources.Count * tables.Count)
             throw new TenderReviewValidationException("Tender manifest row envelope is invalid.");
         if (manifestRows.Any(row => !string.Equals(row.ProjectState, request.State, StringComparison.Ordinal)))
@@ -566,11 +574,14 @@ public sealed class TenderReviewBundleService
     }
 
     private static ResolvedTenderReviewRequest ResolveWithConfiguredHashes(
-        TenderReviewBundleRequest request) => TenderReviewNaming.Resolve(
-        request,
-        source => source.SourceSha256
-            ?? throw new TenderReviewValidationException(
-                $"source_sha256 is required for parsed Tender source token '{source.SourceToken}'."));
+        TenderReviewBundleRequest request)
+    {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "tender request metadata");
+        return TenderReviewNaming.Resolve(request,
+            source => source.SourceSha256
+                ?? throw new TenderReviewValidationException(
+                    $"source_sha256 is required for parsed Tender source token '{source.SourceToken}'."));
+    }
 
     private static async Task<XerDataStore> ParseTenderInputsAsync(
         IReadOnlyList<TenderParseInput> inputs,
@@ -639,6 +650,7 @@ public sealed class TenderReviewBundleService
     private static XerDataStore BindGovernedSourceTokens(XerDataStore store,
         ResolvedTenderReviewRequest request, CancellationToken cancellationToken)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Merging, "tender governed source binding");
         var sources = request.Sources.ToDictionary(source => source.SourceToken, StringComparer.Ordinal);
         var parsedTokens = new Dictionary<string, string>(StringComparer.Ordinal);
         bool needsBinding = false;
@@ -685,10 +697,11 @@ public sealed class TenderReviewBundleService
         return bound;
     }
 
-    private static void MergeTenderStoreWithUnionSchema(
+    internal static void MergeTenderStoreWithUnionSchema(
         XerDataStore target,
         XerDataStore incoming)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Merging, "tender source union");
         foreach (string tableName in incoming.TableNames)
         {
             XerTable sourceTable = incoming.GetTable(tableName)
@@ -697,7 +710,12 @@ public sealed class TenderReviewBundleService
             XerTable? targetTable = target.GetTable(tableName);
             if (targetTable is null)
             {
-                target.AddTable(sourceTable);
+                // The merged table owns its row list; later appends must not mutate
+                // an incoming/cached table. Immutable field evidence can remain shared.
+                var owned = new XerTable(tableName, sourceTable.RowCount);
+                if (sourceTable.Headers is not null) owned.SetHeaders(sourceTable.Headers.ToArray());
+                owned.AddRows(sourceTable.Rows);
+                target.AddTable(owned);
                 continue;
             }
 
@@ -710,28 +728,48 @@ public sealed class TenderReviewBundleService
                 if (knownHeaders.Add(header)) unionHeaders.Add(header);
             }
 
-            var union = new XerTable(
-                tableName,
-                targetTable.RowCount + sourceTable.RowCount);
-            union.SetHeaders(unionHeaders.ToArray());
-            AddRowsWithUnionSchema(union, targetTable);
-            AddRowsWithUnionSchema(union, sourceTable);
-            target.AddTable(union);
+            if (unionHeaders.Count != existingHeaders.Length)
+            {
+                // A union only extends the existing schema. Earlier rows need copying
+                // when it grows, rather than after every additional Tender stage.
+                var widened = new XerTable(tableName, targetTable.RowCount + sourceTable.RowCount);
+                widened.SetHeaders(unionHeaders.ToArray());
+                AddRowsWithUnionSchema(widened, targetTable);
+                targetTable = widened;
+                target.AddTable(widened);
+            }
+            else if (targetTable.Headers is null)
+            {
+                targetTable.SetHeaders(unionHeaders.ToArray());
+            }
+
+            if (knownHeaders.Count == unionHeaders.Count
+                && unionHeaders.SequenceEqual(incomingHeaders, StringComparer.OrdinalIgnoreCase))
+            {
+                // AddRows captures the destination evaluation schema while retaining
+                // each occurrence's original raw schema and immutable source evidence.
+                targetTable.AddRows(sourceTable.Rows);
+            }
+            else
+            {
+                AddRowsWithUnionSchema(targetTable, sourceTable);
+            }
         }
     }
 
     private static void AddRowsWithUnionSchema(XerTable destination, XerTable source)
     {
         if (destination.Headers is null || source.Headers is null) return;
+        var sourceIndexes = new int[destination.Headers.Length];
+        for (int index = 0; index < sourceIndexes.Length; index++)
+            sourceIndexes[index] = source.FieldIndexes.TryGetValue(destination.Headers[index], out int sourceIndex)
+                ? sourceIndex : -1;
         foreach (DataRow row in source.Rows)
         {
             var values = new string[destination.Headers.Length];
             for (int index = 0; index < destination.Headers.Length; index++)
             {
-                string header = destination.Headers[index];
-                values[index] = source.FieldIndexes.TryGetValue(header, out int sourceIndex)
-                    ? XerTable.GetFieldValueSafe(row, sourceIndex)
-                    : string.Empty;
+                values[index] = XerTable.GetFieldValueSafe(row, sourceIndexes[index]);
             }
             destination.AddRow(row.WithFields(values));
         }
@@ -747,6 +785,7 @@ public sealed class TenderReviewBundleService
 
     private static string ComputeSourceSha256(Stream stream)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.SourceSha256, "tender XER stream");
         if (!stream.CanSeek)
             throw new TenderReviewValidationException(
                 "A seekable Tender XER source stream is required for hash verification.");
@@ -754,6 +793,12 @@ public sealed class TenderReviewBundleService
         string hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
         stream.Position = 0;
         return hash;
+    }
+
+    private static string ComputeSourceSha256(ReadOnlySpan<byte> content)
+    {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.SourceSha256, "tender uploaded XER bytes");
+        return TenderReviewCsv.ComputeSha256(content);
     }
 
     private static void DeleteOwnedStagingDirectory(string root, string stagingPath)

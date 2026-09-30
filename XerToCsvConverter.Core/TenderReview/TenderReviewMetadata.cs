@@ -255,20 +255,12 @@ public static partial class TenderReviewNaming
 
         // Structured encoding prevents punctuation/newlines in manual metadata from
         // aliasing field boundaries. Source tokens are correlation-only, never identity inputs.
-        string identity = JsonSerializer.Serialize(new
-        {
-            SchemaVersion = TenderReviewContract.SchemaVersion,
-            ProjectCode = projectCode,
-            ProjectState = state,
-            Sources = resolved.Select(source => new
-            {
-                source.InputIndex,
-                source.OriginalXerFilename,
-                source.CanonicalXerFilename,
-                StatusDate = source.StatusDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                source.SourceSha256
-            })
-        });
+        string identity = JsonSerializer.Serialize(new TenderBundleIdentity(
+            TenderReviewContract.SchemaVersion, projectCode, state,
+            resolved.Select(source => new TenderSourceIdentity(source.InputIndex,
+                source.OriginalXerFilename, source.CanonicalXerFilename,
+                source.StatusDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), source.SourceSha256))),
+            CoreJsonContext.Default.TenderBundleIdentity);
         string bundleHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
             .ToLowerInvariant()[..8];
         string exportedAtId = exportedAt.ToString(

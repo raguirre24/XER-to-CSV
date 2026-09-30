@@ -28,6 +28,7 @@ internal sealed class TenderReviewTransformer
     private readonly Dictionary<(string Source, int Ordinal), RawTask> _rawTasksByOrdinal = new();
     private readonly Dictionary<(string Source, int Ordinal), RawRelationship> _rawRelationshipsByOrdinal = new();
     private readonly ReviewDataQualityCollector _quality;
+    private readonly ReviewValueNormalizationCache _normalization = new();
     private readonly Dictionary<IReadOnlyDictionary<string, string>, ReviewRowEvidence> _outputEvidence = new(ReferenceEqualityComparer.Instance);
 
     internal TenderReviewTransformer(XerDataStore dataStore, ResolvedTenderReviewRequest request)
@@ -40,25 +41,26 @@ internal sealed class TenderReviewTransformer
 
     internal TenderReviewTransformationResult Build(CancellationToken cancellationToken)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "tender review tables");
         _request = ResolveProjectMetadata(cancellationToken);
         _sourceByToken = CreateSourceLookup(_request.Sources);
         BuildRawSemanticLookups(cancellationToken);
 
-        var transformer = new XerTransformer(_dataStore);
+        var transformer = XerTransformer.ForExportOperation(_dataStore);
         var enhanced = new Dictionary<string, XerTable?>(StringComparer.OrdinalIgnoreCase)
         {
-            [EnhancedTableNames.XerTask01] = transformer.Create01XerTaskTable(),
-            [EnhancedTableNames.XerProject02] = transformer.Create02XerProject(),
-            [EnhancedTableNames.XerProjWbs03] = transformer.Create03XerProjWbsTable(),
-            [EnhancedTableNames.XerPredecessor06] = transformer.Create06XerPredecessor(
-                new ConcurrentDictionary<string, XerTable>()),
-            [EnhancedTableNames.XerActvType07] = transformer.Create07XerActvType(),
-            [EnhancedTableNames.XerActvCode08] = transformer.Create08XerActvCode(),
-            [EnhancedTableNames.XerTaskActv09] = transformer.Create09XerTaskActv(),
-            [EnhancedTableNames.XerCalendar10] = transformer.Create10XerCalendar(),
-            [EnhancedTableNames.XerCalendarDetailed11] = transformer.Create11XerCalendarDetailed(),
-            [EnhancedTableNames.XerRsrc12] = transformer.Create12XerRsrc(),
-            [EnhancedTableNames.XerResourceDist15] = transformer.Create15XerResourceDistribution()
+            [EnhancedTableNames.XerTask01] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerTask01, () => transformer.Create01XerTaskTable()),
+            [EnhancedTableNames.XerProject02] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerProject02, () => transformer.Create02XerProject()),
+            [EnhancedTableNames.XerProjWbs03] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerProjWbs03, () => transformer.Create03XerProjWbsTable()),
+            [EnhancedTableNames.XerPredecessor06] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerPredecessor06, () => transformer.Create06XerPredecessor(
+                new ConcurrentDictionary<string, XerTable>())),
+            [EnhancedTableNames.XerActvType07] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerActvType07, () => transformer.Create07XerActvType()),
+            [EnhancedTableNames.XerActvCode08] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerActvCode08, () => transformer.Create08XerActvCode()),
+            [EnhancedTableNames.XerTaskActv09] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerTaskActv09, () => transformer.Create09XerTaskActv()),
+            [EnhancedTableNames.XerCalendar10] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerCalendar10, () => transformer.Create10XerCalendar()),
+            [EnhancedTableNames.XerCalendarDetailed11] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerCalendarDetailed11, () => transformer.Create11XerCalendarDetailed()),
+            [EnhancedTableNames.XerRsrc12] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerRsrc12, () => transformer.Create12XerRsrc()),
+            [EnhancedTableNames.XerResourceDist15] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerResourceDist15, () => transformer.Create15XerResourceDistribution())
         };
         cancellationToken.ThrowIfCancellationRequested();
         ValidateTransformOutcomes(enhanced, transformer);
@@ -90,7 +92,8 @@ internal sealed class TenderReviewTransformer
 
         ValidateRequiredSourceCoverage(tables);
         ValidateKeysAndRelationships(tables);
-        XerTable warnings = transformer.CreateDataQualityTable();
+        XerTable warnings = ParserOperationTelemetry.Time(ParserOperationPhase.StandaloneValidation, "tender source quality/diagnostics",
+            () => transformer.CreateDataQualityTable());
         warnings.AddRows(_quality.Rows);
         return new TenderReviewTransformationResult(
             _request,
@@ -130,6 +133,7 @@ internal sealed class TenderReviewTransformer
 
     private ResolvedTenderReviewRequest ResolveProjectMetadata(CancellationToken cancellationToken)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "tender P6 project metadata");
         XerTable? projects = _dataStore.GetTable(TableNames.Project);
         if (projects?.Headers is null)
             throw new TenderReviewValidationException("Raw PROJECT data is required for every Tender source.");
@@ -315,14 +319,17 @@ internal sealed class TenderReviewTransformer
         TenderReviewTableContract contract,
         CancellationToken cancellationToken)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "tender task projection");
         var rows = new List<TenderReviewOutputRow>();
+        IReadOnlyDictionary<string, int> projectionIndexes = ReviewProjectionAccess.Bind(source,
+            contract.Columns, column => column.Name, column => column.SourceAliases);
         foreach (DataRow dataRow in source.Rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!_sourceByToken.TryGetValue(dataRow.SourceFilename, out ResolvedTenderReviewSource? tenderSource))
                 continue;
 
-            var reader = new EnhancedRowReader(source, dataRow);
+            var reader = new EnhancedRowReader(source, dataRow, projectionIndexes);
             ReviewRowEvidence evidence = _quality.ForRow(source, dataRow);
             string context = $"{contract.TableName}/{tenderSource.OriginalXerFilename}/input-{tenderSource.InputIndex + 1}";
             if (!_rawTasksByOrdinal.TryGetValue((tenderSource.SourceToken, evidence.Ordinal), out RawTask? rawTask))
@@ -340,8 +347,7 @@ internal sealed class TenderReviewTransformer
                 string original = reader.Get(column);
                 if (column.Name is not ("ProjectCode" or "monthupdate" or "last_recalc_date" or "udf_datalake_status_date"
                     or "add_date" or "state" or "region" or "tender_status" or "filename" or "ProjectName" or "status_date" or "UpdateDate")
-                    && !source.FieldIndexes.ContainsKey(column.Name)
-                    && !column.SourceAliases.Any(source.FieldIndexes.ContainsKey))
+                    && !reader.HasColumn(column))
                     _quality.Warn(evidence, "REVIEW_SOURCE_COLUMN_MISSING",
                         "The source column is unavailable; the row is preserved with a blank projected cell.", column.Name);
                 values[column.Name] = _quality.Evaluate(evidence, column.Name, original, () =>
@@ -364,10 +370,10 @@ internal sealed class TenderReviewTransformer
                         "free_float" => ConvertTaskHours(
                             rawTask.FreeFloatHours, rawTask, FieldNames.FreeFloatHrCnt, context),
                         _ when NamespacedKeyColumns.Contains(column.Name) =>
-                            Namespace(reader.Get(column), tenderSource, column.Name),
-                        _ => reader.Get(column)
+                            Namespace(original, tenderSource, column.Name),
+                        _ => original
                     };
-                    return TenderReviewCsv.Normalize(raw, column, context);
+                    return TenderReviewCsv.Normalize(raw, column, context, _normalization);
                 });
             }
 
@@ -384,18 +390,21 @@ internal sealed class TenderReviewTransformer
         TenderReviewTableContract contract,
         CancellationToken cancellationToken)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, contract.TableName + ":tender projection");
         // A legitimate empty optional table still emits the governed schema,
         // regardless of which raw columns its header-only input contains.
         // Required-table coverage is checked separately after projection.
         if (source.Rows.Count == 0) return Array.Empty<TenderReviewOutputRow>();
         var rows = new List<TenderReviewOutputRow>();
+        IReadOnlyDictionary<string, int> projectionIndexes = ReviewProjectionAccess.Bind(source,
+            contract.Columns, column => column.Name, column => column.SourceAliases);
 
         foreach (DataRow dataRow in source.Rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!_sourceByToken.TryGetValue(dataRow.SourceFilename, out ResolvedTenderReviewSource? tenderSource))
                 continue;
-            var reader = new EnhancedRowReader(source, dataRow);
+            var reader = new EnhancedRowReader(source, dataRow, projectionIndexes);
             ReviewRowEvidence evidence = _quality.ForRow(source, dataRow);
 
             string context = $"{contract.TableName}/{tenderSource.OriginalXerFilename}/input-{tenderSource.InputIndex + 1}";
@@ -408,8 +417,7 @@ internal sealed class TenderReviewTransformer
                 string original = reader.Get(column);
                 if (column.Name is not ("ProjectCode" or "monthupdate" or "MonthUpdate" or "last_recalc_date" or "udf_datalake_status_date"
                     or "add_date" or "state" or "region" or "tender_status")
-                    && !source.FieldIndexes.ContainsKey(column.Name)
-                    && !column.SourceAliases.Any(source.FieldIndexes.ContainsKey))
+                    && !reader.HasColumn(column))
                     _quality.Warn(evidence, "REVIEW_SOURCE_COLUMN_MISSING",
                         "The source column is unavailable; the row is preserved with a blank projected cell.", column.Name);
                 values[column.Name] = _quality.Evaluate(evidence, column.Name, original, () =>
@@ -421,7 +429,7 @@ internal sealed class TenderReviewTransformer
                         "monthupdate" or "MonthUpdate" or "last_recalc_date" => Iso(RequiredDataDate(tenderSource)),
                         "udf_datalake_status_date" => Iso(tenderSource.StatusDate),
                         "distribution_month" when contract.TableName == "15_XER_RESOURCE_DISTRIBUTION" =>
-                            NormalizeDistributionMonth(reader.Get(column), context),
+                            NormalizeDistributionMonth(original, context),
                         "lag" when relationship is not null =>
                             ConvertRelationshipLag(relationship, tenderSource, context),
                         "total_float" when relationship is not null =>
@@ -430,10 +438,10 @@ internal sealed class TenderReviewTransformer
                             && reader.Get("free_float_status") is not ("Finite" or "Estimated") => string.Empty,
                         "free_float" when relationship is not null =>
                             ValidateRelationshipFreeFloat(
-                                reader.Get(column), relationship, tenderSource, context),
+                                original, relationship, tenderSource, context),
                         _ when NamespacedKeyColumns.Contains(column.Name) =>
-                            Namespace(reader.Get(column), tenderSource, column.Name),
-                        _ => reader.Get(column)
+                            Namespace(original, tenderSource, column.Name),
+                        _ => original
                     };
 
                     if (contract.TableName == "15_XER_RESOURCE_DISTRIBUTION"
@@ -442,7 +450,7 @@ internal sealed class TenderReviewTransformer
                         && string.Equals(raw, "unit/time", StringComparison.OrdinalIgnoreCase))
                         raw = "hours";
 
-                    return TenderReviewCsv.Normalize(raw, column, context);
+                    return TenderReviewCsv.Normalize(raw, column, context, _normalization);
                 });
             }
 
@@ -684,6 +692,7 @@ internal sealed class TenderReviewTransformer
     private void ValidateTransformOutcomes(IDictionary<string, XerTable?> enhanced,
         XerTransformer transformer)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "tender transform outcomes");
         foreach (var pair in enhanced.ToArray())
         {
             if (pair.Value is not null) continue;
@@ -698,6 +707,7 @@ internal sealed class TenderReviewTransformer
 
     private void ValidateRequiredSourceCoverage(IReadOnlyList<TenderReviewOutputTable> tables)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "tender source coverage");
         foreach (TenderReviewOutputTable table in tables.Where(table => table.Contract.SourceRequired))
         {
             foreach (ResolvedTenderReviewSource source in _request.Sources)
@@ -710,6 +720,7 @@ internal sealed class TenderReviewTransformer
 
     private void ValidateKeysAndRelationships(IReadOnlyList<TenderReviewOutputTable> tables)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "tender keys and relationships");
         var byName = tables.ToDictionary(table => table.Contract.TableName, StringComparer.OrdinalIgnoreCase);
         foreach (TenderReviewOutputTable table in tables)
         {
@@ -825,9 +836,9 @@ internal sealed class TenderReviewTransformer
         foreach (TenderReviewColumn column in contract.Columns)
         {
             values.TryGetValue(column.Name, out string? raw);
-            values[column.Name] = string.IsNullOrWhiteSpace(raw) ? string.Empty
-                : _quality.Evaluate(_outputEvidence[values], column.Name, raw,
-                    () => TenderReviewCsv.Normalize(raw, column, contract.TableName));
+            // Projection already assessed the cell. Complete the fixed contract without
+            // parsing the same date/number again or reassessing rejected required cells.
+            values[column.Name] = string.IsNullOrWhiteSpace(raw) ? string.Empty : raw;
         }
         return values;
     }
@@ -858,25 +869,9 @@ internal sealed class TenderReviewTransformer
         TenderReviewTableContract contract,
         IReadOnlyList<TenderReviewOutputRow> rows)
     {
-        if (rows.Count <= 1) return rows;
-        var array = rows.ToArray();
-        string[] sortColumns = contract.SortColumns.ToArray();
-        string[] allColumns = contract.Columns.Select(c => c.Name).ToArray();
-        Array.Sort(array, (x, y) =>
-        {
-            foreach (string col in sortColumns)
-            {
-                int cmp = string.Compare(x.Values[col], y.Values[col], StringComparison.Ordinal);
-                if (cmp != 0) return cmp;
-            }
-            foreach (string col in allColumns)
-            {
-                int cmp = string.Compare(x.Values[col], y.Values[col], StringComparison.Ordinal);
-                if (cmp != 0) return cmp;
-            }
-            return x.Source.InputIndex.CompareTo(y.Source.InputIndex);
-        });
-        return array;
+        return ReviewOutputOrdering.Sort(rows, contract.SortColumns,
+            contract.Columns.Select(column => column.Name).ToArray(), row => row.Values,
+            (left, right) => left.Source.InputIndex.CompareTo(right.Source.InputIndex));
     }
 
     private static void ValidateDataDate(
@@ -885,7 +880,7 @@ internal sealed class TenderReviewTransformer
         string context,
         string sourceColumn = "data_date")
     {
-        string raw = reader.GetOptional(
+        string raw = reader.Get(
             sourceColumn, sourceColumn == "data_date" ? "Data Date" : sourceColumn);
         if (raw.Length == 0)
             throw new TenderReviewValidationException(
@@ -937,31 +932,25 @@ internal sealed class TenderReviewTransformer
         string PredecessorProjectId,
         string LagHours);
 
-    private sealed class EnhancedRowReader
+    private readonly struct EnhancedRowReader
     {
         private readonly XerTable _table;
         private readonly DataRow _row;
+        private readonly IReadOnlyDictionary<string, int> _projectionIndexes;
 
-        internal EnhancedRowReader(XerTable table, DataRow row)
+        internal EnhancedRowReader(XerTable table, DataRow row, IReadOnlyDictionary<string, int> projectionIndexes)
         {
             _table = table;
             _row = row;
+            _projectionIndexes = projectionIndexes;
         }
 
         internal string Get(TenderReviewColumn column) =>
-            GetOptional(new[] { column.Name }.Concat(column.SourceAliases).ToArray());
+            XerTable.GetFieldValueSafe(_row, _projectionIndexes[column.Name]);
+
+        internal bool HasColumn(TenderReviewColumn column) => _projectionIndexes[column.Name] >= 0;
 
         internal string Get(string name, params string[] aliases) =>
-            GetOptional(new[] { name }.Concat(aliases).ToArray());
-
-        internal string GetOptional(params string[] names)
-        {
-            foreach (string name in names)
-            {
-                if (_table.FieldIndexes.TryGetValue(name, out int index))
-                    return XerTable.GetFieldValueSafe(_row, index);
-            }
-            return string.Empty;
-        }
+            XerTable.GetFieldValueSafe(_row, ReviewProjectionAccess.ResolveIndex(_table, name, aliases));
     }
 }

@@ -2,16 +2,59 @@ namespace XerToCsvConverter;
 
 public partial class XerTransformer
 {
-    private sealed record RelationshipTask(DataRow Row)
+    // A lookup is rebuilt for each assessment/export call. Its rows remain the
+    // authoritative evidence while frequently used evaluation values are read once.
+    private sealed class RelationshipTask
     {
-        public string ProjectId => RawText(Row, "proj_id");
-        public string CalendarId => RawText(Row, "clndr_id");
-        public string Status => RawText(Row, "status_code").ToUpperInvariant();
-        public string Type => RawText(Row, "task_type").ToUpperInvariant();
+        public DataRow Row { get; }
+        public string ProjectId { get; }
+        public string CalendarId { get; }
+        public string Status { get; }
+        public string Type { get; }
+        public string ActualStartText { get; }
+        public string ActualEndText { get; }
+        public DateTime? ActualStart { get; }
+        public string SuspendText { get; }
+        public string ResumeText { get; }
+        public DateTime? Suspend { get; }
+        public DateTime? Resume { get; }
+        public (DateTime? Date, string Field) RemainingStart { get; }
+        public (DateTime? Date, string Field) RemainingFinish { get; }
+
+        public RelationshipTask(DataRow row)
+        {
+            Row = row;
+            ProjectId = RawText(row, "proj_id");
+            CalendarId = RawText(row, "clndr_id");
+            Status = RawText(row, "status_code").ToUpperInvariant();
+            Type = RawText(row, "task_type").ToUpperInvariant();
+            ActualStartText = RawText(row, "act_start_date");
+            ActualEndText = RawText(row, "act_end_date");
+            ActualStart = DateParser.TryParse(ActualStartText);
+            SuspendText = RawText(row, "suspend_date");
+            ResumeText = RawText(row, "resume_date");
+            Suspend = DateParser.TryParse(SuspendText);
+            Resume = DateParser.TryParse(ResumeText);
+            RemainingStart = ReadEndpoint(true);
+            RemainingFinish = ReadEndpoint(false);
+        }
+
+        private (DateTime? Date, string Field) ReadEndpoint(bool start)
+        {
+            string field = start ? "restart_date" : "reend_date";
+            string text = RawText(Row, field);
+            // Unstarted early-date fallback is allowed only for absent/blank
+            // preferred values. A malformed nonblank preferred value stays invalid.
+            if (Status == "TK_NOTSTART" && text.Length == 0)
+            {
+                field = start ? "early_start_date" : "early_end_date";
+                text = RawText(Row, field);
+            }
+            return (DateParser.TryParse(text), field);
+        }
     }
 
     private static string RawText(DataRow? row, string field) => row?.GetEvaluationField(field).RawValue.Trim() ?? "";
-    private static DateTime? RawDate(DataRow? row, string field) => DateParser.TryParse(RawText(row, field));
 
     private Dictionary<(string Source, string Task), RelationshipTask[]> BuildRelationshipTaskLookup(XerTable? tasks)
     {

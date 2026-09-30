@@ -28,6 +28,7 @@ internal sealed class ProgrammeReviewTransformer
     private readonly IReadOnlyDictionary<string, ResolvedProgrammeReviewSnapshot> _snapshotByOriginal;
     private readonly Dictionary<string, string> _projectNativeIdBySource = new(StringComparer.OrdinalIgnoreCase);
     private readonly ReviewDataQualityCollector _quality;
+    private readonly ReviewValueNormalizationCache _normalization = new();
     private readonly Dictionary<IReadOnlyDictionary<string, string>, ReviewRowEvidence> _outputEvidence = new(ReferenceEqualityComparer.Instance);
 
     internal XerTable DataQualityTable { get; private set; } = null!;
@@ -35,6 +36,7 @@ internal sealed class ProgrammeReviewTransformer
     internal ProgrammeReviewTransformer(XerDataStore dataStore, ResolvedProgrammeReviewRequest request,
         CancellationToken cancellationToken = default)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "programme retained source view");
         ArgumentNullException.ThrowIfNull(dataStore);
         _request = request ?? throw new ArgumentNullException(nameof(request));
         _snapshotByOriginal = request.Snapshots.ToDictionary(s => s.OriginalXerFilename, StringComparer.OrdinalIgnoreCase);
@@ -44,21 +46,22 @@ internal sealed class ProgrammeReviewTransformer
 
     internal IReadOnlyList<ProgrammeReviewOutputTable> Build(CancellationToken cancellationToken)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "programme review tables");
         ValidateSingleProjectPerSnapshot();
-        var transformer = new XerTransformer(_dataStore);
+        var transformer = XerTransformer.ForExportOperation(_dataStore);
         var enhanced = new Dictionary<string, XerTable?>(StringComparer.OrdinalIgnoreCase)
         {
-            [EnhancedTableNames.XerTask01] = transformer.Create01XerTaskTable(),
-            [EnhancedTableNames.XerProject02] = transformer.Create02XerProject(),
-            [EnhancedTableNames.XerProjWbs03] = transformer.Create03XerProjWbsTable(),
-            [EnhancedTableNames.XerPredecessor06] = transformer.Create06XerPredecessor(new ConcurrentDictionary<string, XerTable>()),
-            [EnhancedTableNames.XerActvType07] = transformer.Create07XerActvType(),
-            [EnhancedTableNames.XerActvCode08] = transformer.Create08XerActvCode(),
-            [EnhancedTableNames.XerTaskActv09] = transformer.Create09XerTaskActv(),
-            [EnhancedTableNames.XerCalendar10] = transformer.Create10XerCalendar(),
-            [EnhancedTableNames.XerCalendarDetailed11] = transformer.Create11XerCalendarDetailed(),
-            [EnhancedTableNames.XerRsrc12] = transformer.Create12XerRsrc(),
-            [EnhancedTableNames.XerResourceDist15] = transformer.Create15XerResourceDistribution()
+            [EnhancedTableNames.XerTask01] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerTask01, () => transformer.Create01XerTaskTable()),
+            [EnhancedTableNames.XerProject02] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerProject02, () => transformer.Create02XerProject()),
+            [EnhancedTableNames.XerProjWbs03] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerProjWbs03, () => transformer.Create03XerProjWbsTable()),
+            [EnhancedTableNames.XerPredecessor06] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerPredecessor06, () => transformer.Create06XerPredecessor(new ConcurrentDictionary<string, XerTable>())),
+            [EnhancedTableNames.XerActvType07] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerActvType07, () => transformer.Create07XerActvType()),
+            [EnhancedTableNames.XerActvCode08] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerActvCode08, () => transformer.Create08XerActvCode()),
+            [EnhancedTableNames.XerTaskActv09] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerTaskActv09, () => transformer.Create09XerTaskActv()),
+            [EnhancedTableNames.XerCalendar10] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerCalendar10, () => transformer.Create10XerCalendar()),
+            [EnhancedTableNames.XerCalendarDetailed11] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerCalendarDetailed11, () => transformer.Create11XerCalendarDetailed()),
+            [EnhancedTableNames.XerRsrc12] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerRsrc12, () => transformer.Create12XerRsrc()),
+            [EnhancedTableNames.XerResourceDist15] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerResourceDist15, () => transformer.Create15XerResourceDistribution())
         };
         ValidateTransformOutcomes(enhanced, transformer);
 
@@ -82,7 +85,8 @@ internal sealed class ProgrammeReviewTransformer
 
         ValidateRequiredSnapshotCoverage(result);
         ValidateKeysAndRelationships(result);
-        XerTable warnings = transformer.CreateDataQualityTable();
+        XerTable warnings = ParserOperationTelemetry.Time(ParserOperationPhase.StandaloneValidation, "programme source quality/diagnostics",
+            () => transformer.CreateDataQualityTable());
         warnings.AddRows(_quality.Rows);
         DataQualityTable = BuildDataQualityTable(warnings, cancellationToken);
         return result;
@@ -190,14 +194,17 @@ internal sealed class ProgrammeReviewTransformer
         ProgrammeReviewTableContract contract,
         CancellationToken cancellationToken)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "programme task projection/history");
         var rows = new List<TaskRow>();
+        IReadOnlyDictionary<string, int> projectionIndexes = ReviewProjectionAccess.Bind(source,
+            contract.Columns, column => column.Name, column => column.SourceAliases);
         foreach (DataRow dataRow in source.Rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!_snapshotByOriginal.TryGetValue(dataRow.SourceFilename, out ResolvedProgrammeReviewSnapshot? snapshot))
                 continue;
 
-            var reader = new EnhancedRowReader(source, dataRow);
+            var reader = new EnhancedRowReader(source, dataRow, projectionIndexes);
             ReviewRowEvidence evidence = _quality.ForRow(source, dataRow);
             string context = $"{contract.TableName}/{snapshot.OriginalXerFilename}";
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -217,10 +224,10 @@ internal sealed class ProgrammeReviewTransformer
                         "UpdateDate" => Iso(snapshot.EffectiveUpdateDate),
                         "monthupdate" => Iso(snapshot.MonthUpdate),
                         "data_date" => Iso(snapshot.DataDate),
-                        _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(reader.Get(column), snapshot, column.Name),
-                        _ => reader.Get(column)
+                        _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(raw, snapshot, column.Name),
+                        _ => raw
                     };
-                    return ProgrammeReviewCsv.Normalize(selected, column, context);
+                    return ProgrammeReviewCsv.Normalize(selected, column, context, _normalization);
                 });
             }
 
@@ -236,7 +243,8 @@ internal sealed class ProgrammeReviewTransformer
         }
 
         PopulateHistory(rows);
-        return rows.Select(row => new ProgrammeReviewOutputRow(row.Snapshot, Finalize(contract, row.Values))).ToArray();
+        return rows.Select(row => new ProgrammeReviewOutputRow(row.Snapshot,
+            Finalize(contract, row.Values, normalizeHistory: true))).ToArray();
     }
 
     private IReadOnlyList<ProgrammeReviewOutputRow> BuildProjectedRows(
@@ -244,18 +252,21 @@ internal sealed class ProgrammeReviewTransformer
         ProgrammeReviewTableContract contract,
         CancellationToken cancellationToken)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, contract.TableName + ":programme projection");
         // No raw value is projected from an empty table. Its partial header set
         // must not prevent the fixed header-only optional output; required-table
         // coverage remains enforced after projection.
         if (source.Rows.Count == 0) return Array.Empty<ProgrammeReviewOutputRow>();
         var rows = new List<ProgrammeReviewOutputRow>();
+        IReadOnlyDictionary<string, int> projectionIndexes = ReviewProjectionAccess.Bind(source,
+            contract.Columns, column => column.Name, column => column.SourceAliases);
 
         foreach (DataRow dataRow in source.Rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!_snapshotByOriginal.TryGetValue(dataRow.SourceFilename, out ResolvedProgrammeReviewSnapshot? snapshot))
                 continue;
-            var reader = new EnhancedRowReader(source, dataRow);
+            var reader = new EnhancedRowReader(source, dataRow, projectionIndexes);
             ReviewRowEvidence evidence = _quality.ForRow(source, dataRow);
 
             string context = $"{contract.TableName}/{snapshot.OriginalXerFilename}";
@@ -264,8 +275,7 @@ internal sealed class ProgrammeReviewTransformer
             {
                 string original = reader.Get(column);
                 if (column.Name is not ("ProjectCode" or "monthupdate" or "MonthUpdate" or "last_recalc_date")
-                    && !source.FieldIndexes.ContainsKey(column.Name)
-                    && !column.SourceAliases.Any(source.FieldIndexes.ContainsKey))
+                    && !reader.HasColumn(column))
                     _quality.Warn(evidence, "REVIEW_SOURCE_COLUMN_MISSING",
                         "The source column is unavailable; the row is preserved with a blank projected cell.", column.Name);
                 values[column.Name] = _quality.Evaluate(evidence, column.Name, original, () =>
@@ -277,8 +287,8 @@ internal sealed class ProgrammeReviewTransformer
                         "last_recalc_date" => Iso(snapshot.DataDate),
                         "free_float" when contract.TableName == "06_XER_PREDECESSOR"
                             && reader.Get("free_float_status") is not ("Finite" or "Estimated") => string.Empty,
-                        _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(reader.Get(column), snapshot, column.Name),
-                        _ => reader.Get(column)
+                        _ when NamespacedKeyColumns.Contains(column.Name) => Namespace(original, snapshot, column.Name),
+                        _ => original
                     };
 
                     if (contract.TableName == "15_XER_RESOURCE_DISTRIBUTION"
@@ -287,7 +297,7 @@ internal sealed class ProgrammeReviewTransformer
                         && string.Equals(raw, "unit/time", StringComparison.OrdinalIgnoreCase))
                         raw = "hours";
 
-                    return ProgrammeReviewCsv.Normalize(raw, column, context);
+                    return ProgrammeReviewCsv.Normalize(raw, column, context, _normalization);
                 });
             }
 
@@ -445,6 +455,7 @@ internal sealed class ProgrammeReviewTransformer
 
     private void ValidateRequiredSnapshotCoverage(IReadOnlyList<ProgrammeReviewOutputTable> tables)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme snapshot coverage");
         foreach (ProgrammeReviewOutputTable table in tables.Where(t => t.Contract.SourceRequired))
         {
             foreach (ResolvedProgrammeReviewSnapshot snapshot in _request.Snapshots)
@@ -458,6 +469,7 @@ internal sealed class ProgrammeReviewTransformer
     private void ValidateTransformOutcomes(IDictionary<string, XerTable?> enhanced,
         XerTransformer transformer)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme transform outcomes");
         foreach (var pair in enhanced.ToArray())
         {
             if (pair.Value is not null) continue;
@@ -472,6 +484,7 @@ internal sealed class ProgrammeReviewTransformer
 
     private void ValidateSingleProjectPerSnapshot()
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme single-project snapshots");
         XerTable? projects = _dataStore.GetTable(TableNames.Project);
         if (projects?.Headers is null || !projects.FieldIndexes.TryGetValue(FieldNames.ProjectId, out int projectIdIndex))
             throw new ProgrammeReviewValidationException("Raw PROJECT data with a proj_id column is required.");
@@ -493,6 +506,7 @@ internal sealed class ProgrammeReviewTransformer
 
     private void ValidateKeysAndRelationships(IReadOnlyList<ProgrammeReviewOutputTable> tables)
     {
+        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme keys and relationships");
         var byName = tables.ToDictionary(t => t.Contract.TableName, StringComparer.OrdinalIgnoreCase);
         foreach (ProgrammeReviewOutputTable table in tables)
         {
@@ -592,7 +606,8 @@ internal sealed class ProgrammeReviewTransformer
 
     private IReadOnlyDictionary<string, string> Finalize(
         ProgrammeReviewTableContract contract,
-        Dictionary<string, string> values)
+        Dictionary<string, string> values,
+        bool normalizeHistory = false)
     {
         foreach (ProgrammeReviewColumn column in contract.Columns)
         {
@@ -600,8 +615,10 @@ internal sealed class ProgrammeReviewTransformer
             // Cells were assessed before projection. A blank rejected cell must
             // not be rejected again by the fixed contract's required-cell rule.
             values[column.Name] = string.IsNullOrWhiteSpace(raw) ? string.Empty
-                : _quality.Evaluate(_outputEvidence[values], column.Name, raw,
-                    () => ProgrammeReviewCsv.Normalize(raw, column, contract.TableName));
+                : normalizeHistory && TaskHistoryColumns.Contains(column.Name)
+                    ? _quality.Evaluate(_outputEvidence[values], column.Name, raw,
+                        () => ProgrammeReviewCsv.Normalize(raw, column, contract.TableName, _normalization))
+                    : raw;
         }
         return values;
     }
@@ -631,25 +648,10 @@ internal sealed class ProgrammeReviewTransformer
         ProgrammeReviewTableContract contract,
         IReadOnlyList<ProgrammeReviewOutputRow> rows)
     {
-        if (rows.Count <= 1) return rows;
-        var array = rows.ToArray();
-        string[] sortColumns = contract.SortColumns.ToArray();
-        string[] allColumns = contract.Columns.Select(c => c.Name).ToArray();
-        Array.Sort(array, (x, y) =>
-        {
-            foreach (string col in sortColumns)
-            {
-                int cmp = string.Compare(x.Values[col], y.Values[col], StringComparison.Ordinal);
-                if (cmp != 0) return cmp;
-            }
-            foreach (string col in allColumns)
-            {
-                int cmp = string.Compare(x.Values[col], y.Values[col], StringComparison.Ordinal);
-                if (cmp != 0) return cmp;
-            }
-            return string.Compare(x.Snapshot.CanonicalXerFilename, y.Snapshot.CanonicalXerFilename, StringComparison.Ordinal);
-        });
-        return array;
+        return ReviewOutputOrdering.Sort(rows, contract.SortColumns,
+            contract.Columns.Select(column => column.Name).ToArray(), row => row.Values,
+            (left, right) => string.Compare(left.Snapshot.CanonicalXerFilename,
+                right.Snapshot.CanonicalXerFilename, StringComparison.Ordinal));
     }
 
     private static void ValidateDataDate(
@@ -658,7 +660,7 @@ internal sealed class ProgrammeReviewTransformer
         string context,
         string sourceColumn = "data_date")
     {
-        string raw = reader.GetOptional(sourceColumn, sourceColumn == "data_date" ? "Data Date" : sourceColumn);
+        string raw = reader.Get(sourceColumn, sourceColumn == "data_date" ? "Data Date" : sourceColumn);
         if (raw.Length == 0)
             throw new ProgrammeReviewValidationException(
                 $"{context}: XER source column '{sourceColumn}' is blank; manifest metadata cannot silently replace a missing source date.");
@@ -737,31 +739,25 @@ internal sealed class ProgrammeReviewTransformer
         }
     }
 
-    private sealed class EnhancedRowReader
+    private readonly struct EnhancedRowReader
     {
         private readonly XerTable _table;
         private readonly DataRow _row;
+        private readonly IReadOnlyDictionary<string, int> _projectionIndexes;
 
-        internal EnhancedRowReader(XerTable table, DataRow row)
+        internal EnhancedRowReader(XerTable table, DataRow row, IReadOnlyDictionary<string, int> projectionIndexes)
         {
             _table = table;
             _row = row;
+            _projectionIndexes = projectionIndexes;
         }
 
         internal string Get(ProgrammeReviewColumn column) =>
-            GetOptional(new[] { column.Name }.Concat(column.SourceAliases).ToArray());
+            XerTable.GetFieldValueSafe(_row, _projectionIndexes[column.Name]);
+
+        internal bool HasColumn(ProgrammeReviewColumn column) => _projectionIndexes[column.Name] >= 0;
 
         internal string Get(string name, params string[] aliases) =>
-            GetOptional(new[] { name }.Concat(aliases).ToArray());
-
-        internal string GetOptional(params string[] names)
-        {
-            foreach (string name in names)
-            {
-                if (_table.FieldIndexes.TryGetValue(name, out int index))
-                    return XerTable.GetFieldValueSafe(_row, index);
-            }
-            return string.Empty;
-        }
+            XerTable.GetFieldValueSafe(_row, ReviewProjectionAccess.ResolveIndex(_table, name, aliases));
     }
 }

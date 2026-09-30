@@ -1,7 +1,10 @@
 namespace XerToCsvConverter;
 
 /// <summary>Metadata for a completed caller-owned Standard ZIP stream.</summary>
-public sealed record StandardZipStreamExportResult(int WarningCount, int FileCount);
+public sealed record StandardZipStreamExportResult(int WarningCount, int FileCount)
+{
+    internal XerTable? DataQualityTable { get; init; }
+}
 
 internal static class ZipStreamExport
 {

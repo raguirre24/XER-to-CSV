@@ -5,6 +5,7 @@ public partial class XerTransformer
     private bool _shareResilientCalendarLookup;
     private readonly object _resilientCalendarGate = new();
     private P6CalendarRepository? _resilientCalendarRepository;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _monthUpdateBySource = new(StringComparer.Ordinal);
 
     // Export operations finish source rebinding/union before creating a transformer.
     // The public constructor remains suitable for callers editing parsed input

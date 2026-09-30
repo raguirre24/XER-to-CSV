@@ -290,6 +290,8 @@ namespace XerToCsvConverter;
     {
 
         private static readonly ConcurrentDictionary<string, DateTime?> DateCache = new ConcurrentDictionary<string, DateTime?>();
+        private static readonly Dictionary<DateTime, string> FormattedDateCache = new();
+        private static readonly object FormattedDateGate = new();
 
         // Common P6 formats for optimized TryParseExact
 
@@ -350,11 +352,25 @@ namespace XerToCsvConverter;
 
 
 
-        public static string Format(DateTime? date) => date.HasValue && date.Value != DateTime.MinValue ? date.Value.ToString(OutputFormat, CultureInfo.InvariantCulture) : "";
+        public static string Format(DateTime? date) => date.HasValue ? Format(date.Value) : "";
 
-        public static string Format(DateTime date) => date != DateTime.MinValue ? date.ToString(OutputFormat, CultureInfo.InvariantCulture) : "";
+        public static string Format(DateTime date)
+        {
+            if (date == DateTime.MinValue) return "";
+            lock (FormattedDateGate)
+            {
+                if (FormattedDateCache.TryGetValue(date, out string? cached)) return cached;
+                string value = date.ToString(OutputFormat, CultureInfo.InvariantCulture);
+                if (FormattedDateCache.Count < 16384) FormattedDateCache.Add(date, value);
+                return value;
+            }
+        }
 
-        public static void ClearCache() => DateCache.Clear();
+        public static void ClearCache()
+        {
+            DateCache.Clear();
+            lock (FormattedDateGate) FormattedDateCache.Clear();
+        }
 
     }
 
@@ -375,6 +391,32 @@ namespace XerToCsvConverter;
         private readonly string[]? _rawValues;
         // Reference identity follows copies/rebinding; never serialize this handle.
         internal object RawEvidenceIdentity => _rawValues ?? Fields;
+        // Cache accounting includes original cells retained after live row alignment.
+        // This is a conservative estimate, not a measurement of the runtime heap.
+        internal long EstimatedRetainedBytes
+        {
+            get
+            {
+                string[]? fields = Fields;
+                int liveLength = fields?.Length ?? 0;
+                long bytes = 128 + (fields is null ? 0 : 24 + liveLength * 8L)
+                    + (_rawValues is null ? 0 : 24 + _rawValues.Length * 8L);
+                for (int index = 0; index < liveLength; index++)
+                {
+                    string? value = fields![index];
+                    bytes += 24 + (value?.Length ?? 0) * 2L;
+                    if (_rawValues is not null && index < _rawValues.Length
+                        && !ReferenceEquals(_rawValues[index], value))
+                        bytes += 24 + (_rawValues[index]?.Length ?? 0) * 2L;
+                }
+                if (_rawValues is not null)
+                {
+                    for (int index = liveLength; index < _rawValues.Length; index++)
+                        bytes += 24 + (_rawValues[index]?.Length ?? 0) * 2L;
+                }
+                return bytes;
+            }
+        }
         private FrozenDictionary<string, int>? RawFieldIndexes { get; init; }
         private FrozenDictionary<string, int>? EvaluationFieldIndexes { get; init; }
 
@@ -525,6 +567,8 @@ namespace XerToCsvConverter;
 
         public int RowCount => _rows.Count;
 
+        internal int Capacity => _rows.Capacity;
+
         public bool IsEmpty => _rows.Count == 0;
 
 
@@ -592,6 +636,7 @@ namespace XerToCsvConverter;
         // Ordered, schema-preserving merge. Neither the incoming headers nor rows are mutated.
         public void MergeStore(XerDataStore otherStore)
         {
+            using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Merging, "source-store union");
             ArgumentNullException.ThrowIfNull(otherStore);
             if (ReferenceEquals(this, otherStore))
                 throw new ArgumentException("A data store cannot be merged into itself.", nameof(otherStore));
@@ -684,6 +729,16 @@ namespace XerToCsvConverter;
 
         private const char Delimiter = '\t';
 
+        private readonly int _initialTableCapacity;
+
+        public XerParser() { }
+
+        internal XerParser(int initialTableCapacity)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(initialTableCapacity);
+            _initialTableCapacity = initialTableCapacity;
+        }
+
         // Parses XER content from a Stream (for in-memory / Blazor scenarios)
         public XerDataStore ParseXerStream(Stream stream, string fileName, Action<int, string>? reportProgressAction, CancellationToken cancellationToken)
         {
@@ -708,13 +763,13 @@ namespace XerToCsvConverter;
                 try
                 {
                     return ParseXerStreamWithEncoding(
-                        readableStream, fileName, sourceToken, selection.Encoding, reportProgressAction, cancellationToken);
+                        readableStream, fileName, sourceToken, selection.Encoding, reportProgressAction, cancellationToken, _initialTableCapacity);
                 }
                 catch (DecoderFallbackException) when (!selection.HasBom)
                 {
                     readableStream.Position = selection.ContentPosition;
                     return ParseXerStreamWithEncoding(
-                        readableStream, fileName, sourceToken, XerTextEncoding.Windows1252, reportProgressAction, cancellationToken);
+                        readableStream, fileName, sourceToken, XerTextEncoding.Windows1252, reportProgressAction, cancellationToken, _initialTableCapacity);
                 }
             }
             finally
@@ -731,6 +786,7 @@ namespace XerToCsvConverter;
             Action<int, string>? reportProgressAction,
             CancellationToken cancellationToken)
         {
+            using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Parsing, fileName);
             ArgumentNullException.ThrowIfNull(stream);
             ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
             if (!stream.CanRead) throw new ArgumentException("The XER stream must be readable.", nameof(stream));
@@ -752,13 +808,13 @@ namespace XerToCsvConverter;
                 try
                 {
                     return await ParseXerStreamWithEncodingAsync(
-                        readableStream, fileName, sourceToken, selection.Encoding, reportProgressAction, cancellationToken);
+                        readableStream, fileName, sourceToken, selection.Encoding, reportProgressAction, cancellationToken, _initialTableCapacity);
                 }
                 catch (DecoderFallbackException) when (!selection.HasBom)
                 {
                     readableStream.Position = selection.ContentPosition;
                     return await ParseXerStreamWithEncodingAsync(
-                        readableStream, fileName, sourceToken, XerTextEncoding.Windows1252, reportProgressAction, cancellationToken);
+                        readableStream, fileName, sourceToken, XerTextEncoding.Windows1252, reportProgressAction, cancellationToken, _initialTableCapacity);
                 }
             }
             finally
@@ -773,7 +829,8 @@ namespace XerToCsvConverter;
             string sourceToken,
             Encoding encoding,
             Action<int, string>? reportProgressAction,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            int initialTableCapacity)
         {
             var fileStore = new XerDataStore();
             string filename = StringInternPool.Intern(fileName);
@@ -809,7 +866,7 @@ namespace XerToCsvConverter;
                     await Task.Delay(1, cancellationToken);
                 }
 
-                ParseXerContentLine(line, filename, sourceToken, localTables, ref currentTable);
+                ParseXerContentLine(line, filename, sourceToken, localTables, ref currentTable, initialTableCapacity);
             }
 
             foreach ((string _, XerTable table) in localTables)
@@ -824,7 +881,8 @@ namespace XerToCsvConverter;
             string filename,
             string sourceToken,
             Dictionary<string, XerTable> localTables,
-            ref XerTable? currentTable)
+            ref XerTable? currentTable,
+            int initialTableCapacity)
         {
             if (string.IsNullOrWhiteSpace(line)) return;
             ReadOnlySpan<char> lineSpan = line.AsSpan();
@@ -838,7 +896,7 @@ namespace XerToCsvConverter;
                     {
                         string currentTableName = StringInternPool.Intern(tableNameSpan);
                         StandardExportPublication.ValidateTableName(currentTableName);
-                        currentTable = new XerTable(currentTableName);
+                        currentTable = new XerTable(currentTableName, initialTableCapacity);
                         localTables[currentTable.Name] = currentTable;
                     }
                     break;
@@ -870,7 +928,8 @@ namespace XerToCsvConverter;
             string sourceToken,
             Encoding encoding,
             Action<int, string>? reportProgressAction,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            int initialTableCapacity)
         {
             var fileStore = new XerDataStore();
             string filename = StringInternPool.Intern(fileName);
@@ -916,7 +975,7 @@ namespace XerToCsvConverter;
                         {
                             string currentTableName = StringInternPool.Intern(tableNameSpan);
                             StandardExportPublication.ValidateTableName(currentTableName);
-                            currentTable = new XerTable(currentTableName);
+                            currentTable = new XerTable(currentTableName, initialTableCapacity);
                             localTables[currentTable.Name] = currentTable;
                         }
                         break;
@@ -1110,31 +1169,53 @@ namespace XerToCsvConverter;
 
             using var writer = new StreamWriter(outputStream, Encoding.UTF8, bufferSize: PerformanceConfig.CsvWriteBufferSize, leaveOpen: true);
 
-            string[] headerRow = table.Headers;
-            for (int i = 0; i < headerRow.Length; i++)
-            {
-                if (i > 0) writer.Write(',');
-                WriteEscapedField(writer, headerRow[i]);
-            }
-            if (headerRow.Length > 0) writer.Write(',');
-            WriteEscapedField(writer, FieldNames.FileName);
-            writer.WriteLine();
+            // A single writer call per record avoids millions of virtual TextWriter
+            // calls in the WASM interpreter. The reusable buffer is operation-owned;
+            // it holds only the current record and is never retained by the cache.
+            char[] buffer = new char[4096];
+            WriteRecord(table.Headers, FieldNames.FileName);
 
             foreach (var dataRow in table.Rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string[] rowFields = dataRow.Fields;
                 if (rowFields == null) continue;
-                for (int j = 0; j < rowFields.Length; j++)
-                {
-                    if (j > 0) writer.Write(',');
-                    WriteEscapedField(writer, rowFields[j] ?? string.Empty);
-                }
-                if (rowFields.Length > 0) writer.Write(',');
-                WriteEscapedField(writer, dataRow.OriginalSourceFilename);
-                writer.WriteLine();
+                WriteRecord(rowFields, dataRow.OriginalSourceFilename);
             }
             writer.Flush();
+
+            void WriteRecord(string[] fields, string filename)
+            {
+                int length = 0;
+                for (int index = 0; index <= fields.Length; index++)
+                {
+                    string value = (index == fields.Length ? filename : fields[index]) ?? string.Empty;
+                    int required = checked(length + value.Length * 2 + 3);
+                    if (required > buffer.Length)
+                        Array.Resize(ref buffer, Math.Max(required, checked(buffer.Length * 2)));
+                    if (index > 0) buffer[length++] = ',';
+                    ReadOnlySpan<char> span = value.AsSpan();
+                    bool quote = span.IndexOfAny(CsvSpecialChars) >= 0
+                        || span.Length > 0 && (span[0] == ' ' || span[^1] == ' ');
+                    if (quote) buffer[length++] = '"';
+                    if (quote)
+                    {
+                        while (span.IndexOf('"') is int position && position >= 0)
+                        {
+                            span[..position].CopyTo(buffer.AsSpan(length));
+                            length += position;
+                            buffer[length++] = '"';
+                            buffer[length++] = '"';
+                            span = span[(position + 1)..];
+                        }
+                    }
+                    span.CopyTo(buffer.AsSpan(length));
+                    length += span.Length;
+                    if (quote) buffer[length++] = '"';
+                }
+                writer.Write(buffer, 0, length);
+                writer.WriteLine();
+            }
         }
 
         // Efficient CSV field escaping writing directly to the stream to avoid allocations
@@ -1236,6 +1317,11 @@ namespace XerToCsvConverter;
         // New helper method to parse YYMM from filename
 
         private string ParseMonthUpdateFromFilename(string filename)
+            => _shareResilientCalendarLookup && !string.IsNullOrWhiteSpace(filename)
+                ? _monthUpdateBySource.GetOrAdd(filename, CalculateMonthUpdateFromFilename)
+                : CalculateMonthUpdateFromFilename(filename);
+
+        private static string CalculateMonthUpdateFromFilename(string filename)
 
         {
 
@@ -1434,6 +1520,17 @@ namespace XerToCsvConverter;
 
                     .ToDictionary(item => item.name, item => item.index, StringComparer.OrdinalIgnoreCase);
 
+                var directFields = finalIndexes
+                    .Where(field => !HandledTaskFields.Contains(field.Key) && taskIndexes.ContainsKey(field.Key))
+                    .Select(field => (Source: taskIndexes[field.Key], Target: field.Value)).ToArray();
+                string[] dateFields = { FieldNames.CstrDate, FieldNames.TargetStartDate, FieldNames.TargetEndDate,
+                    FieldNames.ActStartDate, FieldNames.EarlyStartDate, FieldNames.EarlyEndDate,
+                    FieldNames.LateStartDate, FieldNames.LateEndDate };
+                var formattedFields = dateFields.Where(finalIndexes.ContainsKey)
+                    .Select(name => (Source: taskIndexes.TryGetValue(name, out int index) ? index : -1,
+                        Target: finalIndexes[name])).ToArray();
+                int actualEndTarget = finalIndexes[FieldNames.ActEndDate];
+
 
 
 
@@ -1489,9 +1586,12 @@ namespace XerToCsvConverter;
 
                     // Copy and format fields using optimized methods (passing finalIndexes)
 
-                    CopyDirectFields(row, taskIndexes, transformed, finalIndexes);
-
-                    FormatDateFields(row, taskIndexes, transformed, finalIndexes, actEndDate);
+                    foreach (var field in directFields)
+                        if (field.Source < row.Length) transformed[field.Target] = row[field.Source];
+                    foreach (var field in formattedFields)
+                        transformed[field.Target] = DateParser.Format(DateParser.TryParse(
+                            field.Source >= 0 && field.Source < row.Length ? row[field.Source] ?? "" : ""));
+                    transformed[actualEndTarget] = DateParser.Format(actEndDate);
 
 
 
@@ -1682,110 +1782,6 @@ namespace XerToCsvConverter;
                 RecordGenerationFailure(EnhancedTableNames.XerTask01, ex);
 
                 return null;
-
-            }
-
-        }
-
-
-
-        // PERFORMANCE OPTIMIZATION: Updated to use dictionary for target indexes (O(1) lookup)
-        // Uses static FrozenSet (HandledTaskFields) for faster field exclusion checks
-
-        private void CopyDirectFields(string[] sourceRow, IReadOnlyDictionary<string, int> sourceIndexes, string[] targetRow, IReadOnlyDictionary<string, int> targetIndexes)
-
-        {
-
-            // Iterate over the target dictionary keys/values
-
-            foreach (var kvp in targetIndexes)
-
-            {
-
-                string colName = kvp.Key;
-
-                int targetIndex = kvp.Value;
-
-
-
-                // If the source has the column and it's not handled elsewhere, copy it
-                // Uses static FrozenSet for O(1) lookup
-
-                if (sourceIndexes.TryGetValue(colName, out int srcIndex) && !HandledTaskFields.Contains(colName))
-
-                {
-
-                    if (srcIndex < sourceRow.Length)
-
-                    {
-
-                        targetRow[targetIndex] = sourceRow[srcIndex];
-
-                    }
-
-                }
-
-            }
-
-        }
-
-
-
-        // PERFORMANCE OPTIMIZATION: Updated to use dictionary for target indexes (O(1) lookup)
-
-        private void FormatDateFields(string[] sourceRow, IReadOnlyDictionary<string, int> sourceIndexes, string[] transformedRow, IReadOnlyDictionary<string, int> targetIndexes, DateTime? actEndDate)
-
-        {
-
-            string[] directFormatCols = {
-
-            FieldNames.CstrDate,
-
-            FieldNames.TargetStartDate,
-
-            FieldNames.TargetEndDate,
-
-            FieldNames.ActStartDate,
-
-            FieldNames.EarlyStartDate,
-
-            FieldNames.EarlyEndDate,
-
-            FieldNames.LateStartDate,
-
-            FieldNames.LateEndDate
-
-        };
-
-
-
-            foreach (string colName in directFormatCols)
-
-            {
-
-                // Use dictionary lookup
-
-                if (targetIndexes.TryGetValue(colName, out int targetIndex))
-
-                {
-
-                    string originalValue = GetFieldValue(sourceRow, sourceIndexes, colName);
-
-                    transformedRow[targetIndex] = DateParser.Format(DateParser.TryParse(originalValue));
-
-                }
-
-            }
-
-
-
-            // Handle ActEndDate specifically as it's pre-parsed
-
-            if (targetIndexes.TryGetValue(FieldNames.ActEndDate, out int actEndIdxTarget))
-
-            {
-
-                transformedRow[actEndIdxTarget] = DateParser.Format(actEndDate);
 
             }
 
@@ -2935,15 +2931,16 @@ namespace XerToCsvConverter;
             cancellationToken.ThrowIfCancellationRequested();
             ResolvedStandardExport resolved = await ResolveRequestedTablesAsync(dataStore, tablesToExport, progress, cancellationToken);
             XerTable[] tables = resolved.Tables;
-            using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
+            using (var archive = ParserOperationTelemetry.CreateZipArchive(zipOutputStream))
             {
                 for (int i = 0; i < tables.Length; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     await Task.Delay(1, cancellationToken);
                     var entry = archive.CreateEntry($"{tables[i].Name}.csv", CompressionLevel.Fastest);
-                    using (var entryStream = entry.Open())
+                    using (var entryStream = ParserOperationTelemetry.OpenZipEntry(entry))
                     {
+                        using var csvPhase = ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, tables[i].Name);
                         _exporter.WriteTableToStream(tables[i], entryStream, cancellationToken);
                     }
                     progress?.Report((80 + (i + 1) * 15 / Math.Max(1, tables.Length), $"Exported: {tables[i].Name} ({i + 1}/{tables.Length})"));
@@ -2952,7 +2949,10 @@ namespace XerToCsvConverter;
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Report((97, "Archive ready for browser download."));
             cancellationToken.ThrowIfCancellationRequested();
-            return new StandardZipStreamExportResult(resolved.WarningCount, tables.Length);
+            return new StandardZipStreamExportResult(resolved.WarningCount, tables.Length)
+            {
+                DataQualityTable = tables.FirstOrDefault(table => table.Name == XerDataQuality.TableName)
+            };
         }
 
         private sealed record ResolvedStandardExport(XerTable[] Tables, int WarningCount);
@@ -2966,10 +2966,12 @@ namespace XerToCsvConverter;
             XerDataStore dataStore, IEnumerable<string> requested,
             IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
         {
+            using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "standard requested tables");
             ArgumentNullException.ThrowIfNull(dataStore);
             ArgumentNullException.ThrowIfNull(requested);
             string[] names = requested.Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(name => name, StringComparer.Ordinal).ToArray();
+            using var preflightPhase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "standard source/export preflight");
             foreach (string name in names) StandardExportPublication.ValidateTableName(name);
             bool includeDataQuality = names.Any(name => StandardExportSchema.SourceTable(name) is not null);
             if (includeDataQuality && (dataStore.GetTable(XerDataQuality.TableName) is not null
@@ -2985,8 +2987,9 @@ namespace XerToCsvConverter;
             foreach (var scope in sourcePairs.GroupBy(source => source.Namespace, StringComparer.OrdinalIgnoreCase))
                 if (scope.Select(source => source.SourceToken).Distinct(StringComparer.Ordinal).Skip(1).Any())
                     throw new InvalidDataException($"Standard public source namespace '{scope.Key}' belongs to multiple input occurrences. Parse the sources together in one ordered batch so repeated filenames receive distinct public keys. No CSV files have been published by this export.");
+            preflightPhase.Dispose();
             progress?.Report((0, "Generating and validating every requested table..."));
-            var transformer = new XerTransformer(dataStore);
+            var transformer = XerTransformer.ForExportOperation(dataStore);
             var cache = new ConcurrentDictionary<string, XerTable>(StringComparer.OrdinalIgnoreCase);
             var result = new List<XerTable>(names.Length);
 
@@ -3011,7 +3014,7 @@ namespace XerToCsvConverter;
                         if (!cache.ContainsKey(EnhancedTableNames.XerTask01))
                         {
                             XerTable? tasks = StandardExportSchema.CreateIfSourceEmpty(dataStore, EnhancedTableNames.XerTask01)
-                                ?? transformer.Create01XerTaskTable();
+                                ?? ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerTask01, () => transformer.Create01XerTaskTable());
                             tasks ??= transformer.RecoverEnhancedTable(EnhancedTableNames.XerTask01,
                                 transformer.GetGenerationFailure(EnhancedTableNames.XerTask01));
                             cache.TryAdd(EnhancedTableNames.XerTask01, tasks);
@@ -3035,6 +3038,7 @@ namespace XerToCsvConverter;
                         if (table is not null) cache.TryAdd(name, table);
                     }
                 }
+                using var outputValidation = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, requestedName + ":output schema");
                 if (table?.Headers is not { Length: > 0 })
                     throw GenerationFailed(requestedName, requestedName,
                         "generation failed or no valid output schema is available");
@@ -3047,7 +3051,8 @@ namespace XerToCsvConverter;
             }
             cancellationToken.ThrowIfCancellationRequested();
             XerTable? diagnostics = includeDataQuality
-                ? transformer.CreateDataQualityTable(result.Select(table => table.Name)) : null;
+                ? ParserOperationTelemetry.Time(ParserOperationPhase.StandaloneValidation, "standard source quality/diagnostics",
+                    () => transformer.CreateDataQualityTable(result.Select(table => table.Name))) : null;
             // Always publish the header for Enhanced exports: a clean rerun must
             // replace, not leave behind, warnings from an earlier export.
             if (diagnostics is not null) result.Add(diagnostics);
@@ -3065,6 +3070,7 @@ namespace XerToCsvConverter;
 
         private static XerTable? GenerateEnhancedTable(XerTransformer transformer, string tableName, ConcurrentDictionary<string, XerTable> cache)
         {
+            using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, tableName);
             switch (tableName)
             {
                 case EnhancedTableNames.XerBaseline04:
