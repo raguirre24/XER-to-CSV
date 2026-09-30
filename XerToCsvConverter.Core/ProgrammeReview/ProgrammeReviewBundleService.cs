@@ -134,6 +134,7 @@ public sealed class ProgrammeReviewBundleService
     /// Browser-safe streaming entrypoint that writes the eleven numbered tables and manifest directly
     /// into the provided zip output stream, computing SHA-256 digests on-the-fly to avoid holding
     /// uncompressed CSV byte arrays in memory.
+    /// The caller owns the writable output stream. Discard partial output after failure or cancellation.
     /// </summary>
     public async Task<ProgrammeReviewZipStreamBundleResult> BuildFromXerBytesToZipStreamAsync(
         ProgrammeReviewBundleRequest request,
@@ -142,8 +143,10 @@ public sealed class ProgrammeReviewBundleService
         IProgress<ProcessingService.DetailedProgress>? parseProgress = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(zipOutputStream);
-        var (dataStore, resolved) = await ParseFromXerBytesAsync(request, xerFiles, parseProgress, cancellationToken)
+        ZipStreamExport.ValidateDestination(zipOutputStream);
+        cancellationToken.ThrowIfCancellationRequested();
+        var (dataStore, resolved) = await ParseFromXerBytesAsync(request, xerFiles,
+            ZipStreamExport.MapParseProgress(parseProgress, 70), cancellationToken)
             .ConfigureAwait(false);
         return await BuildResolvedToZipStreamAsync(dataStore, resolved, zipOutputStream, parseProgress, cancellationToken)
             .ConfigureAwait(false);
@@ -258,6 +261,25 @@ public sealed class ProgrammeReviewBundleService
                 ?? throw new ProgrammeReviewValidationException(
                     $"source_sha256 is required for parsed snapshot '{snapshot.OriginalXerFilename}'."));
         return BuildResolvedInMemoryAsync(dataStore, resolved, cancellationToken);
+    }
+
+    /// <summary>Worker entrypoint for already parsed, owned sources with verified SHA-256 provenance.</summary>
+    internal Task<ProgrammeReviewZipStreamBundleResult> BuildFromParsedDataToZipStreamAsync(
+        XerDataStore dataStore,
+        ProgrammeReviewBundleRequest request,
+        Stream zipOutputStream,
+        IProgress<ProcessingService.DetailedProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataStore);
+        ArgumentNullException.ThrowIfNull(request);
+        ZipStreamExport.ValidateDestination(zipOutputStream);
+        cancellationToken.ThrowIfCancellationRequested();
+        ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(request,
+            snapshot => snapshot.SourceSha256
+                ?? throw new ProgrammeReviewValidationException(
+                    $"source_sha256 is required for parsed snapshot '{snapshot.OriginalXerFilename}'."));
+        return BuildResolvedToZipStreamAsync(dataStore, resolved, zipOutputStream, progress, cancellationToken);
     }
 
     private static ProgrammeReviewBundleResult BuildResolved(
@@ -412,7 +434,7 @@ public sealed class ProgrammeReviewBundleService
         using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
         {
             int tableIndex = 0;
-            foreach (ProgrammeReviewOutputTable table in tables)
+            foreach (ProgrammeReviewOutputTable table in tables.OrderBy(table => table.Contract.FileName, StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 tableIndex++;
@@ -444,12 +466,19 @@ public sealed class ProgrammeReviewBundleService
             }
             progress?.Report(new ProcessingService.DetailedProgress
             {
-                Percent = 97,
+                Percent = 96,
                 Message = "Finalizing bundle archive..."
             });
             await Task.Delay(1, cancellationToken).ConfigureAwait(false);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new ProcessingService.DetailedProgress
+        {
+            Percent = 97,
+            Message = "Archive ready for browser download."
+        });
+        cancellationToken.ThrowIfCancellationRequested();
         return new ProgrammeReviewZipStreamBundleResult(
             request.BundleId,
             new ReadOnlyCollection<ProgrammeReviewManifestRow>(manifestRows.ToList()),

@@ -79,6 +79,7 @@ public sealed record ProgrammeReviewZipStreamBundleResult(
     IReadOnlyList<ProgrammeReviewManifestRow> ManifestRows,
     IReadOnlyDictionary<string, string> CsvSha256ByFile)
 {
+    public int FileCount => CsvSha256ByFile.Count + 1;
     public int WarningCount { get; init; }
     public XerTable? DataQualityTable { get; init; }
 }

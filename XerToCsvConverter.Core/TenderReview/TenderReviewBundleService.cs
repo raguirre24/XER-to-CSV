@@ -109,9 +109,10 @@ public sealed class TenderReviewBundleService
     }
 
     /// <summary>
-    /// Browser-safe streaming entrypoint that writes the seven Tender Review tables and manifest directly
+    /// Browser-safe streaming entrypoint that writes the eleven Tender Review tables and manifest directly
     /// into the provided zip output stream, computing SHA-256 digests on-the-fly to avoid holding
     /// uncompressed CSV byte arrays in memory.
+    /// The caller owns the writable output stream. Discard partial output after failure or cancellation.
     /// </summary>
     public async Task<TenderReviewZipStreamBundleResult> BuildFromXerBytesToZipStreamAsync(
         TenderReviewBundleRequest request,
@@ -120,8 +121,10 @@ public sealed class TenderReviewBundleService
         IProgress<ProcessingService.DetailedProgress>? parseProgress = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(zipOutputStream);
-        var (dataStore, resolved) = await ParseFromXerBytesAsync(request, xerFiles, parseProgress, cancellationToken)
+        ZipStreamExport.ValidateDestination(zipOutputStream);
+        cancellationToken.ThrowIfCancellationRequested();
+        var (dataStore, resolved) = await ParseFromXerBytesAsync(request, xerFiles,
+            ZipStreamExport.MapParseProgress(parseProgress, 80), cancellationToken)
             .ConfigureAwait(false);
         return await BuildResolvedToZipStreamAsync(dataStore, resolved, zipOutputStream, parseProgress, cancellationToken)
             .ConfigureAwait(false);
@@ -234,6 +237,22 @@ public sealed class TenderReviewBundleService
             dataStore,
             ResolveWithConfiguredHashes(request),
             cancellationToken);
+    }
+
+    /// <summary>Worker entrypoint with governed source-token rows and verified SHA-256 provenance.</summary>
+    internal Task<TenderReviewZipStreamBundleResult> BuildFromParsedDataToZipStreamAsync(
+        XerDataStore dataStore,
+        TenderReviewBundleRequest request,
+        Stream zipOutputStream,
+        IProgress<ProcessingService.DetailedProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataStore);
+        ArgumentNullException.ThrowIfNull(request);
+        ZipStreamExport.ValidateDestination(zipOutputStream);
+        cancellationToken.ThrowIfCancellationRequested();
+        return BuildResolvedToZipStreamAsync(dataStore, ResolveWithConfiguredHashes(request),
+            zipOutputStream, progress, cancellationToken);
     }
 
     private static TenderReviewBundleResult BuildResolved(
@@ -390,7 +409,7 @@ public sealed class TenderReviewBundleService
         using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
         {
             int tableIndex = 0;
-            foreach (TenderReviewOutputTable table in transformed.Tables)
+            foreach (TenderReviewOutputTable table in transformed.Tables.OrderBy(table => table.Contract.FileName, StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 tableIndex++;
@@ -425,12 +444,19 @@ public sealed class TenderReviewBundleService
             }
             progress?.Report(new ProcessingService.DetailedProgress
             {
-                Percent = 97,
+                Percent = 96,
                 Message = "Finalizing bundle archive..."
             });
             await Task.Delay(1, cancellationToken).ConfigureAwait(false);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new ProcessingService.DetailedProgress
+        {
+            Percent = 97,
+            Message = "Archive ready for browser download."
+        });
+        cancellationToken.ThrowIfCancellationRequested();
         return new TenderReviewZipStreamBundleResult(
             transformed.Request.BundleId,
             new ReadOnlyCollection<TenderReviewManifestRow>(manifestRows.ToList()),

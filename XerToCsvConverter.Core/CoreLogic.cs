@@ -1100,7 +1100,11 @@ namespace XerToCsvConverter;
 
         // Writes table to a Stream (for in-memory / Blazor scenarios)
         public void WriteTableToStream(XerTable? table, Stream outputStream)
+            => WriteTableToStream(table, outputStream, CancellationToken.None);
+
+        public void WriteTableToStream(XerTable? table, Stream outputStream, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (table == null || table.Headers == null) return;
             if (table.IsEmpty && table.Headers.Length == 0) return;
 
@@ -1118,6 +1122,7 @@ namespace XerToCsvConverter;
 
             foreach (var dataRow in table.Rows)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 string[] rowFields = dataRow.Fields;
                 if (rowFields == null) continue;
                 for (int j = 0; j < rowFields.Length; j++)
@@ -2914,8 +2919,20 @@ namespace XerToCsvConverter;
             XerDataStore dataStore, List<string> tablesToExport,
             Stream zipOutputStream,
             IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
+            => (await ExportTablesToZipStreamWithDiagnosticsAsync(dataStore, tablesToExport,
+                zipOutputStream, progress, cancellationToken).ConfigureAwait(false)).WarningCount;
+
+        /// <summary>
+        /// Writes to a caller-owned writable stream and leaves it open. Discard the output after
+        /// any failure or cancellation; only a successful return identifies a complete archive.
+        /// </summary>
+        public async Task<StandardZipStreamExportResult> ExportTablesToZipStreamWithDiagnosticsAsync(
+            XerDataStore dataStore, List<string> tablesToExport,
+            Stream zipOutputStream,
+            IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
         {
-            ArgumentNullException.ThrowIfNull(zipOutputStream);
+            ZipStreamExport.ValidateDestination(zipOutputStream);
+            cancellationToken.ThrowIfCancellationRequested();
             ResolvedStandardExport resolved = await ResolveRequestedTablesAsync(dataStore, tablesToExport, progress, cancellationToken);
             XerTable[] tables = resolved.Tables;
             using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
@@ -2927,14 +2944,15 @@ namespace XerToCsvConverter;
                     var entry = archive.CreateEntry($"{tables[i].Name}.csv", CompressionLevel.Fastest);
                     using (var entryStream = entry.Open())
                     {
-                        _exporter.WriteTableToStream(tables[i], entryStream);
+                        _exporter.WriteTableToStream(tables[i], entryStream, cancellationToken);
                     }
-                    progress?.Report((80 + (i + 1) * 20 / Math.Max(1, tables.Length), $"Exported: {tables[i].Name} ({i + 1}/{tables.Length})"));
+                    progress?.Report((80 + (i + 1) * 15 / Math.Max(1, tables.Length), $"Exported: {tables[i].Name} ({i + 1}/{tables.Length})"));
                 }
             }
             cancellationToken.ThrowIfCancellationRequested();
-            ReportExportCompletion(progress, resolved.WarningCount);
-            return resolved.WarningCount;
+            progress?.Report((97, "Archive ready for browser download."));
+            cancellationToken.ThrowIfCancellationRequested();
+            return new StandardZipStreamExportResult(resolved.WarningCount, tables.Length);
         }
 
         private sealed record ResolvedStandardExport(XerTable[] Tables, int WarningCount);
