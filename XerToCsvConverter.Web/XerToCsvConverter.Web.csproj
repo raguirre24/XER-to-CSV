@@ -13,9 +13,12 @@
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="8.0.0" PrivateAssets="all" />
   </ItemGroup>
   <Target Name="PublishProcessingWorker" AfterTargets="Publish" Condition="'$(SkipProcessingWorker)' != 'true'">
-    <MSBuild Projects="../XerToCsvConverter.Web.Worker/XerToCsvConverter.Web.Worker.csproj"
-             Targets="Restore;Publish" BuildInParallel="false"
-             Properties="Configuration=$(Configuration);PublishDir=$(MSBuildProjectDirectory)/obj/$(Configuration)/worker-publish/" />
+    <PropertyGroup>
+      <_ProcessingWorkerDotNet Condition="'$(DOTNET_HOST_PATH)' != ''">$(DOTNET_HOST_PATH)</_ProcessingWorkerDotNet>
+      <_ProcessingWorkerDotNet Condition="'$(_ProcessingWorkerDotNet)' == ''">dotnet</_ProcessingWorkerDotNet>
+    </PropertyGroup>
+    <!-- The CLI re-evaluates the worker after restore so fresh builds load its WebAssembly SDK imports. -->
+    <Exec Command="&quot;$(_ProcessingWorkerDotNet)&quot; publish &quot;$(MSBuildProjectDirectory)/../XerToCsvConverter.Web.Worker/XerToCsvConverter.Web.Worker.csproj&quot; --configuration &quot;$(Configuration)&quot; -p:PublishProfile= --output &quot;$(MSBuildProjectDirectory)/obj/$(Configuration)/worker-publish/&quot;" />
     <ItemGroup>
       <_ProcessingWorkerFiles Include="$(MSBuildProjectDirectory)/obj/$(Configuration)/worker-publish/wwwroot/**/*" />
     </ItemGroup>

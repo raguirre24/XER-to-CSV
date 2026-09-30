@@ -51,6 +51,17 @@ jobs:
           sed -i "s|__APP_VERSION__|${GITHUB_SHA}|g" release/wwwroot/index.html
           sed -i "s|__APP_VERSION__|${GITHUB_SHA}|g" release/wwwroot/worker/main.js
 
+      - name: Verify packaged UI and worker
+        run: |
+          test -s release/wwwroot/_framework/blazor.boot.json
+          test -s release/wwwroot/worker/main.js
+          test -s release/wwwroot/worker/fileInput.js
+          test -s release/wwwroot/worker/_framework/dotnet.js
+          test -s release/wwwroot/worker/_framework/blazor.boot.json
+          grep -q 'base href="/XER-to-CSV/"' release/wwwroot/index.html
+          grep -qF "$GITHUB_SHA" release/wwwroot/index.html
+          grep -qF "$GITHUB_SHA" release/wwwroot/worker/main.js
+
       - name: Add .nojekyll
         run: touch release/wwwroot/.nojekyll
 
