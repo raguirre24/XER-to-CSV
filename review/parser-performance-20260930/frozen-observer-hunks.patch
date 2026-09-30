@@ -1,0 +1,335 @@
+diff --git "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\CoreLogic.cs" "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\CoreLogic.cs"
+index c435415..3447740 100644
+--- "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\CoreLogic.cs"
++++ "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\CoreLogic.cs"
+@@ -594,0 +595 @@ namespace XerToCsvConverter;
++            using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Merging, "source-store union");
+@@ -733,0 +735 @@ namespace XerToCsvConverter;
++            using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Parsing, fileName);
+@@ -2921 +2923 @@ namespace XerToCsvConverter;
+-            using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
++            using (var archive = ParserOperationTelemetry.CreateZipArchive(zipOutputStream))
+@@ -2928 +2930 @@ namespace XerToCsvConverter;
+-                    using (var entryStream = entry.Open())
++                    using (var entryStream = ParserOperationTelemetry.OpenZipEntry(entry))
+@@ -2929,0 +2932 @@ namespace XerToCsvConverter;
++                        using var csvPhase = ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, tables[i].Name);
+@@ -2950,0 +2954 @@ namespace XerToCsvConverter;
++            using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "standard requested tables");
+@@ -2954,0 +2959 @@ namespace XerToCsvConverter;
++            using var preflightPhase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "standard source/export preflight");
+@@ -2969,0 +2975 @@ namespace XerToCsvConverter;
++            preflightPhase.Dispose();
+@@ -3019,0 +3026 @@ namespace XerToCsvConverter;
++                using var outputValidation = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, requestedName + ":output schema");
+@@ -3032 +3039,2 @@ namespace XerToCsvConverter;
+-                ? transformer.CreateDataQualityTable(result.Select(table => table.Name)) : null;
++                ? ParserOperationTelemetry.Time(ParserOperationPhase.StandaloneValidation, "standard source quality/diagnostics",
++                    () => transformer.CreateDataQualityTable(result.Select(table => table.Name))) : null;
+@@ -3049,0 +3058 @@ namespace XerToCsvConverter;
++            using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, tableName);
+diff --git "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\ProgrammeReview\\ProgrammeReviewTransformer.cs" "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\ProgrammeReview\\ProgrammeReviewTransformer.cs"
+index 3b6fa71..4ce3cfb 100644
+--- "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\ProgrammeReview\\ProgrammeReviewTransformer.cs"
++++ "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\ProgrammeReview\\ProgrammeReviewTransformer.cs"
+@@ -37,0 +38 @@ internal sealed class ProgrammeReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "programme retained source view");
+@@ -46,0 +48 @@ internal sealed class ProgrammeReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "programme review tables");
+@@ -51,11 +53,11 @@ internal sealed class ProgrammeReviewTransformer
+-            [EnhancedTableNames.XerTask01] = transformer.Create01XerTaskTable(),
+-            [EnhancedTableNames.XerProject02] = transformer.Create02XerProject(),
+-            [EnhancedTableNames.XerProjWbs03] = transformer.Create03XerProjWbsTable(),
+-            [EnhancedTableNames.XerPredecessor06] = transformer.Create06XerPredecessor(new ConcurrentDictionary<string, XerTable>()),
+-            [EnhancedTableNames.XerActvType07] = transformer.Create07XerActvType(),
+-            [EnhancedTableNames.XerActvCode08] = transformer.Create08XerActvCode(),
+-            [EnhancedTableNames.XerTaskActv09] = transformer.Create09XerTaskActv(),
+-            [EnhancedTableNames.XerCalendar10] = transformer.Create10XerCalendar(),
+-            [EnhancedTableNames.XerCalendarDetailed11] = transformer.Create11XerCalendarDetailed(),
+-            [EnhancedTableNames.XerRsrc12] = transformer.Create12XerRsrc(),
+-            [EnhancedTableNames.XerResourceDist15] = transformer.Create15XerResourceDistribution()
++            [EnhancedTableNames.XerTask01] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerTask01, () => transformer.Create01XerTaskTable()),
++            [EnhancedTableNames.XerProject02] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerProject02, () => transformer.Create02XerProject()),
++            [EnhancedTableNames.XerProjWbs03] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerProjWbs03, () => transformer.Create03XerProjWbsTable()),
++            [EnhancedTableNames.XerPredecessor06] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerPredecessor06, () => transformer.Create06XerPredecessor(new ConcurrentDictionary<string, XerTable>())),
++            [EnhancedTableNames.XerActvType07] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerActvType07, () => transformer.Create07XerActvType()),
++            [EnhancedTableNames.XerActvCode08] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerActvCode08, () => transformer.Create08XerActvCode()),
++            [EnhancedTableNames.XerTaskActv09] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerTaskActv09, () => transformer.Create09XerTaskActv()),
++            [EnhancedTableNames.XerCalendar10] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerCalendar10, () => transformer.Create10XerCalendar()),
++            [EnhancedTableNames.XerCalendarDetailed11] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerCalendarDetailed11, () => transformer.Create11XerCalendarDetailed()),
++            [EnhancedTableNames.XerRsrc12] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerRsrc12, () => transformer.Create12XerRsrc()),
++            [EnhancedTableNames.XerResourceDist15] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerResourceDist15, () => transformer.Create15XerResourceDistribution())
+@@ -85 +87,2 @@ internal sealed class ProgrammeReviewTransformer
+-        XerTable warnings = transformer.CreateDataQualityTable();
++        XerTable warnings = ParserOperationTelemetry.Time(ParserOperationPhase.StandaloneValidation, "programme source quality/diagnostics",
++            () => transformer.CreateDataQualityTable());
+@@ -192,0 +196 @@ internal sealed class ProgrammeReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "programme task projection/history");
+@@ -246,0 +251 @@ internal sealed class ProgrammeReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, contract.TableName + ":programme projection");
+@@ -447,0 +453 @@ internal sealed class ProgrammeReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme snapshot coverage");
+@@ -460,0 +467 @@ internal sealed class ProgrammeReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme transform outcomes");
+@@ -474,0 +482 @@ internal sealed class ProgrammeReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme single-project snapshots");
+@@ -495,0 +504 @@ internal sealed class ProgrammeReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "programme keys and relationships");
+diff --git "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\ProgrammeReview\\ProgrammeReviewBundleService.cs" "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\ProgrammeReview\\ProgrammeReviewBundleService.cs"
+index e02fa9f..8cb4521 100644
+--- "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\ProgrammeReview\\ProgrammeReviewBundleService.cs"
++++ "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\ProgrammeReview\\ProgrammeReviewBundleService.cs"
+@@ -67 +67 @@ public sealed class ProgrammeReviewBundleService
+-            ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(
++            ResolvedProgrammeReviewRequest resolved = ResolveRequest(
+@@ -109 +109 @@ public sealed class ProgrammeReviewBundleService
+-        ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(
++        ResolvedProgrammeReviewRequest resolved = ResolveRequest(
+@@ -190 +190 @@ public sealed class ProgrammeReviewBundleService
+-            string computedHash = ProgrammeReviewCsv.ComputeSha256(content);
++            string computedHash = ComputeSourceSha256(content);
+@@ -204 +204 @@ public sealed class ProgrammeReviewBundleService
+-        ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(
++        ResolvedProgrammeReviewRequest resolved = ResolveRequest(
+@@ -227 +227 @@ public sealed class ProgrammeReviewBundleService
+-                string afterParseHash = ProgrammeReviewCsv.ComputeSha256(
++                string afterParseHash = ComputeSourceSha256(
+@@ -255 +255 @@ public sealed class ProgrammeReviewBundleService
+-        ResolvedProgrammeReviewRequest resolved = ProgrammeReviewNaming.Resolve(
++        ResolvedProgrammeReviewRequest resolved = ResolveRequest(
+@@ -412 +412 @@ public sealed class ProgrammeReviewBundleService
+-        using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
++        using (var archive = ParserOperationTelemetry.CreateZipArchive(zipOutputStream))
+@@ -428 +428 @@ public sealed class ProgrammeReviewBundleService
+-                using (var entryStream = entry.Open())
++                using (var entryStream = ParserOperationTelemetry.OpenZipEntry(entry))
+@@ -429,0 +430 @@ public sealed class ProgrammeReviewBundleService
++                using (var csvStream = ParserOperationTelemetry.TrackCsvHashing(hashingStream, entryStream, table.Contract.FileName))
+@@ -431,3 +432,7 @@ public sealed class ProgrammeReviewBundleService
+-                    ProgrammeReviewCsv.WriteTableToStream(hashingStream, table, cancellationToken);
+-                    hashingStream.Flush();
+-                    hashes.Add(table.Contract.FileName, hashingStream.GetHash());
++                    using (ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, table.Contract.FileName))
++                    {
++                        ProgrammeReviewCsv.WriteTableToStream(csvStream, table, cancellationToken);
++                    csvStream.Flush();
++                    }
++                    using (ParserOperationTelemetry.Measure(ParserOperationPhase.CsvHashing, table.Contract.FileName + ":digest"))
++                        hashes.Add(table.Contract.FileName, hashingStream.GetHash());
+@@ -441 +446 @@ public sealed class ProgrammeReviewBundleService
+-            using (var manifestStream = manifestEntry.Open())
++            using (var manifestStream = ParserOperationTelemetry.OpenZipEntry(manifestEntry))
+@@ -442,0 +448 @@ public sealed class ProgrammeReviewBundleService
++                using var csvPhase = ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, ProgrammeReviewContract.ManifestFileName);
+@@ -467,0 +474 @@ public sealed class ProgrammeReviewBundleService
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "programme manifest metadata");
+@@ -504,0 +512 @@ public sealed class ProgrammeReviewBundleService
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.SourceSha256, "programme XER stream");
+@@ -522,0 +531,13 @@ public sealed class ProgrammeReviewBundleService
++
++    private static ResolvedProgrammeReviewRequest ResolveRequest(ProgrammeReviewBundleRequest request,
++        Func<ProgrammeReviewSnapshot, string> sourceHashProvider)
++    {
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "programme request metadata");
++        return ProgrammeReviewNaming.Resolve(request, sourceHashProvider);
++    }
++
++    private static string ComputeSourceSha256(ReadOnlySpan<byte> content)
++    {
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.SourceSha256, "programme uploaded XER bytes");
++        return ProgrammeReviewCsv.ComputeSha256(content);
++    }
+diff --git "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\TenderReview\\TenderReviewTransformer.cs" "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\TenderReview\\TenderReviewTransformer.cs"
+index 59840d6..be7fe8e 100644
+--- "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\TenderReview\\TenderReviewTransformer.cs"
++++ "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\TenderReview\\TenderReviewTransformer.cs"
+@@ -42,0 +43 @@ internal sealed class TenderReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "tender review tables");
+@@ -50,12 +51,12 @@ internal sealed class TenderReviewTransformer
+-            [EnhancedTableNames.XerTask01] = transformer.Create01XerTaskTable(),
+-            [EnhancedTableNames.XerProject02] = transformer.Create02XerProject(),
+-            [EnhancedTableNames.XerProjWbs03] = transformer.Create03XerProjWbsTable(),
+-            [EnhancedTableNames.XerPredecessor06] = transformer.Create06XerPredecessor(
+-                new ConcurrentDictionary<string, XerTable>()),
+-            [EnhancedTableNames.XerActvType07] = transformer.Create07XerActvType(),
+-            [EnhancedTableNames.XerActvCode08] = transformer.Create08XerActvCode(),
+-            [EnhancedTableNames.XerTaskActv09] = transformer.Create09XerTaskActv(),
+-            [EnhancedTableNames.XerCalendar10] = transformer.Create10XerCalendar(),
+-            [EnhancedTableNames.XerCalendarDetailed11] = transformer.Create11XerCalendarDetailed(),
+-            [EnhancedTableNames.XerRsrc12] = transformer.Create12XerRsrc(),
+-            [EnhancedTableNames.XerResourceDist15] = transformer.Create15XerResourceDistribution()
++            [EnhancedTableNames.XerTask01] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerTask01, () => transformer.Create01XerTaskTable()),
++            [EnhancedTableNames.XerProject02] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerProject02, () => transformer.Create02XerProject()),
++            [EnhancedTableNames.XerProjWbs03] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerProjWbs03, () => transformer.Create03XerProjWbsTable()),
++            [EnhancedTableNames.XerPredecessor06] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerPredecessor06, () => transformer.Create06XerPredecessor(
++                new ConcurrentDictionary<string, XerTable>())),
++            [EnhancedTableNames.XerActvType07] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerActvType07, () => transformer.Create07XerActvType()),
++            [EnhancedTableNames.XerActvCode08] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerActvCode08, () => transformer.Create08XerActvCode()),
++            [EnhancedTableNames.XerTaskActv09] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerTaskActv09, () => transformer.Create09XerTaskActv()),
++            [EnhancedTableNames.XerCalendar10] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerCalendar10, () => transformer.Create10XerCalendar()),
++            [EnhancedTableNames.XerCalendarDetailed11] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerCalendarDetailed11, () => transformer.Create11XerCalendarDetailed()),
++            [EnhancedTableNames.XerRsrc12] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerRsrc12, () => transformer.Create12XerRsrc()),
++            [EnhancedTableNames.XerResourceDist15] = ParserOperationTelemetry.Time(ParserOperationPhase.Transformation, EnhancedTableNames.XerResourceDist15, () => transformer.Create15XerResourceDistribution())
+@@ -93 +94,2 @@ internal sealed class TenderReviewTransformer
+-        XerTable warnings = transformer.CreateDataQualityTable();
++        XerTable warnings = ParserOperationTelemetry.Time(ParserOperationPhase.StandaloneValidation, "tender source quality/diagnostics",
++            () => transformer.CreateDataQualityTable());
+@@ -132,0 +135 @@ internal sealed class TenderReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "tender P6 project metadata");
+@@ -317,0 +321 @@ internal sealed class TenderReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, "tender task projection");
+@@ -386,0 +391 @@ internal sealed class TenderReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Transformation, contract.TableName + ":tender projection");
+@@ -686,0 +692 @@ internal sealed class TenderReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "tender transform outcomes");
+@@ -700,0 +707 @@ internal sealed class TenderReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "tender source coverage");
+@@ -712,0 +720 @@ internal sealed class TenderReviewTransformer
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "tender keys and relationships");
+diff --git "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\TenderReview\\TenderReviewBundleService.cs" "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\TenderReview\\TenderReviewBundleService.cs"
+index 4bdfc80..170d33a 100644
+--- "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core\\TenderReview\\TenderReviewBundleService.cs"
++++ "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Core.Telemetry\\TenderReview\\TenderReviewBundleService.cs"
+@@ -159 +159 @@ public sealed class TenderReviewBundleService
+-            string computedHash = TenderReviewCsv.ComputeSha256(upload.Content);
++            string computedHash = ComputeSourceSha256(upload.Content);
+@@ -187 +187 @@ public sealed class TenderReviewBundleService
+-                string afterParseHash = TenderReviewCsv.ComputeSha256(xerFiles[index].Content);
++                string afterParseHash = ComputeSourceSha256(xerFiles[index].Content);
+@@ -390 +390 @@ public sealed class TenderReviewBundleService
+-        using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
++        using (var archive = ParserOperationTelemetry.CreateZipArchive(zipOutputStream))
+@@ -407 +407 @@ public sealed class TenderReviewBundleService
+-                using (var entryStream = entry.Open())
++                using (var entryStream = ParserOperationTelemetry.OpenZipEntry(entry))
+@@ -408,0 +409 @@ public sealed class TenderReviewBundleService
++                using (var csvStream = ParserOperationTelemetry.TrackCsvHashing(hashingStream, entryStream, table.Contract.FileName))
+@@ -410,3 +411,7 @@ public sealed class TenderReviewBundleService
+-                    TenderReviewCsv.WriteTableToStream(hashingStream, table, cancellationToken);
+-                    hashingStream.Flush();
+-                    hashes.Add(table.Contract.FileName, hashingStream.GetHash());
++                    using (ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, table.Contract.FileName))
++                    {
++                        TenderReviewCsv.WriteTableToStream(csvStream, table, cancellationToken);
++                    csvStream.Flush();
++                    }
++                    using (ParserOperationTelemetry.Measure(ParserOperationPhase.CsvHashing, table.Contract.FileName + ":digest"))
++                        hashes.Add(table.Contract.FileName, hashingStream.GetHash());
+@@ -422 +427 @@ public sealed class TenderReviewBundleService
+-            using (var manifestStream = manifestEntry.Open())
++            using (var manifestStream = ParserOperationTelemetry.OpenZipEntry(manifestEntry))
+@@ -423,0 +429 @@ public sealed class TenderReviewBundleService
++                using var csvPhase = ParserOperationTelemetry.Measure(ParserOperationPhase.CsvSerialization, TenderReviewContract.ManifestFileName);
+@@ -449,0 +456 @@ public sealed class TenderReviewBundleService
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "tender manifest metadata");
+@@ -492,0 +500 @@ public sealed class TenderReviewBundleService
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.StandaloneValidation, "tender manifest consistency");
+@@ -543 +551,3 @@ public sealed class TenderReviewBundleService
+-        TenderReviewBundleRequest request) => TenderReviewNaming.Resolve(
++        TenderReviewBundleRequest request) {
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "tender request metadata");
++        return TenderReviewNaming.Resolve(
+@@ -547,0 +558 @@ public sealed class TenderReviewBundleService
++    }
+@@ -615,0 +627 @@ public sealed class TenderReviewBundleService
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Merging, "tender governed source binding");
+@@ -665,0 +678 @@ public sealed class TenderReviewBundleService
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.Merging, "tender source union");
+@@ -723,0 +737 @@ public sealed class TenderReviewBundleService
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.SourceSha256, "tender XER stream");
+@@ -748,0 +763,6 @@ public sealed class TenderReviewBundleService
++
++    private static string ComputeSourceSha256(ReadOnlySpan<byte> content)
++    {
++        using var phase = ParserOperationTelemetry.Measure(ParserOperationPhase.SourceSha256, "tender uploaded XER bytes");
++        return TenderReviewCsv.ComputeSha256(content);
++    }
+diff --git "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web\\XerToCsvConverter.Web.csproj" "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web.Telemetry\\XerToCsvConverter.Web.csproj"
+index 7a279a2..58fddb7 100644
+--- "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web\\XerToCsvConverter.Web.csproj"
++++ "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web.Telemetry\\XerToCsvConverter.Web.csproj"
+@@ -9 +9 @@
+-    <ProjectReference Include="..\XerToCsvConverter.Core\XerToCsvConverter.Core.csproj" />
++    <ProjectReference Include="..\XerToCsvConverter.Core.Telemetry\XerToCsvConverter.Core.csproj" />
+diff --git "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web\\Pages\\Index.razor" "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web.Telemetry\\Pages\\Index.razor"
+index 7644e71..acfb7ba 100644
+--- "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web\\Pages\\Index.razor"
++++ "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web.Telemetry\\Pages\\Index.razor"
+@@ -413,0 +414,2 @@
++    private ParserOperationTelemetry.Operation? _phaseOperation;
++    private string _phaseLabel = string.Empty;
+@@ -428,0 +431 @@
++        using var uploadPhases = ParserOperationTelemetry.BeginOperation();
+@@ -471 +474,3 @@
+-                await using (Stream stream = browserFile.OpenReadStream(maximumFileBytes, batch.Token))
++                using (ParserOperationTelemetry.Measure(ParserOperationPhase.FileReading, browserFile.Name))
++                {
++                    await using Stream stream = browserFile.OpenReadStream(maximumFileBytes, batch.Token);
+@@ -473,2 +478,4 @@
+-                DateOnly? detectedDataDate = await ProgrammeReviewXerMetadataReader
+-                    .ReadSingleProjectDataDateAsync(data, batch.Token);
++                }
++                DateOnly? detectedDataDate;
++                using (ParserOperationTelemetry.Measure(ParserOperationPhase.Metadata, "upload data date"))
++                    detectedDataDate = await ProgrammeReviewXerMetadataReader.ReadSingleProjectDataDateAsync(data, batch.Token);
+@@ -524,0 +532,3 @@
++            ParserOperationTimingSnapshot uploadTiming = uploadPhases.Snapshot();
++            uploadPhases.Dispose();
++            await RecordFrozenPhasesAsync("upload", uploadTiming);
+@@ -760 +770 @@
+-                ExportedAtUtc = DateTimeOffset.UtcNow,
++                ExportedAtUtc = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
+@@ -823 +833 @@
+-            ExportedAtUtc = DateTimeOffset.UtcNow,
++            ExportedAtUtc = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
+@@ -895,0 +906,2 @@
++        _phaseOperation = ParserOperationTelemetry.BeginOperation();
++        _phaseLabel = message;
+@@ -910,0 +923,7 @@
++        if (_phaseOperation is { } phaseOperation)
++        {
++            ParserOperationTimingSnapshot timing = phaseOperation.Snapshot();
++            phaseOperation.Dispose();
++            _phaseOperation = null;
++            _ = RecordFrozenPhasesAsync(_phaseLabel, timing);
++        }
+@@ -918,0 +938,27 @@
++    private async Task RecordFrozenPhasesAsync(string label, ParserOperationTimingSnapshot timing)
++    {
++        var metrics = new Dictionary<string, double>(StringComparer.Ordinal)
++        {
++            ["operationElapsedMs"] = timing.ElapsedMs,
++            ["hasOverlaps"] = timing.HasOverlaps ? 1 : 0
++        };
++        foreach (ParserOperationPhase phase in Enum.GetValues<ParserOperationPhase>())
++            metrics["exclusive." + phase] = 0;
++        foreach (ParserPhaseTiming phase in timing.Phases)
++        {
++            metrics["exclusive." + phase.Phase] = phase.ExclusiveMs;
++            metrics["inclusive." + phase.Phase] = phase.InclusiveMs;
++            metrics["scopes." + phase.Phase] = phase.Scopes;
++            metrics["bufferedCalls." + phase.Phase] = phase.BufferedCalls;
++        }
++        foreach (var group in timing.Scopes.Where(scope => scope.Detail is not null)
++                     .GroupBy(scope => scope.Phase + ":" + scope.Detail, StringComparer.Ordinal))
++        {
++            metrics["detailExclusive." + group.Key] = group.Sum(scope => scope.ExclusiveMs);
++            metrics["detailInclusive." + group.Key] = group.Sum(scope => scope.InclusiveMs);
++        }
++        try { await JS.InvokeVoidAsync("recordFrozenParserPhases", label, metrics); }
++        catch (JSException) { }
++        catch (JSDisconnectedException) { }
++    }
++
+diff --git "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web\\wwwroot\\index.html" "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web.Telemetry\\wwwroot\\index.html"
+index a497601..cd07118 100644
+--- "a/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web\\wwwroot\\index.html"
++++ "b/artifacts\\parser-performance-20260930\\baseline\\XerToCsvConverter.Web.Telemetry\\wwwroot\\index.html"
+@@ -36,0 +37,7 @@
++    <script>
++        // Observer evidence is kept separate from the uninstrumented timed baseline.
++        window.__frozenParserPhaseRuns = [];
++        window.recordFrozenParserPhases = (label, metrics) => {
++            window.__frozenParserPhaseRuns.push({ label, metrics, recordedAt: performance.now() });
++        };
++    </script>
