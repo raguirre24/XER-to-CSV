@@ -41,22 +41,8 @@ public static class TenderReviewWebContract
     /// <summary>
     /// Converts a frozen UTC bundle instant to the DOS timestamp range and two-second precision used by ZIP entries.
     /// </summary>
-    public static DateTimeOffset GetDeterministicZipEntryTimestamp(DateTimeOffset exportedAtUtc)
-    {
-        DateTimeOffset utc = exportedAtUtc.ToUniversalTime();
-        if (utc <= MinimumZipTimestamp) return MinimumZipTimestamp;
-        if (utc >= MaximumZipTimestamp) return MaximumZipTimestamp;
-
-        int evenSecond = utc.Second - (utc.Second % 2);
-        return new DateTimeOffset(
-            utc.Year,
-            utc.Month,
-            utc.Day,
-            utc.Hour,
-            utc.Minute,
-            evenSecond,
-            TimeSpan.Zero);
-    }
+    public static DateTimeOffset GetDeterministicZipEntryTimestamp(DateTimeOffset exportedAtUtc) =>
+        TenderReviewContract.GetDeterministicZipEntryTimestamp(exportedAtUtc);
 
     public static TenderReviewSource[] CreateOrderedSources(
         IEnumerable<TenderReviewWebSourceInput> inputs)

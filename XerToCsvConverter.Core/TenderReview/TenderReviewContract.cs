@@ -208,4 +208,27 @@ public static class TenderReviewContract
         ContractTables.FirstOrDefault(table =>
             string.Equals(table.TableName, tableName, StringComparison.OrdinalIgnoreCase))
         ?? throw new KeyNotFoundException($"Unknown Tender Review table '{tableName}'.");
+
+    private static readonly DateTimeOffset MinimumZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset MaximumZipTimestamp = new(2107, 12, 31, 23, 59, 58, TimeSpan.Zero);
+
+    /// <summary>
+    /// Converts a frozen UTC bundle instant to the DOS timestamp range and two-second precision used by ZIP entries.
+    /// </summary>
+    public static DateTimeOffset GetDeterministicZipEntryTimestamp(DateTimeOffset exportedAtUtc)
+    {
+        DateTimeOffset utc = exportedAtUtc.ToUniversalTime();
+        if (utc <= MinimumZipTimestamp) return MinimumZipTimestamp;
+        if (utc >= MaximumZipTimestamp) return MaximumZipTimestamp;
+
+        int evenSecond = utc.Second - (utc.Second % 2);
+        return new DateTimeOffset(
+            utc.Year,
+            utc.Month,
+            utc.Day,
+            utc.Hour,
+            utc.Minute,
+            evenSecond,
+            TimeSpan.Zero);
+    }
 }

@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using System.IO.Compression;
 using System.Security.Cryptography;
+using XerToCsvConverter.Core;
 
 namespace XerToCsvConverter.TenderReview;
 
@@ -100,6 +102,37 @@ public sealed class TenderReviewBundleService
         IProgress<ProcessingService.DetailedProgress>? parseProgress = null,
         CancellationToken cancellationToken = default)
     {
+        var (dataStore, resolved) = await ParseFromXerBytesAsync(request, xerFiles, parseProgress, cancellationToken)
+            .ConfigureAwait(false);
+        return await BuildResolvedInMemoryAsync(dataStore, resolved, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Browser-safe streaming entrypoint that writes the seven Tender Review tables and manifest directly
+    /// into the provided zip output stream, computing SHA-256 digests on-the-fly to avoid holding
+    /// uncompressed CSV byte arrays in memory.
+    /// </summary>
+    public async Task<TenderReviewZipStreamBundleResult> BuildFromXerBytesToZipStreamAsync(
+        TenderReviewBundleRequest request,
+        IReadOnlyList<TenderReviewSourceBytes> xerFiles,
+        Stream zipOutputStream,
+        IProgress<ProcessingService.DetailedProgress>? parseProgress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(zipOutputStream);
+        var (dataStore, resolved) = await ParseFromXerBytesAsync(request, xerFiles, parseProgress, cancellationToken)
+            .ConfigureAwait(false);
+        return await BuildResolvedToZipStreamAsync(dataStore, resolved, zipOutputStream, parseProgress, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<(XerDataStore DataStore, ResolvedTenderReviewRequest Resolved)> ParseFromXerBytesAsync(
+        TenderReviewBundleRequest request,
+        IReadOnlyList<TenderReviewSourceBytes> xerFiles,
+        IProgress<ProcessingService.DetailedProgress>? parseProgress,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(xerFiles);
         if (request.Sources is null)
@@ -163,8 +196,7 @@ public sealed class TenderReviewBundleService
                 Message = "Building and validating Tender Review tables..."
             });
             await Task.Delay(1, cancellationToken).ConfigureAwait(false);
-            return await BuildResolvedInMemoryAsync(dataStore, resolved, cancellationToken)
-                .ConfigureAwait(false);
+            return (dataStore, resolved);
         }
         finally
         {
@@ -330,6 +362,85 @@ public sealed class TenderReviewBundleService
             DataQualityTable = transformed.DataQualityTable
         };
     }
+
+    private static async Task<TenderReviewZipStreamBundleResult> BuildResolvedToZipStreamAsync(
+        XerDataStore dataStore,
+        ResolvedTenderReviewRequest preparedRequest,
+        Stream zipOutputStream,
+        IProgress<ProcessingService.DetailedProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new ProcessingService.DetailedProgress
+        {
+            Percent = 80,
+            Message = "Building Tender Review tables..."
+        });
+        await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+        dataStore = BindGovernedSourceTokens(dataStore, preparedRequest, cancellationToken);
+        await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+        TenderReviewTransformationResult transformed =
+            new TenderReviewTransformer(dataStore, preparedRequest).Build(cancellationToken);
+
+        DateTimeOffset zipEntryTimestamp = TenderReviewContract.GetDeterministicZipEntryTimestamp(
+            transformed.Request.ExportedAtUtc);
+
+        var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        IReadOnlyList<TenderReviewManifestRow> manifestRows;
+        using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            int tableIndex = 0;
+            foreach (TenderReviewOutputTable table in transformed.Tables)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                tableIndex++;
+                int pct = 80 + (tableIndex * 15 / (transformed.Tables.Count + 1));
+                progress?.Report(new ProcessingService.DetailedProgress
+                {
+                    Percent = pct,
+                    Message = $"Packaging {table.Contract.FileName} ({tableIndex}/{transformed.Tables.Count})..."
+                });
+                await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+
+                ZipArchiveEntry entry = archive.CreateEntry($"{transformed.Request.BundleId}/{table.Contract.FileName}", CompressionLevel.Fastest);
+                entry.LastWriteTime = zipEntryTimestamp;
+                using (var entryStream = entry.Open())
+                using (var hashingStream = new HashingWriteStream(entryStream))
+                {
+                    TenderReviewCsv.WriteTableToStream(hashingStream, table, cancellationToken);
+                    hashingStream.Flush();
+                    hashes.Add(table.Contract.FileName, hashingStream.GetHash());
+                }
+                await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+            }
+
+            manifestRows = CreateManifestRows(transformed.Request, transformed.Tables, hashes);
+            ValidateManifestConsistency(transformed.Request, transformed.Tables, hashes, manifestRows);
+
+            ZipArchiveEntry manifestEntry = archive.CreateEntry($"{transformed.Request.BundleId}/{TenderReviewContract.ManifestFileName}", CompressionLevel.Fastest);
+            manifestEntry.LastWriteTime = zipEntryTimestamp;
+            using (var manifestStream = manifestEntry.Open())
+            {
+                TenderReviewCsv.WriteManifestToStream(manifestStream, manifestRows, cancellationToken);
+            }
+            progress?.Report(new ProcessingService.DetailedProgress
+            {
+                Percent = 97,
+                Message = "Finalizing bundle archive..."
+            });
+            await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new TenderReviewZipStreamBundleResult(
+            transformed.Request.BundleId,
+            new ReadOnlyCollection<TenderReviewManifestRow>(manifestRows.ToList()),
+            new ReadOnlyDictionary<string, string>(hashes))
+        {
+            WarningCount = transformed.DataQualityTable.RowCount,
+            DataQualityTable = transformed.DataQualityTable
+        };
+    }
+
 
     private static IReadOnlyList<TenderReviewManifestRow> CreateManifestRows(
         ResolvedTenderReviewRequest request,

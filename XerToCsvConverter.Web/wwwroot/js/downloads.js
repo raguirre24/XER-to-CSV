@@ -15,11 +15,22 @@
             const item = { filename, url: null };
             prepared.set(id, item);
             try {
-                const arrayBuffer = await contentStreamReference.arrayBuffer();
+                // Read the .NET stream as a chunked ReadableStream instead of a single
+                // contiguous arrayBuffer(). The Blob constructor accepts an array of chunks
+                // without requiring one huge contiguous allocation — critical for avoiding
+                // out-of-memory crashes in the 32-bit WebAssembly browser heap.
+                const readable = await contentStreamReference.stream();
+                const reader = readable.getReader();
+                const chunks = [];
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                }
                 // Interop can time out/disconnect while JS is still reading. A finally/discard
                 // must invalidate that pending read rather than let it retain a late URL.
                 if (prepared.get(id) !== item) return;
-                const blob = new Blob([arrayBuffer], { type: contentType });
+                const blob = new Blob(chunks, { type: contentType });
                 item.url = URL.createObjectURL(blob);
             } catch (error) {
                 if (prepared.get(id) === item) discard(id);

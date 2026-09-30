@@ -87,6 +87,15 @@ public sealed record TenderReviewInMemoryBundleResult(
     public XerTable? DataQualityTable { get; init; }
 }
 
+public sealed record TenderReviewZipStreamBundleResult(
+    string BundleId,
+    IReadOnlyList<TenderReviewManifestRow> ManifestRows,
+    IReadOnlyDictionary<string, string> CsvSha256ByFile)
+{
+    public int WarningCount { get; init; }
+    public XerTable? DataQualityTable { get; init; }
+}
+
 public sealed class TenderReviewValidationException : InvalidOperationException
 {
     public TenderReviewValidationException(string message) : base(message) { }

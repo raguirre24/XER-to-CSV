@@ -856,13 +856,28 @@ internal sealed class TenderReviewTransformer
 
     internal static IReadOnlyList<TenderReviewOutputRow> Sort(
         TenderReviewTableContract contract,
-        IReadOnlyList<TenderReviewOutputRow> rows) => rows
-            .OrderBy(row => string.Join("\u001f",
-                contract.SortColumns.Select(column => row.Values[column])), StringComparer.Ordinal)
-            .ThenBy(row => string.Join("\u001f",
-                contract.Columns.Select(column => row.Values[column.Name])), StringComparer.Ordinal)
-            .ThenBy(row => row.Source.InputIndex)
-            .ToArray();
+        IReadOnlyList<TenderReviewOutputRow> rows)
+    {
+        if (rows.Count <= 1) return rows;
+        var array = rows.ToArray();
+        string[] sortColumns = contract.SortColumns.ToArray();
+        string[] allColumns = contract.Columns.Select(c => c.Name).ToArray();
+        Array.Sort(array, (x, y) =>
+        {
+            foreach (string col in sortColumns)
+            {
+                int cmp = string.Compare(x.Values[col], y.Values[col], StringComparison.Ordinal);
+                if (cmp != 0) return cmp;
+            }
+            foreach (string col in allColumns)
+            {
+                int cmp = string.Compare(x.Values[col], y.Values[col], StringComparison.Ordinal);
+                if (cmp != 0) return cmp;
+            }
+            return x.Source.InputIndex.CompareTo(y.Source.InputIndex);
+        });
+        return array;
+    }
 
     private static void ValidateDataDate(
         EnhancedRowReader reader,

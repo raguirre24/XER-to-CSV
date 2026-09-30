@@ -629,11 +629,28 @@ internal sealed class ProgrammeReviewTransformer
 
     internal static IReadOnlyList<ProgrammeReviewOutputRow> Sort(
         ProgrammeReviewTableContract contract,
-        IReadOnlyList<ProgrammeReviewOutputRow> rows) => rows
-            .OrderBy(r => string.Join("\u001f", contract.SortColumns.Select(c => r.Values[c])), StringComparer.Ordinal)
-            .ThenBy(r => string.Join("\u001f", contract.Columns.Select(c => r.Values[c.Name])), StringComparer.Ordinal)
-            .ThenBy(r => r.Snapshot.CanonicalXerFilename, StringComparer.Ordinal)
-            .ToArray();
+        IReadOnlyList<ProgrammeReviewOutputRow> rows)
+    {
+        if (rows.Count <= 1) return rows;
+        var array = rows.ToArray();
+        string[] sortColumns = contract.SortColumns.ToArray();
+        string[] allColumns = contract.Columns.Select(c => c.Name).ToArray();
+        Array.Sort(array, (x, y) =>
+        {
+            foreach (string col in sortColumns)
+            {
+                int cmp = string.Compare(x.Values[col], y.Values[col], StringComparison.Ordinal);
+                if (cmp != 0) return cmp;
+            }
+            foreach (string col in allColumns)
+            {
+                int cmp = string.Compare(x.Values[col], y.Values[col], StringComparison.Ordinal);
+                if (cmp != 0) return cmp;
+            }
+            return string.Compare(x.Snapshot.CanonicalXerFilename, y.Snapshot.CanonicalXerFilename, StringComparison.Ordinal);
+        });
+        return array;
+    }
 
     private static void ValidateDataDate(
         EnhancedRowReader reader,

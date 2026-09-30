@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using System.IO.Compression;
 using System.Security.Cryptography;
+using XerToCsvConverter.Core;
 
 namespace XerToCsvConverter.ProgrammeReview;
 
@@ -123,10 +125,46 @@ public sealed class ProgrammeReviewBundleService
         IProgress<ProcessingService.DetailedProgress>? parseProgress = null,
         CancellationToken cancellationToken = default)
     {
+        var (dataStore, resolved) = await ParseFromXerBytesAsync(request, xerFiles, parseProgress, cancellationToken)
+            .ConfigureAwait(false);
+        return await BuildResolvedInMemoryAsync(dataStore, resolved, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Browser-safe streaming entrypoint that writes the eleven numbered tables and manifest directly
+    /// into the provided zip output stream, computing SHA-256 digests on-the-fly to avoid holding
+    /// uncompressed CSV byte arrays in memory.
+    /// </summary>
+    public async Task<ProgrammeReviewZipStreamBundleResult> BuildFromXerBytesToZipStreamAsync(
+        ProgrammeReviewBundleRequest request,
+        IReadOnlyDictionary<string, byte[]> xerFiles,
+        Stream zipOutputStream,
+        IProgress<ProcessingService.DetailedProgress>? parseProgress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(zipOutputStream);
+        var (dataStore, resolved) = await ParseFromXerBytesAsync(request, xerFiles, parseProgress, cancellationToken)
+            .ConfigureAwait(false);
+        return await BuildResolvedToZipStreamAsync(dataStore, resolved, zipOutputStream, parseProgress, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<(XerDataStore DataStore, ResolvedProgrammeReviewRequest Resolved)> ParseFromXerBytesAsync(
+        ProgrammeReviewBundleRequest request,
+        IReadOnlyDictionary<string, byte[]> xerFiles,
+        IProgress<ProcessingService.DetailedProgress>? parseProgress,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(xerFiles);
         if (request.Snapshots is null)
             throw new ProgrammeReviewValidationException("Snapshots are required.");
+
+        // Release prior-run interning and date caches to prevent unbounded growth across
+        // successive Programme Review runs in the same browser tab. TenderReviewBundleService
+        // already does this in ParseTenderInputsAsync; this path was missing the same cleanup.
+        StringInternPool.Clear();
+        DateParser.ClearCache();
 
         string[] configuredNames = request.Snapshots
             .Select(snapshot => snapshot.OriginalXerFilename)
@@ -198,13 +236,14 @@ public sealed class ProgrammeReviewBundleService
                 Message = "Building and validating Programme Review tables..."
             });
             await Task.Delay(1, cancellationToken).ConfigureAwait(false);
-            return await BuildResolvedInMemoryAsync(dataStore, resolved, cancellationToken).ConfigureAwait(false);
+            return (dataStore, resolved);
         }
         finally
         {
             foreach (MemoryStream stream in ownedStreams) stream.Dispose();
         }
     }
+
 
     /// <summary>Creates an in-memory bundle from a caller-owned parsed data store.</summary>
     public Task<ProgrammeReviewInMemoryBundleResult> BuildFromParsedDataToMemoryAsync(
@@ -342,6 +381,77 @@ public sealed class ProgrammeReviewBundleService
         return new ProgrammeReviewInMemoryBundleResult(
             request.BundleId,
             new ReadOnlyDictionary<string, byte[]>(files),
+            new ReadOnlyCollection<ProgrammeReviewManifestRow>(manifestRows.ToList()),
+            new ReadOnlyDictionary<string, string>(hashes))
+        {
+            WarningCount = transformer.DataQualityTable.RowCount,
+            DataQualityTable = transformer.DataQualityTable
+        };
+    }
+
+    private static async Task<ProgrammeReviewZipStreamBundleResult> BuildResolvedToZipStreamAsync(
+        XerDataStore dataStore,
+        ResolvedProgrammeReviewRequest request,
+        Stream zipOutputStream,
+        IProgress<ProcessingService.DetailedProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Report(new ProcessingService.DetailedProgress
+        {
+            Percent = 75,
+            Message = "Building Programme Review tables..."
+        });
+        await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+        var transformer = new ProgrammeReviewTransformer(dataStore, request, cancellationToken);
+        IReadOnlyList<ProgrammeReviewOutputTable> tables = transformer.Build(cancellationToken);
+        await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+
+        var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        IReadOnlyList<ProgrammeReviewManifestRow> manifestRows;
+        using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            int tableIndex = 0;
+            foreach (ProgrammeReviewOutputTable table in tables)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                tableIndex++;
+                int pct = 75 + (tableIndex * 20 / (tables.Count + 1));
+                progress?.Report(new ProcessingService.DetailedProgress
+                {
+                    Percent = pct,
+                    Message = $"Packaging {table.Contract.FileName} ({tableIndex}/{tables.Count})..."
+                });
+                await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+
+                ZipArchiveEntry entry = archive.CreateEntry($"{request.BundleId}/{table.Contract.FileName}", CompressionLevel.Fastest);
+                using (var entryStream = entry.Open())
+                using (var hashingStream = new HashingWriteStream(entryStream))
+                {
+                    ProgrammeReviewCsv.WriteTableToStream(hashingStream, table, cancellationToken);
+                    hashingStream.Flush();
+                    hashes.Add(table.Contract.FileName, hashingStream.GetHash());
+                }
+                await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+            }
+
+            manifestRows = CreateManifestRows(request, tables, hashes);
+
+            ZipArchiveEntry manifestEntry = archive.CreateEntry($"{request.BundleId}/{ProgrammeReviewContract.ManifestFileName}", CompressionLevel.Fastest);
+            using (var manifestStream = manifestEntry.Open())
+            {
+                ProgrammeReviewCsv.WriteManifestToStream(manifestStream, manifestRows, cancellationToken);
+            }
+            progress?.Report(new ProcessingService.DetailedProgress
+            {
+                Percent = 97,
+                Message = "Finalizing bundle archive..."
+            });
+            await Task.Delay(1, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new ProgrammeReviewZipStreamBundleResult(
+            request.BundleId,
             new ReadOnlyCollection<ProgrammeReviewManifestRow>(manifestRows.ToList()),
             new ReadOnlyDictionary<string, string>(hashes))
         {

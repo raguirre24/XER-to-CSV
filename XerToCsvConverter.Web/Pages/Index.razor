@@ -627,6 +627,10 @@
             return;
         }
 
+        // Release prior parsed dataStore before bundle generation to free hundreds of MBs of heap
+        _dataStore = null;
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
+
         BeginOperation("Validating Programme Review history...");
         try
         {
@@ -634,33 +638,14 @@
             await Task.Delay(1, _cts!.Token);
             var files = _uploadedFiles.ToDictionary(file => file.Name, file => file.Data, StringComparer.Ordinal);
             var service = new ProgrammeReviewBundleService();
-            ProgrammeReviewInMemoryBundleResult bundle = await service.BuildFromXerBytesAsync(
-                request!, files, CreateProgrammeReviewProgress(), _cts!.Token);
-            _cts.Token.ThrowIfCancellationRequested();
 
-            _progressMessage = "Packaging validated bundle...";
-            _progressPercent = 85;
-            StateHasChanged();
             using var zipStream = new MemoryStream();
-            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
-            {
-                KeyValuePair<string, byte[]>[] bundleFiles = bundle.Files
-                    .OrderBy(item => item.Key, StringComparer.Ordinal)
-                    .ToArray();
-                int packagedFiles = 0;
-                foreach ((string fileName, byte[] content) in bundleFiles)
-                {
-                    _cts.Token.ThrowIfCancellationRequested();
-                    ZipArchiveEntry entry = archive.CreateEntry($"{bundle.BundleId}/{fileName}", CompressionLevel.Fastest);
-                    await using Stream entryStream = entry.Open();
-                    await WriteZipContentAsync(entryStream, content, _cts.Token);
-                    packagedFiles++;
-                    _progressPercent = 85 + (packagedFiles * 10 / bundleFiles.Length);
-                    StateHasChanged();
-                }
-            }
-
+            ProgrammeReviewZipStreamBundleResult bundle = await service.BuildFromXerBytesToZipStreamAsync(
+                request!, files, zipStream, CreateProgrammeReviewProgress(), _cts!.Token);
             _cts.Token.ThrowIfCancellationRequested();
+
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
+
             _progressMessage = "Preparing browser download...";
             _progressPercent = 97;
             StateHasChanged();
@@ -697,6 +682,10 @@
             return;
         }
 
+        // Release prior parsed dataStore before bundle generation to free hundreds of MBs of heap
+        _dataStore = null;
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
+
         BeginOperation("Validating Tender Review stages...");
         try
         {
@@ -710,38 +699,14 @@
                 })
                 .ToArray();
             var service = new TenderReviewBundleService();
-            TenderReviewInMemoryBundleResult bundle = await service.BuildFromXerBytesAsync(
-                request!, sourceBytes, CreateTenderReviewProgress(), _cts!.Token);
-            _cts.Token.ThrowIfCancellationRequested();
 
-            _progressMessage = "Packaging validated Tender Review bundle...";
-            _progressPercent = 85;
-            StateHasChanged();
-            if (bundle.ManifestRows.Count == 0)
-                throw new TenderReviewValidationException("Tender Review manifest contains no source rows.");
-            DateTimeOffset zipEntryTimestamp = TenderReviewWebContract.GetDeterministicZipEntryTimestamp(
-                bundle.ManifestRows[0].ExportedAtUtc);
             using var zipStream = new MemoryStream();
-            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
-            {
-                KeyValuePair<string, byte[]>[] bundleFiles = bundle.Files
-                    .OrderBy(item => item.Key, StringComparer.Ordinal)
-                    .ToArray();
-                int packagedFiles = 0;
-                foreach ((string fileName, byte[] content) in bundleFiles)
-                {
-                    _cts.Token.ThrowIfCancellationRequested();
-                    ZipArchiveEntry entry = archive.CreateEntry($"{bundle.BundleId}/{fileName}", CompressionLevel.Fastest);
-                    entry.LastWriteTime = zipEntryTimestamp;
-                    await using Stream entryStream = entry.Open();
-                    await WriteZipContentAsync(entryStream, content, _cts.Token);
-                    packagedFiles++;
-                    _progressPercent = 85 + (packagedFiles * 10 / bundleFiles.Length);
-                    StateHasChanged();
-                }
-            }
-
+            TenderReviewZipStreamBundleResult bundle = await service.BuildFromXerBytesToZipStreamAsync(
+                request!, sourceBytes, zipStream, CreateTenderReviewProgress(), _cts!.Token);
             _cts.Token.ThrowIfCancellationRequested();
+
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
+
             _progressMessage = "Preparing browser download...";
             _progressPercent = 97;
             StateHasChanged();
@@ -1027,27 +992,22 @@
                 _progressMessage = item.message;
                 RefreshProgress(version);
             });
-            StandardMemoryExportResult result = await _processingService.ExportTablesToMemoryWithDiagnosticsAsync(
-                _dataStore, tables, progress, _cts!.Token);
-            Dictionary<string, byte[]> csvData = result.Files;
-            if (csvData.Count == 0) { LogActivity("No data to export."); return; }
-
             using var zipStream = new MemoryStream();
-            using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
-            {
-                foreach ((string table, byte[] content) in csvData.OrderBy(item => item.Key))
-                {
-                    ZipArchiveEntry entry = archive.CreateEntry($"{table}.csv", CompressionLevel.Fastest);
-                    await using Stream entryStream = entry.Open();
-                    await WriteZipContentAsync(entryStream, content, _cts.Token);
-                }
-            }
+            int warningCount = await _processingService.ExportTablesToZipStreamAsync(
+                _dataStore, tables, zipStream, progress, _cts!.Token);
+
+            _dataStore = null;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: false);
+
             _cts.Token.ThrowIfCancellationRequested();
+            _progressMessage = "Preparing browser download...";
+            _progressPercent = 97;
+            StateHasChanged();
             await _downloadService!.DownloadFileAsync("XER_Export.zip", zipStream, "application/zip", _cts.Token);
-            SetExportCompletion("Export", result.WarningCount);
+            SetExportCompletion("Export", warningCount);
             foreach (UploadedFile file in _uploadedFiles)
-                file.Status = result.WarningCount > 0 ? "Warnings" : "Success";
-            LogActivity($"{csvData.Count} CSV files sent to the browser download manager. Check browser downloads for saved-file delivery.");
+                file.Status = warningCount > 0 ? "Warnings" : "Success";
+            LogActivity($"{tables.Count} CSV files sent to the browser download manager. Check browser downloads for saved-file delivery.");
         }
         catch (OperationCanceledException) { LogActivity("Export was cancelled before browser download handoff."); }
         catch (Exception ex) { SetOperationError($"Export failed: {ex.Message}"); }

@@ -44,6 +44,13 @@ internal static class ProgrammeReviewCsv
         return stream.ToArray();
     }
 
+    /// <summary>Writes CSV content directly to the caller's stream (e.g. a ZIP entry).</summary>
+    internal static void WriteTableToStream(
+        Stream destination,
+        ProgrammeReviewOutputTable table,
+        CancellationToken cancellationToken)
+        => WriteTable(destination, table, cancellationToken);
+
     internal static void WriteManifest(
         string path,
         IReadOnlyList<ProgrammeReviewManifestRow> rows,
@@ -68,6 +75,13 @@ internal static class ProgrammeReviewCsv
         WriteManifest(stream, rows, cancellationToken);
         return stream.ToArray();
     }
+
+    /// <summary>Writes manifest CSV content directly to the caller's stream (e.g. a ZIP entry).</summary>
+    internal static void WriteManifestToStream(
+        Stream destination,
+        IReadOnlyList<ProgrammeReviewManifestRow> rows,
+        CancellationToken cancellationToken)
+        => WriteManifest(destination, rows, cancellationToken);
 
     internal static string ComputeSha256(ReadOnlySpan<byte> content) =>
         Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();

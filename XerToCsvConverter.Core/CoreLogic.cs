@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Runtime;
 using System.Runtime.InteropServices;
@@ -2907,6 +2908,33 @@ namespace XerToCsvConverter;
             cancellationToken.ThrowIfCancellationRequested();
             ReportExportCompletion(progress, resolved.WarningCount);
             return new StandardMemoryExportResult(result, resolved.WarningCount);
+        }
+
+        public async Task<int> ExportTablesToZipStreamAsync(
+            XerDataStore dataStore, List<string> tablesToExport,
+            Stream zipOutputStream,
+            IProgress<(int percent, string message)>? progress, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(zipOutputStream);
+            ResolvedStandardExport resolved = await ResolveRequestedTablesAsync(dataStore, tablesToExport, progress, cancellationToken);
+            XerTable[] tables = resolved.Tables;
+            using (var archive = new ZipArchive(zipOutputStream, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                for (int i = 0; i < tables.Length; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await Task.Delay(1, cancellationToken);
+                    var entry = archive.CreateEntry($"{tables[i].Name}.csv", CompressionLevel.Fastest);
+                    using (var entryStream = entry.Open())
+                    {
+                        _exporter.WriteTableToStream(tables[i], entryStream);
+                    }
+                    progress?.Report((80 + (i + 1) * 20 / Math.Max(1, tables.Length), $"Exported: {tables[i].Name} ({i + 1}/{tables.Length})"));
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportExportCompletion(progress, resolved.WarningCount);
+            return resolved.WarningCount;
         }
 
         private sealed record ResolvedStandardExport(XerTable[] Tables, int WarningCount);

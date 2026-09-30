@@ -74,6 +74,15 @@ public sealed record ProgrammeReviewInMemoryBundleResult(
     public XerTable? DataQualityTable { get; init; }
 }
 
+public sealed record ProgrammeReviewZipStreamBundleResult(
+    string BundleId,
+    IReadOnlyList<ProgrammeReviewManifestRow> ManifestRows,
+    IReadOnlyDictionary<string, string> CsvSha256ByFile)
+{
+    public int WarningCount { get; init; }
+    public XerTable? DataQualityTable { get; init; }
+}
+
 public sealed class ProgrammeReviewValidationException : InvalidOperationException
 {
     public ProgrammeReviewValidationException(string message) : base(message) { }
