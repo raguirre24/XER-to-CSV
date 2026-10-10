@@ -1,7 +1,8 @@
 param(
     [string]$ProgrammeExpressions = 'C:\Users\ricar\Documents\Code\Programme Review\Programme-Review\Project Review - Programme (datalake).SemanticModel\definition\expressions.tmdl',
     [string]$TenderExpressions = 'C:\Users\ricar\Documents\Code\Tender-Review\Project Review - Tender Programme (datalake).SemanticModel\definition\expressions.tmdl',
-    [string]$CoreAssemblyPath = (Join-Path $PSScriptRoot '../XerToCsvConverter.Core/bin/Debug/net8.0/XerToCsvConverter.Core.dll')
+    [string]$CoreAssemblyPath = (Join-Path $PSScriptRoot '../XerToCsvConverter.Core/bin/Debug/net8.0/XerToCsvConverter.Core.dll'),
+    [string[]]$TableNames = @()
 )
 
 # Offline contract reconciliation: executes the real exporter, reads literal M contracts.
@@ -69,9 +70,11 @@ foreach ($profile in @('Programme','Tender')) {
     $literalContracts = Get-Expression $content $contractName
     $literalManifest = Get-LiteralList (Get-Expression $content $manifestName) 'ExpectedManifestColumns'
     $contracts = if ($tender) { [XerToCsvConverter.TenderReview.TenderReviewContract]::Tables } else { [XerToCsvConverter.ProgrammeReview.ProgrammeReviewContract]::Tables }
+    $checkedContracts = @($contracts | Where-Object { $TableNames.Count -eq 0 -or $_.TableName -cin $TableNames })
+    Assert-Check ($checkedContracts.Count -gt 0 -and ($TableNames.Count -eq 0 -or $checkedContracts.Count -eq @($TableNames | Sort-Object -Unique).Count)) "$profile requested an unknown table contract."
     $version = if ($tender) { [XerToCsvConverter.TenderReview.TenderReviewContract]::SchemaVersion } else { [XerToCsvConverter.ProgrammeReview.ProgrammeReviewContract]::SchemaVersion }
     Assert-Check (([regex]::Matches($literalContracts, '#"\d\d_XER_[A-Z_]+"\s*=\s*\[')).Count -eq $contracts.Count) "$profile has a missing/extra M table contract."
-    foreach ($table in $contracts) {
+    foreach ($table in $checkedContracts) {
         $block = [regex]::Match($literalContracts, '(?s)#"' + $table.TableName + '"\s*=\s*\[(.*?)\]').Groups[1].Value
         $headers = Get-LiteralList $block 'Columns'
         Assert-Check (($headers -join '|') -ceq (($table.Columns | ForEach-Object Name) -join '|')) "$profile $($table.TableName) header/order disagrees with Core."
@@ -116,7 +119,7 @@ foreach ($profile in @('Programme','Tender')) {
         $token = [XerToCsvConverter.ReviewProjectIdentity]::EncodeComponent($normalised)
         $fileToken = [XerToCsvConverter.ReviewProjectIdentity]::FileComponent($normalised)
         Assert-Check ($result.BundleId.StartsWith($fileToken + '_', [StringComparison]::Ordinal)) "$profile bundle has unexpected filename identity."
-        foreach ($table in $contracts) {
+        foreach ($table in $checkedContracts) {
             $csv = Get-Csv $result.Files[$table.FileName]
             Assert-Check (($csv.Headers -join '|') -ceq (($table.Columns | ForEach-Object Name) -join '|')) "$profile $($table.TableName) actual exporter header differs."
             $manifestRows = @($manifest.Rows | Where-Object { $_.table_name -ceq $table.TableName })
@@ -141,6 +144,6 @@ foreach ($profile in @('Programme','Tender')) {
             Assert-Check (@($manifest.Rows.canonical_xer_filename | Sort-Object -Unique).Count -eq 2) 'Tender stages do not have separate canonical identities.'
         }
     }
-    $summaries += [pscustomobject]@{ Profile = $profile; Version = $version; Tables = $contracts.Count; ProjectNameCases = $names.Count; Result = 'PASS' }
+    $summaries += [pscustomobject]@{ Profile = $profile; Version = $version; BundleTables = $contracts.Count; CheckedTables = @($checkedContracts | ForEach-Object TableName); ProjectNameCases = $names.Count; Result = 'PASS' }
 }
 [pscustomobject]@{ Checks = $checks; Profiles = $summaries; Scope = 'Literal M contract reconciliation and real Core exports; not M runtime execution or live refresh.' } | ConvertTo-Json -Depth 6

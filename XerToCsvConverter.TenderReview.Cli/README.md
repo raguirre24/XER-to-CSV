@@ -2,6 +2,8 @@
 
 This separate command creates a validated local `tender_review` schema **4.0** bundle. It does not publish or upload files. Use the matching Tender 4.0 report loader and regenerate older bundles; do not edit their version cells. Programme Review remains a separate profile, now schema 5.0.
 
+`01_XER_TASK.csv` includes the nullable primary constraint date `cstr_date` immediately after `cstr_type`, formatted as `yyyy-MM-dd`; missing dates remain blank. The task table has 28 columns and the bundle schema remains **4.0**. Regenerate bundles to obtain this field.
+
 ```powershell
 dotnet run --project XerToCsvConverter.TenderReview.Cli -- --config tender.json --output-root .\output
 ```

@@ -26,20 +26,24 @@
   <ItemGroup>
     <Compile Remove="OLD_ENHANCED_TABLES_CODE_METHODS.cs" />
     <Compile Remove="artifacts\**" />
+    <Compile Remove="review\**" />
     <Compile Remove="XerToCsvConverter.Core\**" />
     <Compile Remove="XerToCsvConverter.Web\**" />
+    <Compile Remove="XerToCsvConverter.Web.Worker\**" />
     <Compile Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />
     <Compile Remove="XerToCsvConverter.TenderReview.Cli\**" />
     <Compile Remove="XerToCsvConverter.RelationshipAudit.Cli\**" />
     <Compile Remove="XerToCsvConverter.Core.Tests\**" />
     <EmbeddedResource Remove="XerToCsvConverter.Core\**" />
     <EmbeddedResource Remove="XerToCsvConverter.Web\**" />
+    <EmbeddedResource Remove="XerToCsvConverter.Web.Worker\**" />
     <EmbeddedResource Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />
     <EmbeddedResource Remove="XerToCsvConverter.TenderReview.Cli\**" />
     <EmbeddedResource Remove="XerToCsvConverter.RelationshipAudit.Cli\**" />
     <EmbeddedResource Remove="XerToCsvConverter.Core.Tests\**" />
     <None Remove="XerToCsvConverter.Core\**" />
     <None Remove="XerToCsvConverter.Web\**" />
+    <None Remove="XerToCsvConverter.Web.Worker\**" />
     <None Remove="XerToCsvConverter.ProgrammeReview.Cli\**" />
     <None Remove="XerToCsvConverter.TenderReview.Cli\**" />
     <None Remove="XerToCsvConverter.RelationshipAudit.Cli\**" />

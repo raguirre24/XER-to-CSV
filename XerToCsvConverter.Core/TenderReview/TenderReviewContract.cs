@@ -76,6 +76,7 @@ public static class TenderReviewContract
                     C("wbs_id_key", nullable: false),
                     C("free_float", TenderReviewColumnType.Number, true, "Free Float"),
                     C("cstr_type"),
+                    C("cstr_date", TenderReviewColumnType.Date),
                     C("Start", TenderReviewColumnType.Date),
                     C("filename", TenderReviewColumnType.Text, false, "FileName"),
                     C("late_end_date", TenderReviewColumnType.Date),

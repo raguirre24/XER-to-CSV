@@ -59,10 +59,10 @@ Numbered review-table dates are date-only. They cannot reconstruct intraday rela
 
 ## Exact Programme Review headers
 
-01_XER_TASK (47):
+01_XER_TASK (48):
 
 ```text
-status_code,task_code,total_float,task_type,id_name,early_start_date,calendar_id_key,task_id_key,driving_path_flag,remaining_duration,early_end_date,monthupdate,task_name,data_date,act_end_date,Finish,proj_id_key,wbs_id_key,free_float,cstr_type,Start,filename,late_end_date,ProjectCode,UpdateDate,ProjectName,Finish_Variance_Previous_Month,Driven_DataDate,Variance_Finish_BL,Variance_Finish_Adjusted_BL,Baseline Finish,Baseline Start,Previous Month Start,Previous Month Finish,Planned Not Completed Last Period,Start_Variance_Previous_Month,PreviousDataDate,Previous Remaining Working Days,Planned Last Period,Completed Last Period,Completed of Planned Last Period,Baseline Effective_Early_End,Baseline Effective_Late_End,Adjusted Baseline Finish,Adjusted Baseline Start,Adjusted Baseline Source Month,Adjusted Baseline Source
+status_code,task_code,total_float,task_type,id_name,early_start_date,calendar_id_key,task_id_key,driving_path_flag,remaining_duration,early_end_date,monthupdate,task_name,data_date,act_end_date,Finish,proj_id_key,wbs_id_key,free_float,cstr_type,cstr_date,Start,filename,late_end_date,ProjectCode,UpdateDate,ProjectName,Finish_Variance_Previous_Month,Driven_DataDate,Variance_Finish_BL,Variance_Finish_Adjusted_BL,Baseline Finish,Baseline Start,Previous Month Start,Previous Month Finish,Planned Not Completed Last Period,Start_Variance_Previous_Month,PreviousDataDate,Previous Remaining Working Days,Planned Last Period,Completed Last Period,Completed of Planned Last Period,Baseline Effective_Early_End,Baseline Effective_Late_End,Adjusted Baseline Finish,Adjusted Baseline Start,Adjusted Baseline Source Month,Adjusted Baseline Source
 ```
 
 02_XER_PROJECT:
@@ -73,10 +73,10 @@ last_recalc_date,proj_id_key,monthupdate,ProjectCode
 
 ## Exact Tender Review headers
 
-01_XER_TASK (27):
+01_XER_TASK (28):
 
 ```text
-status_code,task_code,total_float,task_type,id_name,early_start_date,calendar_id_key,task_id_key,driving_path_flag,remaining_duration,early_end_date,monthupdate,status_date,task_name,data_date,act_end_date,Finish,proj_id_key,wbs_id_key,free_float,cstr_type,Start,filename,late_end_date,ProjectCode,UpdateDate,ProjectName
+status_code,task_code,total_float,task_type,id_name,early_start_date,calendar_id_key,task_id_key,driving_path_flag,remaining_duration,early_end_date,monthupdate,status_date,task_name,data_date,act_end_date,Finish,proj_id_key,wbs_id_key,free_float,cstr_type,cstr_date,Start,filename,late_end_date,ProjectCode,UpdateDate,ProjectName
 ```
 
 02_XER_PROJECT:

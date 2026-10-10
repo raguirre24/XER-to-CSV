@@ -70,6 +70,7 @@ public static class ProgrammeReviewContract
                     C("wbs_id_key", nullable: false),
                     C("free_float", ProgrammeReviewColumnType.Number, true, "Free Float"),
                     C("cstr_type"),
+                    C("cstr_date", ProgrammeReviewColumnType.Date),
                     C("Start", ProgrammeReviewColumnType.Date),
                     C("filename", ProgrammeReviewColumnType.Text, false, "FileName"),
                     C("late_end_date", ProgrammeReviewColumnType.Date),

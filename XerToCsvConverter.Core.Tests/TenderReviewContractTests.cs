@@ -16,7 +16,7 @@ public sealed class TenderReviewContractTests
         };
         var expectedHeaders = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["01_XER_TASK"] = "status_code,task_code,total_float,task_type,id_name,early_start_date,calendar_id_key,task_id_key,driving_path_flag,remaining_duration,early_end_date,monthupdate,status_date,task_name,data_date,act_end_date,Finish,proj_id_key,wbs_id_key,free_float,cstr_type,Start,filename,late_end_date,ProjectCode,UpdateDate,ProjectName",
+            ["01_XER_TASK"] = "status_code,task_code,total_float,task_type,id_name,early_start_date,calendar_id_key,task_id_key,driving_path_flag,remaining_duration,early_end_date,monthupdate,status_date,task_name,data_date,act_end_date,Finish,proj_id_key,wbs_id_key,free_float,cstr_type,cstr_date,Start,filename,late_end_date,ProjectCode,UpdateDate,ProjectName",
             ["02_XER_PROJECT"] = "last_recalc_date,proj_id_key,monthupdate,ProjectCode,add_date,state,region,tender_status,udf_datalake_status_date",
             ["03_XER_PROJWBS"] = "wbs_name,wbs_id_key,parent_wbs_id_key,ProjectCode",
             ["06_XER_PREDECESSOR"] = "task_id_key,pred_type,predecessor_status_code,task_type,predecessor_task_type,lag,start,finish,predecessor_start,predecessor_finish,free_float,free_float_status,free_float_basis,free_float_reason,pred_task_id_key,status_code,total_float,task_pred_id_key,ProjectCode",
@@ -37,6 +37,10 @@ public sealed class TenderReviewContractTests
         foreach (TenderReviewTableContract table in TenderReviewContract.Tables)
             Assert.Equal(expectedHeaders[table.TableName],
                 string.Join(',', table.Columns.Select(column => column.Name)));
+        TenderReviewColumn constraintDate = TenderReviewContract.GetTable("01_XER_TASK")
+            .Columns.Single(column => column.Name == "cstr_date");
+        Assert.Equal(TenderReviewColumnType.Date, constraintDate.Type);
+        Assert.True(constraintDate.Nullable);
         Assert.Equal(
             new[] { "task_id_key", "rsrc_id_key", "is_actual", "distribution_month" },
             TenderReviewContract.GetTable("15_XER_RESOURCE_DISTRIBUTION").KeyColumns);

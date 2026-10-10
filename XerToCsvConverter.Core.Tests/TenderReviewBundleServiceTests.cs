@@ -868,6 +868,42 @@ public sealed class TenderReviewBundleServiceTests
         }
     }
 
+    [Theory]
+    [InlineData("CS_MSO", "2026-09-08 17:30", "2026-09-08")]
+    [InlineData("CS_MSO", "", "")]
+    [InlineData("", "", "")]
+    [InlineData("CS_MSO", "not-a-date", "")]
+    public async Task Task_constraint_date_exports_as_nullable_date_without_changing_tender_version(
+        string constraintType, string sourceDate, string expectedDate)
+    {
+        TenderReviewSource source = TenderReviewNamingTests.Source(0, "stage.xer", "2026-09-05");
+        XerDataStore store = BuildDataStore(new Stage(source, "2026-08-31", null, "8"));
+        XerTable tasks = store.GetTable("TASK")!;
+        tasks.Rows[0].Fields[tasks.FieldIndexes["cstr_type"]] = constraintType;
+        tasks.Rows[0].Fields[tasks.FieldIndexes["cstr_date"]] = sourceDate;
+
+        TenderReviewInMemoryBundleResult result = await new TenderReviewBundleService()
+            .BuildFromParsedDataToMemoryAsync(store, TenderReviewNamingTests.Request([source]));
+        IReadOnlyList<string[]> csv = ReadCsv(result.Files["01_XER_TASK.csv"]);
+        Dictionary<string, string> task = Row(csv[0], Assert.Single(csv.Skip(1)));
+        int typeIndex = Array.IndexOf(csv[0], "cstr_type");
+        Assert.True(typeIndex >= 0);
+        Assert.Equal(typeIndex + 1, Array.IndexOf(csv[0], "cstr_date"));
+        Assert.Equal(constraintType, task["cstr_type"]);
+        Assert.Equal(expectedDate, task["cstr_date"]);
+        Assert.Equal(sourceDate, tasks.Rows[0].Fields[tasks.FieldIndexes["cstr_date"]]);
+        Assert.All(result.ManifestRows, row => Assert.Equal("4.0", row.SchemaVersion));
+
+        XerTable quality = result.DataQualityTable!;
+        DataRow[] dateWarnings = quality.Rows.Where(row =>
+            row.Fields[quality.FieldIndexes["issue_code"]] == "ACTIVITY_DATE_INVALID"
+            && row.Fields[quality.FieldIndexes["column_name"]] == "cstr_date").ToArray();
+        if (sourceDate == "not-a-date")
+            Assert.Equal(sourceDate, Assert.Single(dateWarnings).Fields[quality.FieldIndexes["raw_value"]]);
+        else
+            Assert.Empty(dateWarnings);
+    }
+
     [Fact]
     public async Task Nonzero_project_lag_requires_a_resolvable_default_calendar()
     {

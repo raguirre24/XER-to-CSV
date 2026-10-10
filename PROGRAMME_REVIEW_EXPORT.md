@@ -104,6 +104,10 @@ XER_CSV_MANIFEST.csv
 
 CSV files are UTF-8 without a BOM, comma-delimited, RFC-style quoted, and use CRLF records. Dates are `yyyy-MM-dd`; numeric and integer tokens use invariant culture; logical columns use lowercase `true`/`false`. Optional source tables are emitted header-only. The exact ordered schemas are exposed by `ProgrammeReviewContract.Tables` as schema version `5.0` (Tender Review uses `4.0`). Table 06 includes `free_float_status`, `free_float_basis` and `free_float_reason` immediately after `free_float`.
 
+Both review profiles include the primary constraint date `cstr_date` immediately after `cstr_type` in `01_XER_TASK.csv`, using `yyyy-MM-dd` and leaving missing dates blank. Programme table 01 has 48 columns and Tender table 01 has 28 columns; the existing schema versions remain `5.0` and `4.0`. Regenerate bundles to obtain the added field.
+
+The updated Power BI CSV loaders also accept the original table 01 header for these same versions and supply a blank `cstr_date` for those older bundles. The semantic models expose this as a Date column. Both report Athena queries also select `cstr_date` from the source table and convert it to a nullable date using the same safe date conversion as neighbouring fields.
+
 Table 11 has exactly these columns, including the case of `MonthUpdate`:
 
 ```text

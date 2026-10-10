@@ -47,7 +47,7 @@ public sealed class ProgrammeReviewBundleServiceTests
             string[] lines = File.ReadAllLines(taskPath);
             Assert.Equal(4, lines.Length);
             string[] headers = lines[0].Split(',');
-            Assert.Equal(47, headers.Length);
+            Assert.Equal(48, headers.Length);
             string[] updateValues = lines.Single(line => line.Contains("J123-C-2602_20260227.xer", StringComparison.Ordinal)).Split(',');
             var row = headers.Zip(updateValues).ToDictionary(pair => pair.First, pair => pair.Second);
             Assert.Equal("2026-02-06", row["Baseline Finish"]);
@@ -553,6 +553,45 @@ public sealed class ProgrammeReviewBundleServiceTests
         Assert.Equal(12, result.Files.Count);
         Assert.All(result.ManifestRows, row => Assert.Equal("5.0", row.SchemaVersion));
         Assert.Equal(3, result.ManifestRows.Single(row => row.TableName == "15_XER_RESOURCE_DISTRIBUTION").RowCount);
+    }
+
+    [Theory]
+    [InlineData("CS_MSO", "2026-02-05 17:30", "2026-02-05")]
+    [InlineData("CS_MSO", "", "")]
+    [InlineData("", "", "")]
+    [InlineData("CS_MSO", "not-a-date", "")]
+    public async Task Task_constraint_date_exports_as_nullable_date_without_changing_programme_version(
+        string constraintType, string sourceDate, string expectedDate)
+    {
+        ProgrammeReviewSnapshot baseline = ProgrammeReviewNamingTests.Snapshot(
+            "baseline.xer", ProgrammeReviewSnapshotKind.Baseline, "BL01", "2026-01-31", "2026-01-30");
+        XerDataStore store = BuildDataStore((baseline, "2026-02-02", "2026-02-06"));
+        XerTable tasks = store.GetTable("TASK")!;
+        tasks.Rows[0].Fields[tasks.FieldIndexes["cstr_type"]] = constraintType;
+        tasks.Rows[0].Fields[tasks.FieldIndexes["cstr_date"]] = sourceDate;
+
+        ProgrammeReviewInMemoryBundleResult result = await new ProgrammeReviewBundleService()
+            .BuildFromParsedDataToMemoryAsync(store, ProgrammeReviewNamingTests.Request([baseline]));
+        IReadOnlyList<string[]> csv = ReadCsv(result.Files["01_XER_TASK.csv"]);
+        string[] values = Assert.Single(csv.Skip(1));
+        Assert.Equal(csv[0].Length, values.Length);
+        int typeIndex = Array.IndexOf(csv[0], "cstr_type");
+        int dateIndex = Array.IndexOf(csv[0], "cstr_date");
+        Assert.True(typeIndex >= 0);
+        Assert.Equal(typeIndex + 1, dateIndex);
+        Assert.Equal(constraintType, values[typeIndex]);
+        Assert.Equal(expectedDate, values[dateIndex]);
+        Assert.Equal(sourceDate, tasks.Rows[0].Fields[tasks.FieldIndexes["cstr_date"]]);
+        Assert.All(result.ManifestRows, row => Assert.Equal("5.0", row.SchemaVersion));
+
+        XerTable quality = result.DataQualityTable!;
+        DataRow[] dateWarnings = quality.Rows.Where(row =>
+            row.Fields[quality.FieldIndexes["issue_code"]] == "ACTIVITY_DATE_INVALID"
+            && row.Fields[quality.FieldIndexes["column_name"]] == "cstr_date").ToArray();
+        if (sourceDate == "not-a-date")
+            Assert.Equal(sourceDate, Assert.Single(dateWarnings).Fields[quality.FieldIndexes["raw_value"]]);
+        else
+            Assert.Empty(dateWarnings);
     }
 
     [Theory]
